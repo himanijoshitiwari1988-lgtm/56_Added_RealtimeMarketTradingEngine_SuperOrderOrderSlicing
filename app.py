@@ -479,6 +479,13 @@ def _candle_fail_active(cache_key):
         return time.time() - t < _CANDLE_FAIL_SEC
 
 
+def _candle_fail_remaining(cache_key):
+    with _CANDLE_FAIL_LOCK:
+        t = _CANDLE_FAIL.get(cache_key, 0)
+        remaining = _CANDLE_FAIL_SEC - (time.time() - t)
+        return remaining if remaining > 0 else 0.0
+
+
 def _mark_candle_fail(cache_key):
     with _CANDLE_FAIL_LOCK:
         _CANDLE_FAIL[cache_key] = time.time()
@@ -3382,9 +3389,14 @@ def api_candles():
                 "count": cached["count"],
                 "prev_close": cached.get("prev_close"),
             })
+        retry_after = max(
+            _candle_fail_remaining(cache_key),
+            rate_limit_cooldown_remaining()
+        )
         return jsonify({
             "status": "error",
             "message": "Dhan chart API temporarily unavailable (rate limited)",
+            "retry_after": max(1.0, retry_after or _CANDLE_FAIL_SEC),
         }), 503
 
     # Single-flight guard: only one request per cache key may hit Dhan's
@@ -3412,6 +3424,7 @@ def api_candles():
         return jsonify({
             "status": "error",
             "message": "Chart data still loading - retry in a moment",
+            "retry_after": 3.0,
         }), 503
 
     if not _hist_try_acquire():
@@ -3426,6 +3439,7 @@ def api_candles():
         return jsonify({
             "status": "error",
             "message": "Chart data queue is busy - retry in a moment",
+            "retry_after": 3.0,
         }), 503
 
     try:

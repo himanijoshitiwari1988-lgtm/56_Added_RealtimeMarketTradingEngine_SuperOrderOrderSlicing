@@ -87,6 +87,12 @@ def rate_limit_cooldown_active():
     return time.time() < _RL_COOLDOWN_UNTIL
 
 
+def rate_limit_cooldown_remaining():
+    """Seconds until the global rate-limit cooldown lifts (0 when inactive)."""
+    remaining = _RL_COOLDOWN_UNTIL - time.time()
+    return remaining if remaining > 0 else 0.0
+
+
 def _mark_rate_limited():
     global _RL_COOLDOWN_UNTIL
     now = time.time()

@@ -1765,6 +1765,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               </div>
             </div>
             <span style="font-size:8px;color:#666;padding-top:4px">Enable Bullish / Bearish to activate its trend / cross entry gates. Inactive section is faded and uncheckable.</span>
+            <label style="font-size:9px;color:#ffd700;display:flex;align-items:center;gap:3px;padding-top:4px;margin-left:10px"><input type="checkbox" id="aeTrendConfirm" onchange="AutoExperiment.onFiltersInput()" style="accent-color:#ffd700"> Trend confirmation <span style="font-weight:400;color:#aa9a50;font-size:8px">(skip symbols whose own trend is opposite to the selected Bullish / Bearish filter. OFF = run every symbol on its bullish/bearish signal)</span></label>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px">
             <button class="btn-action" id="aeRunBtn" style="width:auto;padding:6px 14px;margin:0" onclick="AutoExperiment.run()">Run Experiment</button>
@@ -5518,7 +5519,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/strategies.js?v=64"></script>
 <script src="/static/papertrade.js?v=28"></script>
 <script src="/static/strategy_container.js?v=14"></script>
-<script src="/static/autoexperiment.v13.js?v=121"></script>
+<script src="/static/autoexperiment.v13.js?v=122"></script>
 <script src="/static/indextrend.js?v=2"></script>
 <script src="/static/simulator.js?v=2"></script>
 <script src="/static/aismart.js?v=93"></script>

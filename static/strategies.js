@@ -774,8 +774,18 @@
          concurrent candle fetches skips every rate-limited / queued symbol and
          produces no strategies. */
       if (d && (d.status === 'error' || d.status === 'unavailable') && /rate|limit|unavailable|busy|loading|retry/i.test(String(d.message || ''))) {
-        for (let attempt = 1; attempt <= 3; attempt++) {
-          await new Promise(r => setTimeout(r, Math.min(3000, 2000 * attempt)));
+        /* The server returns a retry_after hint (seconds) for its rate-limit /
+           cooldown parks (~30s). The fixed 2s/4s/6s backoff below was shorter
+           than that window, so a symbol fetched during a cooldown storm still
+           came back empty and got skipped as "not enough candles". Ride out
+           the full park: wait retry_after when provided, otherwise grow the
+           backoff until it covers ~35s total. */
+        for (let attempt = 1; attempt <= 12; attempt++) {
+          const hint = Number(d && d.retry_after);
+          const wait = (hint && hint > 0)
+            ? Math.min(30000, hint + 1.5)
+            : Math.min(6000, 1500 * attempt);
+          await new Promise(r => setTimeout(r, Math.min(30000, Math.max(1000, wait * 1000))));
           const d2 = await fetchWithTimeout('/api/candles', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ security_id: symbol.id, exchange_segment: symbol.exch, instrument_type: symbol.inst || 'INDEX', timeframe: tf, force: 1, period_days: periodDays || null })
@@ -784,6 +794,7 @@
             this.candleCache[key] = { at: Date.now(), candles: d2.data };
             return d2.data;
           }
+          if (d2 && d2.status !== 'error' && d2.status !== 'unavailable') break;
         }
       }
       if (cached) return cached.candles;

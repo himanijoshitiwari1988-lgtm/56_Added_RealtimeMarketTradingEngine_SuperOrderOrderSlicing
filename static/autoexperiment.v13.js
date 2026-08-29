@@ -2307,6 +2307,7 @@ window.createAutoExperiment = function (suffix) {
       commodity: { enabled: false, sids: [] }, // MCX commodity futures backtest: runs on each +Add-ed FUTCOM contract directly (spot mode), alongside stocks/F&O
       autoSend: { enabled: false, tpls: [] }, // auto strategy sender: experiment runs only the user-selected saved templates and auto-sends the created strategies to the paper trade engine
       showPickedStrikes: false,
+      trendConfirm: false, // when ON the bullish/bearish backtest skips symbols whose own trend does not match the selected filter side; when OFF the backtest runs on the strategy's own bullish/bearish entry signal for every symbol
       groupByStrategy: true, // group results by strategy (one card per strategy across all backtested symbols)
       filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false }, // Bullish/Bearish section masters + trend/cross/volume/fake-breakout/reversal/pane gates + per-side research-stream scopes
       niftyEntry: { enabled: false, dir: 'bullish', zone: 'above_upper' }, // trade-entry NIFTY condition (execute only when NIFTY matches)
@@ -4368,12 +4369,15 @@ window.createAutoExperiment = function (suffix) {
       const spotTf = underlyingByTf[tf] ? tf : Object.keys(underlyingByTf)[0];
       const spot = underlyingByTf[spotTf].length ? underlyingByTf[spotTf][underlyingByTf[spotTf].length - 1].close : null;
 
-      /* Direction-aware backtest: when a directional indicator filter (bullish
-         or bearish) is selected the backtest engine only runs symbols whose own
-         trend/movement matches that side - a bearish filter backtests bearish
-         stocks/indices only and a bullish filter backtests the bullish side
-         only. Symbols trending the opposite way are skipped from the run. */
-      const btFilterDir = activeFilterDirection();
+      /* Direction-aware backtest: when the Trend confirmation checkbox is ON
+         and a directional indicator filter (bullish or bearish) is selected,
+         the backtest engine only runs symbols whose own trend/movement matches
+         that side - a bearish filter backtests bearish stocks/indices only and
+         a bullish filter backtests the bullish side only. Symbols trending the
+         opposite way are skipped from the run. When the checkbox is OFF (the
+         default) the backtest runs on the strategy's own bullish/bearish entry
+         signal for every symbol, so no symbol is skipped. */
+      const btFilterDir = state.trendConfirm ? activeFilterDirection() : null;
       if (btFilterDir) {
         const dirCandles = underlyingByTf[spotTf];
         let symDir = null;
@@ -5947,6 +5951,7 @@ window.createAutoExperiment = function (suffix) {
   function readFiltersUI() {
     if (!state.filters) state.filters = Object.assign({}, defaultState().filters);
     const prevMaster = { bullish: !!state.filters.bullish, bearish: !!state.filters.bearish };
+    state.trendConfirm = !!($id('aeTrendConfirm') && $id('aeTrendConfirm').checked);
     state.filters.bullish = !!($id('aeFilterBullish') && $id('aeFilterBullish').checked);
     state.filters.bearish = !!($id('aeFilterBearish') && $id('aeFilterBearish').checked);
     state.filters.incUp = !!($id('aeFilterIncUp') && $id('aeFilterIncUp').checked);
@@ -6178,6 +6183,8 @@ window.createAutoExperiment = function (suffix) {
       if (el) el.checked = enabledGroups.indexOf(g.key) >= 0;
     });
     const f = state.filters || (state.filters = Object.assign({}, defaultState().filters));
+    const tcEl = $id('aeTrendConfirm');
+    if (tcEl) tcEl.checked = !!state.trendConfirm;
     [['aeFilterBullish', 'bullish'], ['aeFilterBearish', 'bearish'], ['aeFilterIncUp', 'incUp'], ['aeFilterIncDown', 'incDown'], ['aeFilterGapUp', 'gapUp'], ['aeFilterGapDown', 'gapDown'], ['aeFilterIncUpAll', 'incUpAll'], ['aeFilterIncDownAll', 'incDownAll'], ['aeFilterCrossUp', 'crossUp'], ['aeFilterCrossDown', 'crossDown'], ['aeFilterGtUp', 'gtUp'], ['aeFilterLtUp', 'ltUp'], ['aeFilterGtDown', 'gtDown'], ['aeFilterLtDown', 'ltDown']].concat(FILTER_EXTRA_KEYS.map(k => ['aeFilter' + capId(k), k]), STREAM_FLAG_KEYS.map(k => ['aeFilter' + capId(k), k])).forEach(p => {
       const el = $id(p[0]);
       if (el) el.checked = !!f[p[1]];
