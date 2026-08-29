@@ -1597,6 +1597,14 @@ def _get_live_quote(security_id, exchange_segment, instrument_type):
             return hit
     if instrument_type not in ("OPTIDX", "OPTSTK", "FUTCOM", "OPTFUT"):
         return None
+    # After market close Dhan returns empty-bodied (code=None) quote failures
+    # that _unwrap_sdk_response treats as rate-limiting and re-arms the global
+    # 30s cooldown, starving the option-chain / expiry fetches (the /api/candles
+    # 503 + "/api/auto_strikes rate limited" cascade). The WebSocket feed already
+    # holds last-known prices, so only REST-fallback options outside an active
+    # cooldown window during market hours - never hammer Dhan after close.
+    if rate_limit_cooldown_active() or not _any_market_open_now():
+        return None
     with _LIVE_PATCH_LOCK:
         do_fetch = time.time() - _LIVE_PATCH.get(security_id, 0) >= 5
         if do_fetch:

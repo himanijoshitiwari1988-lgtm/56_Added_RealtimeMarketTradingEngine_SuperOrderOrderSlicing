@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 326fcfd..149b4e6 100644
+index 326fcfd..7d61788 100644
 --- a/app.py
 +++ b/app.py
 @@ -969,6 +969,12 @@ def _ws_instrument_list():
@@ -35,7 +35,22 @@ index 326fcfd..149b4e6 100644
  # Negative expiry-cache: cache_key -> last-failure timestamp. The browser polls
  # /api/expiries every ~2s; without this a single empty-body failure from the
  # expiry endpoint would re-arm the GLOBAL rate-limit cooldown (and block
-@@ -1681,6 +1700,13 @@ def _build_scrip_lookups(df):
+@@ -1578,6 +1597,14 @@ def _get_live_quote(security_id, exchange_segment, instrument_type):
+             return hit
+     if instrument_type not in ("OPTIDX", "OPTSTK", "FUTCOM", "OPTFUT"):
+         return None
++    # After market close Dhan returns empty-bodied (code=None) quote failures
++    # that _unwrap_sdk_response treats as rate-limiting and re-arms the global
++    # 30s cooldown, starving the option-chain / expiry fetches (the /api/candles
++    # 503 + "/api/auto_strikes rate limited" cascade). The WebSocket feed already
++    # holds last-known prices, so only REST-fallback options outside an active
++    # cooldown window during market hours - never hammer Dhan after close.
++    if rate_limit_cooldown_active() or not _any_market_open_now():
++        return None
+     with _LIVE_PATCH_LOCK:
+         do_fetch = time.time() - _LIVE_PATCH.get(security_id, 0) >= 5
+         if do_fetch:
+@@ -1681,6 +1708,13 @@ def _build_scrip_lookups(df):
                  bucket = oc_map.setdefault((exch, prefix.upper(), expiry_date), {})
                  strike_entry = bucket.setdefault(strike, {"lot": lot})
                  strike_entry[otype] = int(sid)
@@ -49,7 +64,7 @@ index 326fcfd..149b4e6 100644
      _SCRIP_CACHE["sid_rows"] = sid_rows
      _SCRIP_CACHE["fo_by_type"] = fo_by_type
      _SCRIP_CACHE["oc_map"] = oc_map
-@@ -1810,6 +1836,11 @@ def _scrip_exch_for(api_segment):
+@@ -1810,6 +1844,11 @@ def _scrip_exch_for(api_segment):
          return "BSE"
      if "MCX" in seg:
          return "MCX"
@@ -61,7 +76,7 @@ index 326fcfd..149b4e6 100644
      if "NSE" in seg or seg == "IDX_I":
          return "NSE"
      return ""
-@@ -1917,6 +1948,36 @@ _LOT_MAP_CACHE = {"data": None, "at": 0.0}
+@@ -1917,6 +1956,36 @@ _LOT_MAP_CACHE = {"data": None, "at": 0.0}
  _LOT_MAP_LOCK = threading.Lock()
  
  
@@ -98,7 +113,7 @@ index 326fcfd..149b4e6 100644
  def _build_lot_size_map():
      """Lot size lookup for every F&O underlying and index in the UI.
  
-@@ -2408,6 +2469,15 @@ def api_expiries():
+@@ -2408,6 +2477,15 @@ def api_expiries():
          security_id, exchange_segment = _resolve_fno_underlying(symbol_name, security_id, exchange_segment)
      except Exception:
          pass
@@ -114,7 +129,7 @@ index 326fcfd..149b4e6 100644
      cache_key = ("expiries", security_id, exchange_segment)
      cached = _cache_get(cache_key)
      if cached is not None and _expiries_still_valid(cached):
-@@ -2466,14 +2536,58 @@ def _get_oc_spot(security_id, exchange_segment):
+@@ -2466,14 +2544,58 @@ def _get_oc_spot(security_id, exchange_segment):
      return 0
  
  
@@ -176,7 +191,7 @@ index 326fcfd..149b4e6 100644
  
  
  def _oc_view_and_ids(bucket, fno_seg, spot, subscribe_window):
-@@ -2537,6 +2651,52 @@ def _wait_feed_warm(ids, max_wait=0.6):
+@@ -2537,6 +2659,52 @@ def _wait_feed_warm(ids, max_wait=0.6):
          time.sleep(0.05)
  
  
@@ -229,7 +244,7 @@ index 326fcfd..149b4e6 100644
  def _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot=None,
                        subscribe_window=False, feed_wait=True):
      """Build the option-chain table instantly from the scrip master + live
-@@ -2657,7 +2817,7 @@ def _seed_chain_quotes(records):
+@@ -2657,7 +2825,7 @@ def _seed_chain_quotes(records):
              _quote_write(str(int(sid)), entry, live=True)
  
  
@@ -238,7 +253,7 @@ index 326fcfd..149b4e6 100644
      # Never fire the /optionchain endpoint into an active rate-limit window.
      # The background chain refresh was a main source of the recurring code=None
      # empty-body errors that kept /api/candles stuck at 503: its 2s/4s/6s retry
-@@ -2675,6 +2835,13 @@ def _fetch_option_chain_data(security_id, exchange_segment, expiry):
+@@ -2675,6 +2843,13 @@ def _fetch_option_chain_data(security_id, exchange_segment, expiry):
      records = [{k: (None if isinstance(v, float) and (v != v) else v) for k, v in r.items()} for r in records]
      _seed_chain_quotes(records)
      _ws_subscribe_oc_strikes(records, exchange_segment)
@@ -252,7 +267,7 @@ index 326fcfd..149b4e6 100644
      # Enrich change/gain with market quotes in the background. The option-chain
      # response must not be delayed by a second Dhan quote call (pre-market it can
      # hang); the computed change from the chain is a good fallback and the WS
-@@ -2683,28 +2850,50 @@ def _fetch_option_chain_data(security_id, exchange_segment, expiry):
+@@ -2683,28 +2858,50 @@ def _fetch_option_chain_data(security_id, exchange_segment, expiry):
      return {"records": records, "spot": spot_price, "count": len(records)}
  
  
@@ -265,10 +280,10 @@ index 326fcfd..149b4e6 100644
 -    finally:
 -        with _DATA_INFLIGHT_LOCK:
 -            _DATA_INFLIGHT.discard(cache_key)
--
 +def _oc_refresh_worker():
 +    """Drain the option-chain REST refresh queue ONE job at a time.
  
+-
 -def _start_rest_refresh(cache_key, security_id, exchange_segment, expiry):
 -    """Launch a background Dhan /optionchain refresh (fills greeks/IV) unless one
 -    is already in flight for this key. Callers serve the instant partial chain
@@ -320,7 +335,7 @@ index 326fcfd..149b4e6 100644
  
  
  @app.route("/api/option_chain", methods=["POST"])
-@@ -2716,6 +2905,7 @@ def api_option_chain():
+@@ -2716,6 +2913,7 @@ def api_option_chain():
      exchange_segment = data.get("exchange_segment", "IDX_I")
      expiry = data.get("expiry", "")
      symbol_name = data.get("symbol_name", "")
@@ -328,7 +343,7 @@ index 326fcfd..149b4e6 100644
      try:
          spot = float(data.get("spot") or 0)
      except (TypeError, ValueError):
-@@ -2740,6 +2930,16 @@ def api_option_chain():
+@@ -2740,6 +2938,16 @@ def api_option_chain():
      except Exception:
          fno_sid, fno_seg = security_id, exchange_segment
  
@@ -345,7 +360,7 @@ index 326fcfd..149b4e6 100644
      # Defensive: if we already have this symbol's expiry list cached, reject an
      # expiry that is not in it (e.g. a stale NIFTY Tuesday expiry sent for a
      # BSE SENSEX chain). This avoids a doomed ~20s Dhan call + rate-limit error.
-@@ -2755,24 +2955,27 @@ def api_option_chain():
+@@ -2755,24 +2963,27 @@ def api_option_chain():
          _ws_subscribe_oc_strikes(cached["records"], fno_seg)
          return jsonify({"status": "success", "data": cached["records"],
                          "spot_price": cached["spot"], "count": cached["count"],
@@ -378,7 +393,7 @@ index 326fcfd..149b4e6 100644
      try:
          inst = _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot)
      except Exception as e:
-@@ -2785,10 +2988,11 @@ def api_option_chain():
+@@ -2785,10 +2996,11 @@ def api_option_chain():
                     "option_chain")
          return jsonify({"status": "success", "data": inst["records"],
                          "spot_price": inst["spot"], "count": len(inst["records"]),
@@ -392,7 +407,7 @@ index 326fcfd..149b4e6 100644
  
  
  @app.route("/api/option_chain_all", methods=["POST"])
-@@ -2808,6 +3012,7 @@ def api_option_chain_all():
+@@ -2808,6 +3020,7 @@ def api_option_chain_all():
      security_id = int(data.get("security_id", 13))
      exchange_segment = data.get("exchange_segment", "IDX_I")
      symbol_name = data.get("symbol_name", "")
@@ -400,7 +415,7 @@ index 326fcfd..149b4e6 100644
      try:
          spot = float(data.get("spot") or 0)
      except (TypeError, ValueError):
-@@ -2818,6 +3023,16 @@ def api_option_chain_all():
+@@ -2818,6 +3031,16 @@ def api_option_chain_all():
      except Exception:
          fno_sid, fno_seg = security_id, exchange_segment
  
@@ -417,7 +432,7 @@ index 326fcfd..149b4e6 100644
      exp_cache_key = ("expiries", fno_sid, fno_seg)
      expiries = _cache_get(exp_cache_key)
      if expiries is None:
-@@ -2871,11 +3086,11 @@ def api_option_chain_all():
+@@ -2871,11 +3094,11 @@ def api_option_chain_all():
              _cache_set(cache_key, {"records": inst["records"], "spot": inst["spot"],
                                     "count": len(inst["records"]), "partial": True},
                         "option_chain")
@@ -431,7 +446,7 @@ index 326fcfd..149b4e6 100644
              })
              continue
          # No scrip-master strikes: serve a cached REST chain if one exists,
-@@ -2886,13 +3101,21 @@ def api_option_chain_all():
+@@ -2886,13 +3109,21 @@ def api_option_chain_all():
              chains.append({
                  "expiry": expiry, "records": cached["records"],
                  "spot_price": cached["spot"], "count": cached["count"],
@@ -455,7 +470,7 @@ index 326fcfd..149b4e6 100644
          return jsonify({"status": "error", "message": "Option chain unavailable"}), 503
      return jsonify({"status": "success", "expiries": expiries, "chains": chains,
                      "errors": errors})
-@@ -2938,7 +3161,8 @@ def api_auto_strikes():
+@@ -2938,7 +3169,8 @@ def api_auto_strikes():
      cached = _cache_get(oc_cache_key)
      if cached is None:
          try:
@@ -465,7 +480,7 @@ index 326fcfd..149b4e6 100644
              _cache_set(oc_cache_key, cached, "option_chain")
          except Exception as e:
              return jsonify({"status": "error", "message": str(e)}), 500
-@@ -3497,6 +3721,9 @@ def api_commodities():
+@@ -3497,6 +3729,9 @@ def api_commodities():
                  "lot_size": mcx_lot if mcx_lot > 0 else float(r.get("lot_size") or 0),
                  "tick_size": float(r.get("tick_size") or 0),
                  "expiry": str(r.get("expiry_date") or "")[:10],

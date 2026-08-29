@@ -1,9 +1,9 @@
- app.py                       | 293 +++++++++++++++++++++---
+ app.py                       | 301 +++++++++++++++++++++---
  static/aismart.js            | 534 ++++++++++++++++++++++++++++++++++++++-----
  static/autoexperiment.v13.js | 339 +++++++++++++++++++++++----
  static/hft_runner.js         |  33 ++-
  templates/index.html         | 233 +++++++++++++++----
- 5 files changed, 1253 insertions(+), 179 deletions(-)
+ 5 files changed, 1261 insertions(+), 179 deletions(-)
 M	app.py
 M	static/aismart.js
 M	static/autoexperiment.v13.js
