@@ -1,0 +1,2410 @@
+diff --git a/app.py b/app.py
+index 326fcfd..149b4e6 100644
+--- a/app.py
++++ b/app.py
+@@ -969,6 +969,12 @@ def _ws_instrument_list():
+ # from the live premium on every LTP tick. This keeps the chain's IV column
+ # updating at feed speed instead of waiting for the slow REST refresh.
+ _OPT_META = {}                  # security_id -> {prefix, expiry, strike, type}
++# Option buckets learned at runtime from successful Dhan option-chain REST
++# fetches (commodity expiries whose OPTFUT strikes the scrip master does not
++# cover). Merged into oc_map on every scrip-master load so those chains use the
++# instant scrip-master + WebSocket path on every later build instead of re-hitting
++# the slow 1-req/3s /optionchain endpoint.
++_OC_PERSISTED = {}
+ _OPT_SPOT = {}                  # F&O prefix -> underlying spot (live)
+ _OPT_SPOT_LOCK = threading.Lock()
+ _OPT_IV_AT = {}                 # quote key -> last IV recompute time (throttle)
+@@ -1529,6 +1535,19 @@ _DATA_CACHE_MAX = 256
+ _DATA_INFLIGHT = set()
+ _DATA_INFLIGHT_LOCK = threading.Lock()
+ 
++# ---- Serialized option-chain REST refresh pipeline ----
++# Dhan /optionchain is throttled to 1 req/3s and an empty response arms a 30s
++# surface cooldown. When a commodity's strikes are NOT in the scrip master the
++# first load of every expiry needs a REST fetch; firing them all at once (as
++# the all-expiries endpoint used to) queued a dozen ~20s background threads that
++# tripped the cooldown and left the whole surface at "Rate limited". Instead
++# every OC REST refresh is enqueued here and drained ONE at a time, and each
++# success is persisted into the scrip-master bucket so the next load of that
++# expiry is instant. `_DATA_INFLIGHT` still dedupes per-chain refreshes.
++_OC_REFRESH_QUEUE = []
++_OC_REFRESH_LOCK = threading.Lock()
++_OC_WORKER_STARTED = False
++
+ # Negative expiry-cache: cache_key -> last-failure timestamp. The browser polls
+ # /api/expiries every ~2s; without this a single empty-body failure from the
+ # expiry endpoint would re-arm the GLOBAL rate-limit cooldown (and block
+@@ -1681,6 +1700,13 @@ def _build_scrip_lookups(df):
+                 bucket = oc_map.setdefault((exch, prefix.upper(), expiry_date), {})
+                 strike_entry = bucket.setdefault(strike, {"lot": lot})
+                 strike_entry[otype] = int(sid)
++    # Re-merge any buckets learned at runtime (REST-discovered commodity
++    # expiries the scrip master never covered) so the hourly scrip-master
++    # refresh does not lose them.
++    for key, bucket in _OC_PERSISTED.items():
++        merged = oc_map.setdefault(key, {})
++        for strike, ent in bucket.items():
++            merged.setdefault(strike, {}).update(ent)
+     _SCRIP_CACHE["sid_rows"] = sid_rows
+     _SCRIP_CACHE["fo_by_type"] = fo_by_type
+     _SCRIP_CACHE["oc_map"] = oc_map
+@@ -1810,6 +1836,11 @@ def _scrip_exch_for(api_segment):
+         return "BSE"
+     if "MCX" in seg:
+         return "MCX"
++    if "NCD" in seg:
++        # NCDEX commodity derivatives (segment NCD_FNO). The scrip master
++        # currently carries no NCDEX rows, so chains still fall back to the
++        # REST path, but the bucket key is resolved correctly either way.
++        return "NCDEX"
+     if "NSE" in seg or seg == "IDX_I":
+         return "NSE"
+     return ""
+@@ -1917,6 +1948,36 @@ _LOT_MAP_CACHE = {"data": None, "at": 0.0}
+ _LOT_MAP_LOCK = threading.Lock()
+ 
+ 
++def _oc_instrument_meta(symbol_name, security_id, exchange_segment):
++    """Resolve the instrument trading symbol + contract lot size for the option
++    chain header. Prefers the FUT* contract row (e.g. 'GOLD-05Oct2026-FUT') via
++    the underlying-prefix lookup so index / stock / commodity chains all get a
++    clean instrument name and the exchange lot size from the scrip master.
++    Returns {"symbol_name", "trading_symbol", "lot_size"} with None fallbacks -
++    never raises, so the chain UI always has something to show."""
++    out = {"symbol_name": symbol_name or "", "trading_symbol": None, "lot_size": None}
++    fno_seg = exchange_segment
++    try:
++        _, fno_seg = _resolve_fno_underlying(symbol_name, security_id, exchange_segment)
++    except Exception:
++        pass
++    try:
++        row = _resolve_lot_size(symbol_name, security_id, "", fno_seg)
++    except Exception:
++        row = None
++    if row:
++        out["lot_size"] = row.get("lot_size") or None
++        out["trading_symbol"] = row.get("trading_symbol") or None
++    if not out["trading_symbol"]:
++        out["trading_symbol"] = (symbol_name or "").upper()
++    if out["lot_size"] is not None:
++        try:
++            out["lot_size"] = float(out["lot_size"])
++        except (TypeError, ValueError):
++            out["lot_size"] = None
++    return out
++
++
+ def _build_lot_size_map():
+     """Lot size lookup for every F&O underlying and index in the UI.
+ 
+@@ -2408,6 +2469,15 @@ def api_expiries():
+         security_id, exchange_segment = _resolve_fno_underlying(symbol_name, security_id, exchange_segment)
+     except Exception:
+         pass
++    # Commodities with NO listed options (only ~10 of 28 MCX futures have
++    # OPTFUT rows in the scrip master) must never be sent to Dhan's expiry
++    # endpoint - the empty response would arm the 30s OC cooldown and surface
++    # as "Rate limited" for a symbol that simply has no options.
++    comm_exch = _scrip_exch_for(exchange_segment)
++    if comm_exch in ("MCX", "NCDEX") and symbol_name and not _oc_prefix_has_options(_fno_underlying(symbol_name), comm_exch):
++        return jsonify({"status": "error",
++                        "message": "No options listed for " + str(symbol_name).upper(),
++                        "instrument": _oc_instrument_meta(symbol_name, security_id, exchange_segment)}), 404
+     cache_key = ("expiries", security_id, exchange_segment)
+     cached = _cache_get(cache_key)
+     if cached is not None and _expiries_still_valid(cached):
+@@ -2466,14 +2536,58 @@ def _get_oc_spot(security_id, exchange_segment):
+     return 0
+ 
+ 
++def _oc_prefix_has_options(prefix, exch=None):
++    """True when the scrip master (incl. REST-persisted buckets) carries ANY
++    option strikes for this underlying prefix.
++
++    Only ~10 of the 28 MCX commodity futures have listed options (the rest,
++    e.g. ALUMINIUM / LEAD / NICKEL, have FUTCOM but no OPTFUT rows at all).
++    For those, every expiry-list / option-chain call is a doomed Dhan
++    /optionchain request whose empty body arms the 30s surface cooldown and
++    surfaces as "Rate limited". Short-circuiting them avoids firing Dhan at all."""
++    if not prefix:
++        return True  # unknown prefix: let the REST path try
++    _get_scrip_master()
++    oc_map = _SCRIP_CACHE.get("oc_map")
++    if not isinstance(oc_map, dict) or not oc_map:
++        return True  # scrip master unavailable/empty: let the REST path try
++    up = str(prefix).upper()
++    if exch:
++        return any(k[0] == exch and str(k[1]).upper() == up for k in oc_map)
++    return any(str(k[1]).upper() == up for k in oc_map)
++
++
+ def _oc_bucket(symbol_name, fno_seg, expiry):
+     """Resolve the scrip-master option bucket (strike -> {CE, PE}) for a symbol +
+-    expiry. Returns None when the scrip master has no strikes for it."""
++    expiry. Returns None when the scrip master has no strikes for it.
++
++    The scrip master stores the REAL exchange (NSE/BSE/MCX), not the API
++    segment (NSE_FNO/BSE_FNO/MCX_COMM). Resolving the exchange via
++    `_scrip_exch_for` instead of hard-coding NSE/BSE lets MCX commodity options
++    (OPTFUT strikes) hit the fast scrip-master + WebSocket instant chain path
++    just like indices and F&O stocks - otherwise every commodity chain falls
++    through to Dhan's slow (and rate-limited 1-req/3s) /optionchain REST call."""
+     prefix = _fno_underlying(symbol_name)
+-    exch = "BSE" if str(fno_seg).upper() == "BSE_FNO" else "NSE"
++    exch = _scrip_exch_for(fno_seg)
++    if not exch:
++        exch = "BSE" if str(fno_seg).upper() == "BSE_FNO" else "NSE"
+     expiry_date = str(expiry)[:10]
+     _get_scrip_master()
+-    return _SCRIP_CACHE.get("oc_map", {}).get((exch, prefix.upper(), expiry_date))
++    oc_map = _SCRIP_CACHE.get("oc_map", {})
++    key = (exch, prefix.upper(), expiry_date)
++    if key in oc_map:
++        return oc_map[key]
++    # The scrip-master exchange id and the API segment mapping can disagree
++    # (e.g. a segment resolved to the wrong exchange, or NCDEX rows stored under
++    # a different id). Fall back to any other exchange that has strikes for this
++    # prefix+expiry so a name mismatch never forces a slow REST chain fetch.
++    for cand in ("MCX", "NSE", "BSE", "NCDEX"):
++        if cand == exch:
++            continue
++        hit = oc_map.get((cand, prefix.upper(), expiry_date))
++        if hit:
++            return hit
++    return None
+ 
+ 
+ def _oc_view_and_ids(bucket, fno_seg, spot, subscribe_window):
+@@ -2537,6 +2651,52 @@ def _wait_feed_warm(ids, max_wait=0.6):
+         time.sleep(0.05)
+ 
+ 
++def _persist_chain_to_oc_map(fno_seg, prefix, expiry_date, records):
++    """Persist a successful Dhan option-chain fetch into the in-memory scrip
++    master bucket ({(exch, prefix, expiry): {strike: {"CE": sid, "PE": sid}}})
++    so the NEXT build of this chain uses the instant scrip-master + WebSocket
++    path instead of hitting the slow, rate-limited /optionchain endpoint again.
++
++    This is what permanently fixes commodity chains whose OPTFUT strikes the
++    scrip master never carried (e.g. ALUMINIUM / LEAD / NICKEL expiries): the
++    first load pays one REST call per expiry, every later load is instant. The
++    buckets are stored in `_OC_PERSISTED` and re-merged on every scrip-master
++    reload, and `_OPT_META` is extended so live IV works for the new strikes."""
++    if not records or not prefix or not expiry_date:
++        return
++    _get_scrip_master()
++    exch = _scrip_exch_for(fno_seg) or "MCX"
++    key = (exch, str(prefix).upper(), str(expiry_date)[:10])
++    with _SCRIP_LOCK:
++        oc_map = _SCRIP_CACHE.get("oc_map")
++        if not isinstance(oc_map, dict):
++            _SCRIP_CACHE["oc_map"] = {}
++            oc_map = _SCRIP_CACHE["oc_map"]
++        persisted = _OC_PERSISTED.setdefault(key, {})
++        target = oc_map.setdefault(key, {})
++        for r in records:
++            try:
++                strike = float(r.get("Strike") or 0)
++            except (TypeError, ValueError):
++                continue
++            if not strike or (not r.get("CE SID") and not r.get("PE SID")):
++                continue
++            ent = persisted.setdefault(strike, {"lot": _MCX_LOT_BY_PREFIX.get(str(prefix).upper(), 0)})
++            for otype in ("CE", "PE"):
++                sid = r.get(f"{otype} SID")
++                if not sid:
++                    continue
++                sid_i = int(sid)
++                ent[otype] = sid_i
++                _OPT_META[sid_i] = {
++                    "prefix": str(prefix).upper(), "expiry": key[2],
++                    "strike": strike, "type": otype, "exch": exch,
++                }
++            if "lot" not in ent or not ent["lot"]:
++                ent["lot"] = _MCX_LOT_BY_PREFIX.get(str(prefix).upper(), 0)
++            target.setdefault(strike, {}).update(ent)
++
++
+ def _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot=None,
+                       subscribe_window=False, feed_wait=True):
+     """Build the option-chain table instantly from the scrip master + live
+@@ -2657,7 +2817,7 @@ def _seed_chain_quotes(records):
+             _quote_write(str(int(sid)), entry, live=True)
+ 
+ 
+-def _fetch_option_chain_data(security_id, exchange_segment, expiry):
++def _fetch_option_chain_data(security_id, exchange_segment, expiry, prefix=None):
+     # Never fire the /optionchain endpoint into an active rate-limit window.
+     # The background chain refresh was a main source of the recurring code=None
+     # empty-body errors that kept /api/candles stuck at 503: its 2s/4s/6s retry
+@@ -2675,6 +2835,13 @@ def _fetch_option_chain_data(security_id, exchange_segment, expiry):
+     records = [{k: (None if isinstance(v, float) and (v != v) else v) for k, v in r.items()} for r in records]
+     _seed_chain_quotes(records)
+     _ws_subscribe_oc_strikes(records, exchange_segment)
++    # This chain was built from Dhan's REST endpoint, which means the scrip
++    # master probably had no strikes for it (e.g. a commodity expiry it does not
++    # cover). Persist the strikes/security-ids into the scrip-master bucket so
++    # every later load of this expiry is instant instead of paying the slow,
++    # rate-limited /optionchain call again.
++    if prefix:
++        _persist_chain_to_oc_map(exchange_segment, prefix, expiry, records)
+     # Enrich change/gain with market quotes in the background. The option-chain
+     # response must not be delayed by a second Dhan quote call (pre-market it can
+     # hang); the computed change from the chain is a good fallback and the WS
+@@ -2683,28 +2850,50 @@ def _fetch_option_chain_data(security_id, exchange_segment, expiry):
+     return {"records": records, "spot": spot_price, "count": len(records)}
+ 
+ 
+-def _refresh_option_chain_bg(cache_key, security_id, exchange_segment, expiry):
+-    try:
+-        payload = _fetch_option_chain_data(security_id, exchange_segment, expiry)
+-        _cache_set(cache_key, payload, "option_chain")
+-    except Exception as e:
+-        logger.warning("option chain refresh failed for %s: %s", str(cache_key), e)
+-    finally:
+-        with _DATA_INFLIGHT_LOCK:
+-            _DATA_INFLIGHT.discard(cache_key)
+-
++def _oc_refresh_worker():
++    """Drain the option-chain REST refresh queue ONE job at a time.
+ 
+-def _start_rest_refresh(cache_key, security_id, exchange_segment, expiry):
+-    """Launch a background Dhan /optionchain refresh (fills greeks/IV) unless one
+-    is already in flight for this key. Callers serve the instant partial chain
+-    right away; the background task upgrades it to a full greeks chain."""
++    Each successful fetch is persisted into the scrip-master bucket (inside
++    `_fetch_option_chain_data`), so a commodity chain that needed the slow REST
++    path once becomes instant on every later load. When Dhan rate-limits the OC
++    surface mid-queue the remaining jobs fail fast (the surface gate raises
++    immediately) instead of piling up, and the per-chain `_DATA_INFLIGHT` guard
++    is released so a later request can retry after the cooldown clears."""
++    while True:
++        job = None
++        with _OC_REFRESH_LOCK:
++            if _OC_REFRESH_QUEUE:
++                job = _OC_REFRESH_QUEUE.pop(0)
++        if job is None:
++            time.sleep(0.5)
++            continue
++        cache_key, security_id, exchange_segment, expiry, prefix = job
++        try:
++            payload = _fetch_option_chain_data(security_id, exchange_segment, expiry, prefix)
++            _cache_set(cache_key, payload, "option_chain")
++        except Exception as e:
++            logger.warning("option chain refresh failed for %s: %s", str(cache_key), e)
++        finally:
++            with _DATA_INFLIGHT_LOCK:
++                _DATA_INFLIGHT.discard(cache_key)
++
++
++def _start_rest_refresh(cache_key, security_id, exchange_segment, expiry, prefix=None):
++    """Enqueue a background Dhan /optionchain refresh (fills greeks/IV AND
++    persists the chain into the scrip master) unless one is already in flight
++    for this key. Callers serve the instant partial chain right away; the worker
++    drains refreshes one at a time so a burst of missing commodity expiries can
++    never trip Dhan's 1-req/3s option-chain rate limit all at once."""
+     with _DATA_INFLIGHT_LOCK:
+         if cache_key in _DATA_INFLIGHT:
+             return
+         _DATA_INFLIGHT.add(cache_key)
+-    threading.Thread(target=_refresh_option_chain_bg,
+-                     args=(cache_key, security_id, exchange_segment, expiry),
+-                     daemon=True).start()
++    global _OC_WORKER_STARTED
++    with _OC_REFRESH_LOCK:
++        _OC_REFRESH_QUEUE.append((cache_key, security_id, exchange_segment, expiry, prefix))
++        if not _OC_WORKER_STARTED:
++            _OC_WORKER_STARTED = True
++            threading.Thread(target=_oc_refresh_worker, daemon=True).start()
+ 
+ 
+ @app.route("/api/option_chain", methods=["POST"])
+@@ -2716,6 +2905,7 @@ def api_option_chain():
+     exchange_segment = data.get("exchange_segment", "IDX_I")
+     expiry = data.get("expiry", "")
+     symbol_name = data.get("symbol_name", "")
++    prefix = _fno_underlying(symbol_name) if symbol_name else None
+     try:
+         spot = float(data.get("spot") or 0)
+     except (TypeError, ValueError):
+@@ -2740,6 +2930,16 @@ def api_option_chain():
+     except Exception:
+         fno_sid, fno_seg = security_id, exchange_segment
+ 
++    instrument = _oc_instrument_meta(symbol_name, security_id, exchange_segment)
++
++    # Commodity with no listed options: never fire the doomed /optionchain call
++    # (its empty body arms the 30s OC cooldown -> "Rate limited").
++    comm_exch = _scrip_exch_for(fno_seg)
++    if comm_exch in ("MCX", "NCDEX") and prefix and not _oc_prefix_has_options(prefix, comm_exch):
++        return jsonify({"status": "error",
++                        "message": "No options listed for " + str(prefix) + " (commodity futures only)",
++                        "instrument": instrument}), 404
++
+     # Defensive: if we already have this symbol's expiry list cached, reject an
+     # expiry that is not in it (e.g. a stale NIFTY Tuesday expiry sent for a
+     # BSE SENSEX chain). This avoids a doomed ~20s Dhan call + rate-limit error.
+@@ -2755,24 +2955,27 @@ def api_option_chain():
+         _ws_subscribe_oc_strikes(cached["records"], fno_seg)
+         return jsonify({"status": "success", "data": cached["records"],
+                         "spot_price": cached["spot"], "count": cached["count"],
+-                        "partial": bool(cached.get("partial"))})
++                        "partial": bool(cached.get("partial")), "instrument": instrument})
+     stale, _ = _cache_get_raw(cache_key)
+ 
+     # A chain already exists (even stale): serve it immediately and refresh
+     # greeks/IV in the background. Never regress a full (greeks-ready) chain
+     # back to the partial scrip-master view.
+     if stale is not None:
+-        _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry)
++        _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry, prefix)
+         _seed_chain_quotes(stale["records"])
+         _ws_subscribe_oc_strikes(stale["records"], fno_seg)
+         return jsonify({"status": "success", "data": stale["records"],
+                         "spot_price": stale["spot"], "count": stale["count"],
+-                        "stale": True, "partial": bool(stale.get("partial"))})
++                        "stale": True, "partial": bool(stale.get("partial")),
++                        "instrument": instrument})
+ 
+     # True first-ever load for this chain: launch the (slow) REST refresh for
+     # greeks and serve an instant scrip-master + WebSocket chain right away so
+-    # the table renders in milliseconds instead of waiting ~20s on Dhan.
+-    _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry)
++    # the table renders in milliseconds instead of waiting ~20s on Dhan. The
++    # refresh persists the chain into the scrip master, so a commodity expiry
++    # that needed the slow path once is instant on every later load.
++    _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry, prefix)
+     try:
+         inst = _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot)
+     except Exception as e:
+@@ -2785,10 +2988,11 @@ def api_option_chain():
+                    "option_chain")
+         return jsonify({"status": "success", "data": inst["records"],
+                         "spot_price": inst["spot"], "count": len(inst["records"]),
+-                        "partial": True})
++                        "partial": True, "instrument": instrument})
+ 
+     # Fallback: scrip master unavailable or no strikes for this symbol/expiry.
+-    return jsonify({"status": "loading", "message": "Option chain loading"}), 202
++    return jsonify({"status": "loading", "message": "Option chain loading",
++                    "instrument": instrument}), 202
+ 
+ 
+ @app.route("/api/option_chain_all", methods=["POST"])
+@@ -2808,6 +3012,7 @@ def api_option_chain_all():
+     security_id = int(data.get("security_id", 13))
+     exchange_segment = data.get("exchange_segment", "IDX_I")
+     symbol_name = data.get("symbol_name", "")
++    prefix = _fno_underlying(symbol_name) if symbol_name else None
+     try:
+         spot = float(data.get("spot") or 0)
+     except (TypeError, ValueError):
+@@ -2818,6 +3023,16 @@ def api_option_chain_all():
+     except Exception:
+         fno_sid, fno_seg = security_id, exchange_segment
+ 
++    instrument = _oc_instrument_meta(symbol_name, security_id, exchange_segment)
++
++    # Commodity with no listed options: never fire the doomed /optionchain /
++    # expiry-list calls (their empty bodies arm the 30s OC cooldown).
++    comm_exch = _scrip_exch_for(fno_seg)
++    if comm_exch in ("MCX", "NCDEX") and prefix and not _oc_prefix_has_options(prefix, comm_exch):
++        return jsonify({"status": "error",
++                        "message": "No options listed for " + str(prefix) + " (commodity futures only)",
++                        "instrument": instrument}), 404
++
+     exp_cache_key = ("expiries", fno_sid, fno_seg)
+     expiries = _cache_get(exp_cache_key)
+     if expiries is None:
+@@ -2871,11 +3086,11 @@ def api_option_chain_all():
+             _cache_set(cache_key, {"records": inst["records"], "spot": inst["spot"],
+                                    "count": len(inst["records"]), "partial": True},
+                        "option_chain")
+-            _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry)
++            _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry, prefix)
+             chains.append({
+                 "expiry": expiry, "records": inst["records"],
+                 "spot_price": inst["spot"], "count": len(inst["records"]),
+-                "partial": True,
++                "partial": True, "instrument": instrument,
+             })
+             continue
+         # No scrip-master strikes: serve a cached REST chain if one exists,
+@@ -2886,13 +3101,21 @@ def api_option_chain_all():
+             chains.append({
+                 "expiry": expiry, "records": cached["records"],
+                 "spot_price": cached["spot"], "count": cached["count"],
+-                "partial": bool(cached.get("partial")),
++                "partial": bool(cached.get("partial")), "instrument": instrument,
+             })
+             continue
+-        _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry)
++        _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry, prefix)
+         errors.append(expiry)
+ 
+     if not chains:
++        # No expiry built yet, but REST refreshes for the missing ones are
++        # queued (one at a time) and will persist them into the scrip master.
++        # Report loading (202) so the browser keeps polling with its gentle
++        # backoff instead of treating it as a hard failure.
++        if errors:
++            return jsonify({"status": "loading", "message": "Option chain loading",
++                            "expiries": expiries, "pending": errors,
++                            "instrument": instrument}), 202
+         return jsonify({"status": "error", "message": "Option chain unavailable"}), 503
+     return jsonify({"status": "success", "expiries": expiries, "chains": chains,
+                     "errors": errors})
+@@ -2938,7 +3161,8 @@ def api_auto_strikes():
+     cached = _cache_get(oc_cache_key)
+     if cached is None:
+         try:
+-            cached = _fetch_option_chain_data(security_id, exchange_segment, expiry)
++            cached = _fetch_option_chain_data(security_id, exchange_segment, expiry,
++                                              _fno_underlying(symbol_name) if symbol_name else None)
+             _cache_set(oc_cache_key, cached, "option_chain")
+         except Exception as e:
+             return jsonify({"status": "error", "message": str(e)}), 500
+@@ -3497,6 +3721,9 @@ def api_commodities():
+                 "lot_size": mcx_lot if mcx_lot > 0 else float(r.get("lot_size") or 0),
+                 "tick_size": float(r.get("tick_size") or 0),
+                 "expiry": str(r.get("expiry_date") or "")[:10],
++                # Only ~10 of the 28 MCX futures have listed options. The engine
++                # dropdowns show only option-bearing commodities, so flag each one.
++                "has_options": _oc_prefix_has_options(prefix, "MCX"),
+             })
+         payload = {"commodities": out}
+         _COMMODITY_CACHE["data"] = payload
+diff --git a/static/aismart.js b/static/aismart.js
+index a52fb3e..04849b5 100644
+--- a/static/aismart.js
++++ b/static/aismart.js
+@@ -61,6 +61,12 @@ window.createAISmartTrading = function (suffix) {
+      pane-indicator gates (main line vs signal line crossover, and every line
+      of every pane indicator trending the same way). */
+   const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr'];
++  /* Directional filter keys: the Bullish / Bearish indicator-filter section
++     sub-options. Used to strip the opposite-direction filters before they are
++     appended to a running strategy (a bullish strategy never receives bearish
++     filter gates and vice versa). */
++  const BULL_FILTER_KEYS = ['incUp', 'crossUp', 'gapUp', 'incUpAll', 'gtUp', 'ltUp', 'bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'paneCrossUp', 'paneIncUpAll', 'bullBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bullSmf', 'bullVl', 'bullAsr'];
++  const BEAR_FILTER_KEYS = ['incDown', 'crossDown', 'gapDown', 'incDownAll', 'gtDown', 'ltDown', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'paneCrossDown', 'paneIncDownAll', 'bearBbwInc', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bearSmf', 'bearVl', 'bearAsr'];
+   const VALID_MODES = ['above', 'below', 'both_atm', 'above_atm', 'below_atm', 'both_atm_inc', 'atm'];
+   const VALID_TYPES = ['both', 'CE', 'PE'];
+   const ALL_TIMEFRAMES = ['1min', '5min'];
+@@ -607,16 +613,74 @@ window.createAISmartTrading = function (suffix) {
+     return out;
+   }
+ 
++  /* Strategy-owned settings (the "signal layer"): whatever the strategy itself
++     carries wins over the AST universal controls, so an imported strategy keeps
++     behaving exactly as designed. AST's matching global controls are faded out
++     in the UI while every running strategy drives that setting. */
++  function strategyOwnTf(s) {
++    if (!s || !s.tf) return '';
++    return (ALL_TIMEFRAMES.indexOf(s.tf) >= 0) ? s.tf : '';
++  }
++  function strategyOwnSl(s) {
++    if (!s) return null;
++    if (s.refSlPct != null && Number(s.refSlPct) > 0) return Number(s.refSlPct);
++    if (s.autoSlPct != null && Number(s.autoSlPct) > 0) return Number(s.autoSlPct);
++    return null;
++  }
++  function strategyOwnTrailSl(s) {
++    if (!s || s.refTrailSlPct == null) return null;
++    return Number(s.refTrailSlPct) > 0 ? Number(s.refTrailSlPct) : null;
++  }
++  function strategyOwnFilters(s) {
++    return !!((s && s.entryExtra && s.entryExtra.length));
++  }
++  function strategyOverrideStatus() {
++    const list = activeStrategies();
++    if (!list.length) return { tf: false, sl: false, trailSl: false, filters: false };
++    const all = pred => list.every(s => pred(s));
++    return {
++      tf: all(s => !!strategyOwnTf(s)),
++      sl: all(s => strategyOwnSl(s) != null),
++      trailSl: all(s => strategyOwnTrailSl(s) != null),
++      filters: all(s => strategyOwnFilters(s))
++    };
++  }
++
+   /* Working copy of a saved strategy with the enabled filters appended to its
+-     entryExtra (cached per filters signature so re-evaluation is cheap). */
++     entryExtra (cached per filters signature so re-evaluation is cheap). The
++     global AST Bullish/Bearish filters are only appended when their direction
++     matches the strategy's own category - a bullish strategy never receives
++     bearish filter gates and vice versa, so the appended filters can only
++     reinforce the strategy's direction instead of suppressing it. */
+   const _workingCache = new Map();
+   function workingStrategy(s) {
+     const fsig = JSON.stringify(state.filters || {});
+     const c = _workingCache.get(s.id);
+     if (c && c.sig === fsig) return c.s;
+     const copy = JSON.parse(JSON.stringify(s));
+-    const fc = buildFilterConditions(copy, state.filters);
+-    if (fc.length) copy.entryExtra = (copy.entryExtra || []).concat(fc);
++    const side = (s.cat === 'bearish') ? 'bearish' : 'bullish';
++    const f = JSON.parse(JSON.stringify(state.filters || {}));
++    /* Zero the opposite-direction filter section so only matching-side
++       conditions can be built (no cross-direction double gating). */
++    if (side === 'bullish') {
++      f.bearish = false;
++      BEAR_FILTER_KEYS.forEach(k => delete f[k]);
++    } else {
++      f.bullish = false;
++      BULL_FILTER_KEYS.forEach(k => delete f[k]);
++    }
++    const fc = buildFilterConditions(copy, f);
++    if (fc.length) {
++      copy.entryExtra = (copy.entryExtra || []).concat(fc);
++      /* Appended direction-matched filters are mandatory confirmations on top of
++         the strategy's own conditions: raise the pass-count to the sum so the
++         N-of-M semantics of the strategy itself is preserved exactly (the
++         threshold-distortion fix). */
++      const ownNeed = (copy.entryThreshold != null && copy.entryThreshold >= 1)
++        ? copy.entryThreshold
++        : (copy.entryExtra.length - fc.length);
++      copy.entryThreshold = ownNeed + fc.length;
++    }
+     _workingCache.set(s.id, { sig: fsig, s: copy });
+     if (_workingCache.size > 500) _workingCache.clear();
+     return copy;
+@@ -640,6 +704,18 @@ window.createAISmartTrading = function (suffix) {
+     return null;
+   }
+ 
++  /* Direction of the currently running strategies. When every running strategy
++     shares the same category the leg is pinned to that side (bullish -> CE,
++     bearish -> PE); when strategies disagree or none runs, returns null so the
++     existing movers/filters/trend direction logic decides the leg. */
++  function strategyDirectionFor() {
++    const list = activeStrategies();
++    if (!list.length) return null;
++    const cats = list.map(s => s.cat === 'bearish' ? 'bearish' : 'bullish');
++    const first = cats[0];
++    return cats.every(c => c === first) ? first : null;
++  }
++
+   /* Research-stream scoping inside the Bullish/Bearish filter sections: when a
+      stream checkbox is ticked, only strategies whose research group is in the
+      ticked list for that side are picked/traded. Returns null when no stream
+@@ -806,14 +882,15 @@ window.createAISmartTrading = function (suffix) {
+       universal: { lotSize: null, lots: 1, margin: 100000, tpPct: 1, manualTrail: true, aiSl: true, aiTp: true, manualSL: false, manualSLPct: 1, manualTrailTP: false, manualTrailTPPct: 20, manualTP: false, manualTPPct: 5, aiTP: false, rrEnabled: false, rrValue: 2, mtfConfirm: false, fnoLimit: true, tfs: { '1min': true, '5min': true }, tradeLimitEnabled: false, tradeLimitCount: 5, aiTrades: false, hft: false, hftOps: 6, hftExecOn: 'close', startTradeAfterEnabled: false, startTradeAfter: '09:15', noTradeAfterEnabled: false, noTradeAfter: '15:30', autoSquareOffEnabled: false, autoSquareOffTime: '15:20' },
+       runProgress: {},     // strategyId -> { pct, status, updated } live per-tick pipeline progress
+       strike: { mode: 'both_atm', count: 3, optionType: 'both', positiveOnly: true },
+-      runIn: { index: 'both', fno: 'spot', default: false }, // chart the strategy run + trade execution runs on: 'spot', 'premium' or 'both'
+-      tradeIn: { index: 'premium', fno: 'premium', default: false }, // chart the trade execution is done on: 'spot' or 'premium'
++      runIn: { index: 'both', fno: 'spot', comm: 'spot', default: false }, // chart the strategy run + trade execution runs on: 'spot', 'premium' or 'both'
++      tradeIn: { index: 'premium', fno: 'premium', comm: 'spot', default: false }, // chart the trade execution is done on: 'spot' or 'premium'
+       premiumOnly: false, // when ON the strategy run AND trade execution both lock to the option premium chart for every instrument type
+       groups: GROUP_KEYS.slice(),
+       symbols: [],
+       movers: { enabled: false, gainers: 5, losers: 5, indices: [], picked: [] },
+       niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [] }, // NIFTY trend-following F&O picker (directional gainers/losers above a daily change% threshold + optional indices)
+       sim: { enabled: false }, // market-off simulation chart: trades the synthetic SIM 900001 stream instead of real strikes
++      commodity: { enabled: false, sids: [] }, // MCX commodity futures paper trading: trades each +Add-ed FUTCOM contract directly (spot mode), alongside stocks/F&O
+       showPickedStrikes: false,
+       filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false },
+       niftyEntry: { enabled: false, dir: 'bullish', zone: 'above_upper' },
+@@ -858,23 +935,26 @@ window.createAISmartTrading = function (suffix) {
+     if (s && s.runIn) {
+       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
+       // premium chart) or 'both' (spot + premium). Indices default to 'both',
+-      // F&O stocks default to 'spot'. Commodities always run on the futures
+-      // contract regardless of these settings.
++      // F&O stocks default to 'spot'. Commodities default to the futures
++      // contract ('spot') but honour their own dropdown.
+       const OK = ['spot', 'premium', 'both'];
+       if (OK.indexOf(s.runIn.index) < 0) s.runIn.index = 'both';
+       if (OK.indexOf(s.runIn.fno) < 0) s.runIn.fno = 'spot';
++      if (OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
+       if (typeof s.runIn.default !== 'boolean') s.runIn.default = false;
+     } else if (s) {
+-      s.runIn = { index: 'both', fno: 'spot', default: false };
++      s.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false };
+     }
+     if (s && s.tradeIn) {
+       // Trades always execute on the selected-strike option premium chart for
+-      // both indices and F&O stocks - never on the spot chart.
++      // both indices and F&O stocks - never on the spot chart. Commodities
++      // default to the futures contract ('spot') but honour their own dropdown.
+       s.tradeIn.index = 'premium';
+       s.tradeIn.fno = 'premium';
++      if (['spot', 'premium', 'both'].indexOf(s.tradeIn.comm) < 0) s.tradeIn.comm = 'spot';
+       if (typeof s.tradeIn.default !== 'boolean') s.tradeIn.default = false;
+     } else if (s) {
+-      s.tradeIn = { index: 'premium', fno: 'premium', default: false };
++      s.tradeIn = { index: 'premium', fno: 'premium', comm: 'spot', default: false };
+     }
+     if (s && typeof s.premiumOnly !== 'boolean') s.premiumOnly = false;
+     /* The Research-streams row was removed - streams are now scoped per-side
+@@ -1098,9 +1178,9 @@ window.createAISmartTrading = function (suffix) {
+   }
+   /* Chart the strategy run + trade execution should use for an instrument type:
+      'spot' (underlying/spot chart), 'premium' (selected strike option premium
+-     chart) or 'both' (spot + premium). Indices and F&O stocks read their own
+-     "Strategy should be run in" dropdown; commodities always run on the futures
+-     contract (spot). */
++     chart) or 'both' (spot + premium). Indices, F&O stocks and commodities each
++     read their own "Strategy should be run in" dropdown; commodities default to
++     the FUTCOM futures contract (spot). */
+   function runInMode(symbol) {
+     // The market-off simulator chart always runs + executes on its own stream.
+     if (isSimSymbol(symbol)) return 'spot';
+@@ -1108,20 +1188,20 @@ window.createAISmartTrading = function (suffix) {
+     // execution chart to the option premium chart for every instrument type.
+     if (state.premiumOnly) return 'premium';
+     const ri = state.runIn || {};
+-    if (isCommodity(symbol)) return 'spot';
++    if (isCommodity(symbol)) return (ri && ri.comm) || 'spot';
+     if (!isIndex(symbol)) return ri.fno || 'spot';
+     return ri.index || 'both';
+   }
+   /* Chart the trade execution should use for an instrument type. Trades for
+      BOTH indices and F&O stocks always execute on the selected-strike option
+      premium chart ('premium') - never on the underlying/spot chart. Commodities
+-     are the exception: they execute on the futures contract itself ('spot')
+-     because they have no option-premium execution path here. */
++     execute per their own "Trade should be executed in" dropdown - default the
++     FUTCOM futures contract itself ('spot'). */
+   function tradeInMode(symbol) {
+     if (isSimSymbol(symbol)) return 'spot';
+     if (state.premiumOnly) return 'premium';
+-    if (isCommodity(symbol)) return 'spot';
+     const ti = state.tradeIn || {};
++    if (isCommodity(symbol)) return (ti && ti.comm) || 'spot';
+     if (!isIndex(symbol)) return 'premium';
+     return ti.index || 'premium';
+   }
+@@ -1156,7 +1236,11 @@ window.createAISmartTrading = function (suffix) {
+     const byId = {};
+     list.forEach(s => {
+       const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
+-      if (!id || inst === 'INDEX') return;
++      /* Commodities live in SYMBOLS too but are a SEPARATE, toggle-gated
++         universe (state.commodity) - the movers / trend auto-scans must never
++         pick them, or strategies run on commodities while the commodity toggle
++         is OFF and nothing is +Add-ed. */
++      if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
+       byId[id] = { name, id, exch, inst, ocId, ocExch, grp };
+     });
+     for (const id in byId) {
+@@ -1199,25 +1283,104 @@ window.createAISmartTrading = function (suffix) {
+   function experimentSymbols(niftyDir) {
+     /* Market-off simulation chart: the universe collapses to the synthetic
+        SIM 900001 stream (treated as a spot underlying). Mutually exclusive with
+-       the movers / NIFTY trend-following universes below. */
++       every other universe. */
+     if (state.sim && state.sim.enabled) return [SIM_SYMBOL];
++    /* MCX commodity futures are NOT exclusive with the stock/F&O universes: the
++       +Add-ed commodities (traded directly in spot mode) are ADDED to whatever
++       the movers / NIFTY trend-following / manual symbol selection produces, so
++       commodities can be paper-traded alongside stocks and F&O at the same time. */
++    const out = [];
++    if (state.commodity && state.commodity.enabled) out.push.apply(out, commoditySymbols());
+     const mv = state.movers || {};
+     const nt = state.niftyTrend || {};
+     if (nt.enabled) {
+       // NIFTY trend-following mode: universe = F&O stocks from the NIFTY trend
+       // side whose daily change% is above the threshold (+ optional indices).
+-      return pruneNiftyTrendSymbols(niftyTrendSymbols(niftyDir || _lastNiftyDir), niftyDir || _lastNiftyDir);
+-    }
+-    let base;
+-    if (mv.enabled) {
+-      base = topMoverSymbols();
++      out.push.apply(out, pruneNiftyTrendSymbols(niftyTrendSymbols(niftyDir || _lastNiftyDir), niftyDir || _lastNiftyDir));
++    } else if (mv.enabled) {
++      out.push.apply(out, topMoverSymbols());
+     } else {
+-      base = (state.symbols && state.symbols.length) ? state.symbols.slice() : [];
++      const base = (state.symbols && state.symbols.length) ? state.symbols.slice() : [];
++      if (base.length) {
++        out.push.apply(out, base);
++      } else {
++        const cur = (typeof selectedSymbol !== 'undefined') ? selectedSymbol : null;
++        /* A commodity chart left open must NOT auto-run here: commodities trade
++           only when the dedicated commodity toggle (state.commodity.enabled) is
++           ON, so the chart fallback skips commodities while it is OFF. */
++        if (cur && !(isCommodity(cur) && !(state.commodity && state.commodity.enabled))) out.push(cur);
++      }
++    }
++    /* Deduplicate (a commodity could coincide with a manual symbol). */
++    const seen = {};
++    return out.filter(s => {
++      if (!s || s.id == null) return false;
++      const k = String(s.id) + ':' + (s.exch || '');
++      if (seen[k]) return false;
++      seen[k] = 1;
++      return true;
++    });
++  }
++
++  /* All MCX commodity FUTCOM symbols currently inducted into SYMBOLS by
++     loadCommodities() (or resolvable from the picker). Each row carries
++     `[name, sid, "MCX_COMM", "FUTCOM", sid, "MCX_COMM", "Commodities (MCX)"]`
++     and optionally a trailing has_options flag (slot 7). */
++  function commoditySymbolsList() {
++    const list = (typeof SYMBOLS !== 'undefined' && Array.isArray(SYMBOLS)) ? SYMBOLS : [];
++    const out = [];
++    const seen = {};
++    list.forEach(s => {
++      const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
++      if (!id || String(exch || '').toUpperCase() !== 'MCX_COMM') return;
++      const key = String(id) + ':MCX_COMM';
++      if (seen[key]) return;
++      seen[key] = 1;
++      out.push({
++        name: name || ('MCX ' + id), id: id,
++        exch: 'MCX_COMM', inst: 'FUTCOM',
++        ocId: (ocId != null ? Number(ocId) : id), ocExch: 'MCX_COMM',
++        grp: grp || 'Commodities (MCX)',
++        hasOptions: (s[7] === undefined) ? true : !!s[7]
++      });
++    });
++    return out;
++  }
++
++  /* Only commodities that have a listed option chain - the ones the engine
++     dropdown offers, so a user can never pick a futures-only commodity. */
++  function optionCommodities() {
++    return commoditySymbolsList().filter(c => c.hasOptions !== false);
++  }
++
++  /* Migrate the single-selection commodity state ({enabled, sid}) saved by older
++     builds to the multi-selection list ({enabled, sids}). Idempotent. */
++  function _migrateCommodityState() {
++    if (!state.commodity) state.commodity = { enabled: false, sids: [] };
++    const c = state.commodity;
++    if (c.sid != null && !Array.isArray(c.sids)) {
++      c.sids = [];
++      const v = Number(c.sid);
++      if (c.sid !== '' && v > 0) c.sids.push(v);
++      delete c.sid;
+     }
+-    if (base.length) return base;
+-    if (mv.enabled) return [];
+-    const cur = (typeof selectedSymbol !== 'undefined') ? selectedSymbol : null;
+-    return cur ? [cur] : [];
++    if (!Array.isArray(c.sids)) c.sids = [];
++    c.sids = c.sids.filter((v, i, a) => a.indexOf(v) === i && Number(v) > 0);
++  }
++
++  /* The commodities the engine trades when commodity mode is ON: one symbol per
++     sid in state.commodity.sids (the user's +Add-ed list). Contract ids roll over
++     every expiry, so an expired id is dropped silently instead of breaking the
++     run. */
++  function commoditySymbols() {
++    _migrateCommodityState();
++    const all = commoditySymbolsList();
++    const out = [];
++    (state.commodity.sids || []).forEach(sid => {
++      const found = all.find(c => Number(c.id) === Number(sid));
++      if (found) out.push(found);
++    });
++    return out;
+   }
+ 
+   /* Direction tag for the Top Gainers / Losers + Indices universe. Each mover is
+@@ -1263,7 +1426,11 @@ window.createAISmartTrading = function (suffix) {
+     const byId = {};
+     list.forEach(s => {
+       const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
+-      if (!id || inst === 'INDEX') return;
++      /* Commodities live in SYMBOLS too but are a SEPARATE, toggle-gated
++         universe (state.commodity) - the movers / trend auto-scans must never
++         pick them, or strategies run on commodities while the commodity toggle
++         is OFF and nothing is +Add-ed. */
++      if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
+       byId[id] = { name, id, exch, inst, ocId, ocExch, grp };
+     });
+     const quoted = [];
+@@ -1448,6 +1615,7 @@ window.createAISmartTrading = function (suffix) {
+     applyNiftyTrendToUI();
+     applyMoversToUI();
+     applySimToUI();
++    applyCommodityToUI();
+     log('NIFTY trend-following trading ' + (state.niftyTrend.enabled ? 'enabled' : 'disabled'), state.niftyTrend.enabled ? 'ok' : 'warn');
+   }
+ 
+@@ -1462,6 +1630,7 @@ window.createAISmartTrading = function (suffix) {
+     if (state.sim.enabled) {
+       if (state.movers) state.movers.enabled = false;
+       if (state.niftyTrend) { state.niftyTrend.enabled = false; _resetTrendScan(); }
++      if (state.commodity) state.commodity.enabled = false;
+       /* Make sure the server simulator is producing a live stream. */
+       if (window.Simulator && typeof window.Simulator.ensureRunning === 'function') {
+         window.Simulator.ensureRunning();
+@@ -1471,6 +1640,7 @@ window.createAISmartTrading = function (suffix) {
+     applySimToUI();
+     applyNiftyTrendToUI();
+     applyMoversToUI();
++    applyCommodityToUI();
+     log('Simulation chart trading ' + (state.sim.enabled ? 'enabled' : 'disabled'), state.sim.enabled ? 'ok' : 'warn');
+   }
+ 
+@@ -1478,9 +1648,10 @@ window.createAISmartTrading = function (suffix) {
+     const sim = state.sim || (state.sim = { enabled: false });
+     const btn = $id('astSimToggle');
+     if (btn) {
+-      btn.textContent = 'Simulation Chart: ' + (sim.enabled ? 'ON' : 'OFF');
+-      btn.style.background = sim.enabled ? '#00d4aa' : '#e67e22';
+-      btn.style.opacity = '1';
++      const commOn = !!(state.commodity && state.commodity.enabled);
++      btn.textContent = commOn ? 'Simulation Chart: OFF - Commodities on' : ('Simulation Chart: ' + (sim.enabled ? 'ON' : 'OFF'));
++      btn.style.background = commOn ? '#666' : (sim.enabled ? '#00d4aa' : '#e67e22');
++      btn.style.opacity = commOn ? '0.6' : '1';
+     }
+     const st = $id('astSimStatus');
+     if (st) {
+@@ -1490,6 +1661,125 @@ window.createAISmartTrading = function (suffix) {
+     }
+   }
+ 
++  /* MCX commodity futures toggle. Enabling it does NOT collapse the universe -
++     the +Add-ed commodities (traded directly on the FUTCOM contract in spot
++     mode) are combined with the movers / NIFTY trend-following / manual symbol
++     selection so commodities trade alongside stocks and F&O. Only the market-off
++     simulation stays exclusive. */
++  function toggleCommodity() {
++    _migrateCommodityState();
++    state.commodity.enabled = !state.commodity.enabled;
++    if (state.commodity.enabled) {
++      if (state.sim) state.sim.enabled = false;
++      /* If nothing is +Add-ed yet, default to the first available contract so
++         enabling the mode always has a real symbol to run. */
++      if (!state.commodity.sids.length) {
++        const first = optionCommodities()[0];
++        if (first) state.commodity.sids.push(first.id);
++      }
++    }
++    save();
++    applyCommodityToUI();
++    applySimToUI();
++    log('MCX commodity futures trading ' + (state.commodity.enabled ? 'enabled' : 'disabled'), state.commodity.enabled ? 'ok' : 'warn');
++  }
++
++  /* +Add the commodity picked in the dropdown to the trading list (defaulting to
++     the first available contract when nothing is selected). Adding also enables
++     the mode so the user never has a list with no trades. */
++  function addCommodity() {
++    _migrateCommodityState();
++    const sel = $id('astCommoditySelect');
++    let sid = sel ? Number(sel.value) : NaN;
++    if (!(sid > 0)) {
++      const first = optionCommodities()[0];
++      sid = first ? first.id : 0;
++    }
++    if (!(sid > 0)) return;
++    if (state.commodity.sids.indexOf(sid) === -1) state.commodity.sids.push(sid);
++    state.commodity.enabled = true;
++    save();
++    applyCommodityToUI();
++  }
++
++  /* Remove one +Add-ed commodity from the trading list. */
++  function removeCommodity(sid) {
++    _migrateCommodityState();
++    const v = Number(sid);
++    state.commodity.sids = state.commodity.sids.filter(s => Number(s) !== v);
++    save();
++    applyCommodityToUI();
++  }
++
++  /* Fill the commodity dropdown from SYMBOLS (MCX_COMM/FUTCOM rows inducted by
++     loadCommodities()). Because that induction is async, retry a few times so
++     the dropdown catches the contracts whenever they arrive. */
++  let _commodityUiTries = 0;
++  function populateCommoditiesUI() {
++    const sel = $id('astCommoditySelect');
++    if (!sel) return;
++    const comms = optionCommodities();
++    if (!comms.length) {
++      /* Not loaded yet - the page's loadCommodities() populates SYMBOLS asynchronously. */
++      if (_commodityUiTries < 20) {
++        _commodityUiTries++;
++        setTimeout(populateCommoditiesUI, 1500);
++      }
++      return;
++    }
++    const keep = sel.value;
++    sel.innerHTML = '<option value="">-- choose commodity --</option>' + comms.map(c =>
++      '<option value="' + String(c.id) + '">' + esc(c.name) + '</option>').join('');
++    if (keep) sel.value = keep;
++  }
++
++  function applyCommodityToUI() {
++    _migrateCommodityState();
++    const comm = state.commodity;
++    const btn = $id('astCommodityToggle');
++    if (btn) {
++      btn.textContent = 'Commodities: ' + (comm.enabled ? 'ON' : 'OFF');
++      btn.style.background = comm.enabled ? '#00d4aa' : '#e67e22';
++      btn.style.opacity = '1';
++      btn.disabled = false;
++    }
++    const sel = $id('astCommoditySelect');
++    const addBtn = $id('astCommodityAdd');
++    if (sel) {
++      sel.disabled = false;
++      sel.style.opacity = '1';
++    }
++    if (addBtn) {
++      const v = sel ? Number(sel.value) : NaN;
++      const picked = (v > 0) ? v : null;
++      addBtn.disabled = picked != null && comm.sids.indexOf(picked) !== -1;
++      addBtn.style.opacity = addBtn.disabled ? '0.5' : '1';
++    }
++    populateCommoditiesUI();
++    /* Chips for every +Add-ed commodity, each with its own &times; remove. */
++    const listEl = $id('astCommodityList');
++    if (listEl) {
++      const names = {};
++      commoditySymbolsList().forEach(c => { names[Number(c.id)] = c.name; });
++      listEl.innerHTML = (comm.sids || []).map(sid => {
++        const nm = names[Number(sid)] || ('(expired ' + sid + ')');
++        return '<span style="display:inline-flex;align-items:center;gap:4px;background:#1a1a35;border:1px solid #2d2d50;color:#ffd700;border-radius:3px;padding:2px 6px;font-size:9px;margin:1px">' + esc(nm) +
++          ' <a href="javascript:void(0)" style="color:#ef5350;font-weight:700;text-decoration:none;font-size:11px" title="Remove" onclick="AISmartTrading.removeCommodity(' + Number(sid) + ')">&times;</a></span>';
++      }).join('');
++    }
++    const st = $id('astCommodityStatus');
++    if (st) {
++      const chosen = commoditySymbols();
++      if (comm.enabled) {
++        st.innerHTML = chosen.length
++          ? 'Paper trading ' + chosen.length + ' MCX commodity' + (chosen.length > 1 ? 's' : '') + ': <b style="color:#ffd700">' + chosen.map(c => esc(c.name)).join(', ') + '</b> - alongside your stock / F&O universe.'
++          : 'No commodity selected - use + Add to pick contracts.';
++      } else {
++        st.innerHTML = 'Add MCX commodity futures to paper-trade them directly (spot mode), alongside stocks / F&O.';
++      }
++    }
++  }
++
+   /* Live preview of the symbols the NIFTY trend-following mode would pick right
+      now (trend + qualifying F&O stocks above the threshold + included indices),
+      refreshed every poll tick alongside the movers list. */
+@@ -1514,7 +1804,11 @@ window.createAISmartTrading = function (suffix) {
+     const byId = {};
+     list.forEach(s => {
+       const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
+-      if (!id || inst === 'INDEX') return;
++      /* Commodities live in SYMBOLS too but are a SEPARATE, toggle-gated
++         universe (state.commodity) - the movers / trend auto-scans must never
++         pick them, or strategies run on commodities while the commodity toggle
++         is OFF and nothing is +Add-ed. */
++      if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
+       byId[id] = { name, id, exch, inst, ocId, ocExch, grp };
+     });
+     const rows = [];
+@@ -2163,7 +2457,7 @@ window.createAISmartTrading = function (suffix) {
+       /* Movers mode pins the leg to the stock's own move first (top gainer ->
+          CE only, top loser -> PE only), then the selected bullish/bearish
+          indicator filter, then the underlying's own trend. */
+-      const dir = moverDirectionFor(symbol) || activeFilterDirection() || await trendDirectionFor(symbol);
++       const dir = strategyDirectionFor() || moverDirectionFor(symbol) || activeFilterDirection() || await trendDirectionFor(symbol);
+       if (dir === 'bullish') ot = 'CE';
+       else if (dir === 'bearish') ot = 'PE';
+     }
+@@ -2494,6 +2788,12 @@ window.createAISmartTrading = function (suffix) {
+   function pickTimeframe(s) {
+     const tfs = (state.universal && state.universal.tfs) || { '1min': true, '5min': true };
+     const enabled = ALL_TIMEFRAMES.filter(t => tfs[t] !== false);
++    /* The strategy's OWN timeframe wins over the AST universal TF checkboxes:
++       an imported strategy keeps running on the timeframe it was designed/tested
++       on (the tf-mismatch conflict fix). Only when the strategy carries no
++       usable tf does the AST enabled-TF list apply. */
++    const ownTf = strategyOwnTf(s);
++    if (ownTf) return ownTf;
+     /* Strategies imported from the Paper Trade lists carry a reference-only
+        timeframe (what the AE engine used) - AST ignores it and always runs on
+        its own enabled timeframe settings basis. */
+@@ -2763,15 +3063,20 @@ window.createAISmartTrading = function (suffix) {
+           const side = 'BUY';
+           let lotSize = u.lotSize != null ? Number(u.lotSize) : null;
+           if (lotSize == null && pt.lotSizeFor) lotSize = pt.lotSizeFor(tradeTargets[0]);
+-          const manualSLOn = u.manualSL === true;
+-          const manualTrailSLOn = u.manualTrailSL === true;
++          /* Strategy-owned risk: an imported strategy's own SL / trail SL (what
++             the AE engine used) overrides the AST universal SL inputs so the
++             strategy behaves as designed (the double-setting SL conflict fix). */
++          const ownSl = strategyOwnSl(s);
++          const ownTrailSl = strategyOwnTrailSl(s);
++          const manualSLOn = (u.manualSL === true) || ownSl != null;
++          const manualTrailSLOn = (u.manualTrailSL === true) || ownTrailSl != null;
+           const manualTrailTPOn = u.manualTrailTP === true;
+           const manualTPOn = u.manualTP === true;
+           const aiSlOn = !manualSLOn && !manualTrailSLOn && u.aiSl !== false;
+           const aiTpOn = !manualTrailTPOn && u.aiTp !== false;
+           const aiTPOn = !manualTPOn && u.aiTP !== false;
+-          const slPct = manualSLOn ? (Number(u.manualSLPct) || 0) : (aiSlOn ? (s.autoSlPct != null ? s.autoSlPct : autoSLPct(candles)) : 0);
+-          const slTrailPct = manualTrailSLOn ? (Number(u.manualTrailSLPct) || 0) : 0;
++          const slPct = manualSLOn ? (ownSl != null ? ownSl : (Number(u.manualSLPct) || 0)) : (aiSlOn ? (s.autoSlPct != null ? s.autoSlPct : autoSLPct(candles)) : 0);
++          const slTrailPct = manualTrailSLOn ? (ownTrailSl != null ? ownTrailSl : (Number(u.manualTrailSLPct) || 0)) : 0;
+           const tpPct = manualTrailTPOn ? (Number(u.manualTrailTPPct) || 0) : (aiTpOn ? (u.manualTrail === false ? 1 : u.tpPct) : 0);
+           const fixedTpPct = (u.rrEnabled === true && Number(u.rrValue) > 0 && slPct > 0)
+             ? slPct * Number(u.rrValue)   // reward = risk x RR (overrides manual + AI TP)
+@@ -3277,15 +3582,20 @@ window.createAISmartTrading = function (suffix) {
+           //  - AI Trail TP banks profit (profit-maximizing trailing TP).
+           //  - AI TP % is a fixed take-profit off entry (volatility-scaled).
+           // All are master-gated by their own checkboxes (aiSl / aiTp / aiTP).
+-          const manualSLOn = u.manualSL === true;
+-          const manualTrailSLOn = u.manualTrailSL === true;
++          /* Strategy-owned risk: an imported strategy's own SL / trail SL (what
++             the AE engine used) overrides the AST universal SL inputs so the
++             strategy behaves as designed (the double-setting SL conflict fix). */
++          const ownSl = strategyOwnSl(s);
++          const ownTrailSl = strategyOwnTrailSl(s);
++          const manualSLOn = (u.manualSL === true) || ownSl != null;
++          const manualTrailSLOn = (u.manualTrailSL === true) || ownTrailSl != null;
+           const manualTrailTPOn = u.manualTrailTP === true;
+           const manualTPOn = u.manualTP === true;
+           const aiSlOn = !manualSLOn && !manualTrailSLOn && u.aiSl !== false;
+           const aiTpOn = !manualTrailTPOn && u.aiTp !== false;
+           const aiTPOn = !manualTPOn && u.aiTP !== false;
+-          const slPct = manualSLOn ? (Number(u.manualSLPct) || 0) : (aiSlOn ? (s.autoSlPct != null ? s.autoSlPct : autoSLPct(candles)) : 0);
+-          const slTrailPct = manualTrailSLOn ? (Number(u.manualTrailSLPct) || 0) : 0;
++          const slPct = manualSLOn ? (ownSl != null ? ownSl : (Number(u.manualSLPct) || 0)) : (aiSlOn ? (s.autoSlPct != null ? s.autoSlPct : autoSLPct(candles)) : 0);
++          const slTrailPct = manualTrailSLOn ? (ownTrailSl != null ? ownTrailSl : (Number(u.manualTrailSLPct) || 0)) : 0;
+           const tpPct = manualTrailTPOn ? (Number(u.manualTrailTPPct) || 0) : (aiTpOn ? (u.manualTrail === false ? 1 : u.tpPct) : 0);
+           const fixedTpPct = (u.rrEnabled === true && Number(u.rrValue) > 0 && slPct > 0)
+             ? slPct * Number(u.rrValue)   // reward = risk x RR (overrides manual + AI TP)
+@@ -3490,6 +3800,7 @@ window.createAISmartTrading = function (suffix) {
+     syncTimeframeUI();
+     syncTradesUI();
+     syncTimeGateUI();
++    syncStrategyOverrideUI();
+     save();
+   }
+ 
+@@ -3511,29 +3822,33 @@ window.createAISmartTrading = function (suffix) {
+   }
+ 
+   function readRunInUI() {
+-    const idxEl = $id('astRunInIndex'), fnoEl = $id('astRunInFno'), defEl = $id('astRunInDefault');
++    const idxEl = $id('astRunInIndex'), fnoEl = $id('astRunInFno'), commEl = $id('astRunInComm'), defEl = $id('astRunInDefault');
+     const idx = idxEl ? idxEl.value : 'both';
+     const fno = fnoEl ? fnoEl.value : 'spot';
++    const comm = commEl ? commEl.value : 'spot';
+     const def = defEl ? defEl.checked : false;
+-    state.runIn = state.runIn || { index: 'both', fno: 'spot', default: false };
++    state.runIn = state.runIn || { index: 'both', fno: 'spot', comm: 'spot', default: false };
+     state.runIn.index = idx;
+     state.runIn.fno = fno;
++    state.runIn.comm = comm;
+     state.runIn.default = def;
+     save();
+-    log('Strategy run in: indices = ' + modeLabel(idx) + ', F&O stocks = ' + modeLabel(fno) + (def ? ' (saved as default for all future tasks)' : ''), def ? 'ok' : '');
++    log('Strategy run in: indices = ' + modeLabel(idx) + ', F&O stocks = ' + modeLabel(fno) + ', Commodities = ' + modeLabel(comm) + (def ? ' (saved as default for all future tasks)' : ''), def ? 'ok' : '');
+   }
+ 
+   function readTradeInUI() {
+-    const idxEl = $id('astTradeInIndex'), defEl = $id('astTradeInDefault');
++    const idxEl = $id('astTradeInIndex'), commEl = $id('astTradeInComm'), defEl = $id('astTradeInDefault');
+     const idx = idxEl ? idxEl.value : 'premium';
++    const comm = commEl ? commEl.value : 'spot';
+     const def = defEl ? defEl.checked : false;
+-    state.tradeIn = state.tradeIn || { index: 'premium', fno: 'premium', default: false };
++    state.tradeIn = state.tradeIn || { index: 'premium', fno: 'premium', comm: 'spot', default: false };
+     state.tradeIn.index = idx;
+     // F&O stocks are fixed to the premium chart regardless of the dropdown.
+     state.tradeIn.fno = 'premium';
++    state.tradeIn.comm = comm;
+     state.tradeIn.default = def;
+     save();
+-    log('Trade execution in: indices = ' + modeLabel(idx) + ', F&O stocks = ' + modeLabel('premium') + (def ? ' (saved as default for all future tasks)' : ''), def ? 'ok' : '');
++    log('Trade execution in: indices = ' + modeLabel(idx) + ', F&O stocks = ' + modeLabel('premium') + ', Commodities = ' + modeLabel(comm) + (def ? ' (saved as default for all future tasks)' : ''), def ? 'ok' : '');
+   }
+ 
+   function modeLabel(m) {
+@@ -3793,7 +4108,11 @@ window.createAISmartTrading = function (suffix) {
+     const byId = {};
+     list.forEach(s => {
+       const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
+-      if (!id || inst === 'INDEX') return;
++      /* Commodities live in SYMBOLS too but are a SEPARATE, toggle-gated
++         universe (state.commodity) - the movers / trend auto-scans must never
++         pick them, or strategies run on commodities while the commodity toggle
++         is OFF and nothing is +Add-ed. */
++      if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
+       byId[String(id) + ':' + (exch || '')] = { name, id, exch, inst, ocId, ocExch, grp };
+     });
+     const quoted = [];
+@@ -3971,19 +4290,22 @@ window.createAISmartTrading = function (suffix) {
+     syncTimeframeUI();
+     syncTradesUI();
+     syncTimeGateUI();
++    syncStrategyOverrideUI();
+     const st = state.strike || {};
+     set('astStrikeMode', st.mode || 'both_atm');
+     set('astStrikeCount', st.count || 3);
+     set('astOptionType', st.optionType || 'both');
+     const posEl = $id('astOnlyPositive'); if (posEl) posEl.checked = st.positiveOnly !== false;
+     syncStrikeUI();
+-    const ri = state.runIn || (state.runIn = { index: 'both', fno: 'spot', default: false });
++    const ri = state.runIn || (state.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false });
+     set('astRunInIndex', ri.index || 'both');
+     set('astRunInFno', ri.fno || 'spot');
++    set('astRunInComm', ri.comm || 'spot');
+     const runInDefEl = $id('astRunInDefault'); if (runInDefEl) runInDefEl.checked = ri.default === true;
+-    const ti = state.tradeIn || (state.tradeIn = { index: 'premium', fno: 'premium', default: false });
++    const ti = state.tradeIn || (state.tradeIn = { index: 'premium', fno: 'premium', comm: 'spot', default: false });
+     set('astTradeInIndex', ti.index || 'premium');
+     set('astTradeInFno', ti.fno || 'premium');
++    set('astTradeInComm', ti.comm || 'spot');
+     const tradeInDefEl = $id('astTradeInDefault'); if (tradeInDefEl) tradeInDefEl.checked = ti.default === true;
+     syncPremiumOnlyUI();
+     const enabledGroups = (state.groups && state.groups.length) ? state.groups : GROUP_KEYS.slice();
+@@ -4104,6 +4426,97 @@ window.createAISmartTrading = function (suffix) {
+     if (tf5El) { tf5El.disabled = false; tf5El.style.opacity = '1'; }
+   }
+ 
++  /* AST controls that are auto-synced from the running strategy(s) get faded
++     out (disabled + dimmed): the strategy drives that setting, so the AST
++     control is read-only. Lot size / margin / TP / trail-TP stay interactive
++     because those are user-owned regardless of the strategy. */
++  const _overridePreserve = new Map();
++  function fadeAstControls(ids) {
++    const list = Array.isArray(ids) ? ids : (ids ? [ids] : []);
++    list.forEach(id => {
++      const el = $id(id);
++      if (!el) return;
++      if (!_overridePreserve.has(id)) {
++        _overridePreserve.set(id, { checked: el.checked, value: el.value });
++      }
++      el.disabled = true;
++      el.style.opacity = '0.45';
++      el.classList.add('ast-faded');
++      el.title = 'Controlled by the running strategy - edit it on the strategy to change.';
++    });
++  }
++  function unfadeAstControls(ids) {
++    const list = Array.isArray(ids) ? ids : (ids ? [ids] : []);
++    list.forEach(id => {
++      const el = $id(id);
++      if (!el) return;
++      const prev = _overridePreserve.get(id);
++      if (prev) {
++        if (typeof prev.checked === 'boolean') el.checked = prev.checked;
++        if (prev.value !== undefined) el.value = prev.value;
++        _overridePreserve.delete(id);
++      }
++      el.disabled = false;
++      el.style.opacity = '1';
++      el.classList.remove('ast-faded');
++      el.title = '';
++    });
++  }
++
++  /* Auto-sync the AST universal controls to match every running strategy's own
++     settings (TF, filters, SL / trail-SL) and fade those controls out. When
++     multiple strategies disagree (or a setting is missing) the control stays
++     interactive so the user can keep manual control. */
++  function syncStrategyOverrideUI() {
++    const ov = strategyOverrideStatus();
++    const hasAny = ov.tf || ov.sl || ov.trailSl || ov.filters;
++    const tfBoxes = ['astTf1min', 'astTf5min'];
++    const slBoxes = ['astManualSL', 'astManualSLPct', 'astManualTrailSL', 'astManualTrailSLPct'];
++    const filterIds = Array.from(document.querySelectorAll('[id^="astFilter"]')).map(el => el.id);
++    if (!hasAny) {
++      unfadeAstControls(tfBoxes.concat(slBoxes, filterIds));
++      return;
++    }
++    if (ov.tf) {
++      /* Display the running strategies' agreed timeframe inside the faded TF
++         checkboxes (only when they all carry the same tf; otherwise keep the
++         current display - each strategy still runs on its own tf). */
++      const list = activeStrategies();
++      const tfs = list.map(strategyOwnTf).filter(Boolean);
++      const agreed = tfs.length && tfs.every(t => t === tfs[0]) ? tfs[0] : null;
++      if (agreed) {
++        const tf1El = $id('astTf1min'), tf5El = $id('astTf5min');
++        if (tf1El) tf1El.checked = (agreed === '1min');
++        if (tf5El) tf5El.checked = (agreed === '5min');
++      }
++      fadeAstControls(tfBoxes);
++    } else {
++      unfadeAstControls(tfBoxes);
++    }
++    if (ov.sl || ov.trailSl) {
++      const list = activeStrategies();
++      const sls = list.map(strategyOwnSl).filter(v => v != null);
++      const agreedSl = sls.length && sls.every(v => v === sls[0]) ? sls[0] : null;
++      const trails = list.map(strategyOwnTrailSl).filter(v => v != null);
++      const agreedTrail = trails.length && trails.every(v => v === trails[0]) ? trails[0] : null;
++      const slEl = $id('astManualSL'), slPctEl = $id('astManualSLPct');
++      const tslEl = $id('astManualTrailSL'), tslPctEl = $id('astManualTrailSLPct');
++      if (agreedSl != null) {
++        if (slEl) slEl.checked = true;
++        if (slPctEl) slPctEl.value = agreedSl;
++      }
++      if (agreedTrail != null) {
++        if (tslEl) tslEl.checked = true;
++        if (tslPctEl) tslPctEl.value = agreedTrail;
++      }
++      fadeAstControls(slBoxes);
++    } else {
++      unfadeAstControls(slBoxes);
++    }
++    if (ov.filters) fadeAstControls(filterIds);
++    else unfadeAstControls(filterIds);
++  }
++
+   function syncTradesUI() {
+     const tlEl = $id('astTradeLimit'), tlCntEl = $id('astTradeLimitCount');
+     const aiOn = !!(state.universal && state.universal.aiTrades);
+@@ -4144,11 +4557,12 @@ window.createAISmartTrading = function (suffix) {
+     const btn = $id('astMoversToggle');
+     const trendOn = !!(state.niftyTrend && state.niftyTrend.enabled);
+     const simOn = !!(state.sim && state.sim.enabled);
+-    const active = !!mv.enabled && !trendOn && !simOn;
++    const blocked = trendOn || simOn;
++    const active = !!mv.enabled && !blocked;
+     if (btn) {
+       btn.textContent = trendOn ? 'Top Movers: OFF - Trend Follow on' : (simOn ? 'Top Movers: OFF - Simulation on' : ('Top Movers: ' + (mv.enabled ? 'ON' : 'OFF')));
+-      btn.style.background = active ? '#00d4aa' : ((trendOn || simOn) ? '#666' : '#e67e22');
+-      btn.style.opacity = (trendOn || simOn) ? '0.6' : '1';
++      btn.style.background = active ? '#00d4aa' : (blocked ? '#666' : '#e67e22');
++      btn.style.opacity = blocked ? '0.6' : '1';
+       btn.disabled = false;
+     }
+     const setVal = (id, v) => { const el = $id(id); if (el) el.value = v; };
+@@ -4610,6 +5024,7 @@ window.createAISmartTrading = function (suffix) {
+       const all = list.length > 0 && list.every(s => !!state.selected[s.id]);
+       sel.textContent = all ? 'Clear Selection' : 'Select All';
+     }
++    syncStrategyOverrideUI();
+   }
+ 
+   /* ---------------- actions ---------------- */
+@@ -4635,6 +5050,7 @@ window.createAISmartTrading = function (suffix) {
+     applyMoversToUI();
+     applyNiftyTrendToUI();
+     applySimToUI();
++    applyCommodityToUI();
+     renderMoversList();
+     log('Daily top gainers/losers + indices AI Smart Trading ' + (state.movers.enabled ? 'enabled' : 'disabled'), state.movers.enabled ? 'ok' : 'warn');
+   }
+@@ -4905,6 +5321,7 @@ window.createAISmartTrading = function (suffix) {
+       niftyEntry: JSON.parse(JSON.stringify(state.niftyEntry)),
+       niftyExit: JSON.parse(JSON.stringify(state.niftyExit)),
+       niftyTf: _niftyTf,
++      commodity: state.commodity ? JSON.parse(JSON.stringify(state.commodity)) : { enabled: false, sids: [] },
+       symbols: experimentSymbols()
+     };
+   }
+@@ -4959,11 +5376,13 @@ window.createAISmartTrading = function (suffix) {
+     if (s.niftyEntry) state.niftyEntry = Object.assign(state.niftyEntry || {}, JSON.parse(JSON.stringify(s.niftyEntry)));
+     if (s.niftyExit) state.niftyExit = Object.assign(state.niftyExit || {}, JSON.parse(JSON.stringify(s.niftyExit)));
+     if (s.niftyTf) setNiftyTf(s.niftyTf);
++    if (s.commodity) state.commodity = Object.assign({ enabled: false, sids: [] }, JSON.parse(JSON.stringify(s.commodity)));
+     /* Restore the template's captured instrument set so the engine's symbol
+        selection (experimentSymbols / pooled runner) matches the template. */
+     if (Array.isArray(s.symbols) && s.symbols.length) state.symbols = s.symbols.slice();
+     save();
+     applyUniversalToUI();
++    applyCommodityToUI();
+     render();
+     updateNiftyBiasStatus(null);
+     log('Engine settings applied from template', 'ok');
+@@ -5014,6 +5433,10 @@ window.createAISmartTrading = function (suffix) {
+     toggleNiftyTrend,
+     toggleSim,
+     onNiftyTrendInput() { readNiftyTrendUI(); _resetTrendScan(); applyNiftyTrendToUI(); },
++    toggleCommodity,
++    addCommodity,
++    removeCommodity,
++    onCommodityInput() { applyCommodityToUI(); },
+     addNiftyTrendIndex,
+     removeNiftyTrendIndex,
+     renderNiftyTrendList,
+@@ -5252,6 +5675,7 @@ window.createAISmartTrading = function (suffix) {
+     applyUniversalToUI();
+     syncNiftyTfUI();
+     renderTemplateSelect();
++    applyCommodityToUI();
+     render();
+     startPoll();
+     const nEl = $id('astAiPickN');
+diff --git a/static/autoexperiment.v13.js b/static/autoexperiment.v13.js
+index 1403d3f..ba61887 100644
+--- a/static/autoexperiment.v13.js
++++ b/static/autoexperiment.v13.js
+@@ -2297,13 +2297,14 @@ window.createAutoExperiment = function (suffix) {
+       runManual: false,
+       universal: { lotSize: null, lots: 1, margin: 100000, tpPct: 1, manualTrail: true, aiSl: true, aiTp: true, manualSL: false, manualSLPct: 1, manualTrailTP: false, manualTrailTPPct: 20, manualTP: false, manualTPPct: 5, aiTP: false, fnoLimit: true, tfs: { '1min': true, '5min': true }, aiTimeframe: false, backtestDays: 180, tradeLimitEnabled: false, tradeLimitCount: 5, tradeLimitDaily: false, aiTrades: false, deductBrokerCharges: false, brokerChargeMode: 'dhan', brokerChargePerTrade: 20, dailyBacktest: false, dailyBacktestDays: 30, rrEnabled: false, rrValue: 2, startTradeAfterEnabled: false, startTradeAfter: '09:15', noTradeAfterEnabled: false, noTradeAfter: '15:30', autoSquareOffEnabled: false, autoSquareOffTime: '15:20', indLimitEnabled: false, indLimit: 4 },
+       strike: { mode: 'both_atm', count: 3, optionType: 'both', positiveOnly: true },
+-      runIn: { index: 'both', fno: 'spot', default: false }, // chart the strategy run + trade execution runs on: 'spot', 'premium' or 'both'
+-      tradeIn: { index: 'premium', fno: 'premium', default: false }, // chart the trade execution is done on: 'spot' or 'premium'
++      runIn: { index: 'both', fno: 'spot', comm: 'spot', default: false }, // chart the strategy run + trade execution runs on: 'spot', 'premium' or 'both'
++      tradeIn: { index: 'premium', fno: 'premium', comm: 'spot', default: false }, // chart the trade execution is done on: 'spot' or 'premium'
+       premiumOnly: false, // when ON the strategy run AND trade execution both lock to the option premium chart for every instrument type
+       groups: GROUP_KEYS.slice(), // enabled research-stream checkboxes
+       symbols: [],       // selected symbol/instrument list for experiment + paper trading
+       movers: { enabled: false, gainers: 5, losers: 5, indices: [] }, // daily top gainers/losers + selected indices auto experiment
+       niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [] }, // NIFTY trend-following F&O picker (directional gainers/losers above a daily change% threshold + optional indices)
++      commodity: { enabled: false, sids: [] }, // MCX commodity futures backtest: runs on each +Add-ed FUTCOM contract directly (spot mode), alongside stocks/F&O
+       autoSend: { enabled: false, tpls: [] }, // auto strategy sender: experiment runs only the user-selected saved templates and auto-sends the created strategies to the paper trade engine
+       showPickedStrikes: false,
+       groupByStrategy: true, // group results by strategy (one card per strategy across all backtested symbols)
+@@ -2337,23 +2338,27 @@ window.createAutoExperiment = function (suffix) {
+     if (s && s.runIn) {
+       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
+       // premium chart) or 'both' (spot + premium). Indices default to 'both',
+-      // F&O stocks default to 'spot'. Commodities always run on the futures
+-      // contract regardless of these settings.
++      // F&O stocks default to 'spot'. Commodities default to the futures
++      // contract ('spot') but honour their own dropdown.
+       const OK = ['spot', 'premium', 'both'];
+       if (OK.indexOf(s.runIn.index) < 0) s.runIn.index = 'both';
+       if (OK.indexOf(s.runIn.fno) < 0) s.runIn.fno = 'spot';
++      if (OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
+       if (typeof s.runIn.default !== 'boolean') s.runIn.default = false;
+     } else if (s) {
+-      s.runIn = { index: 'both', fno: 'spot', default: false };
++      s.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false };
+     }
+     if (s && s.tradeIn) {
+       // Backtest trades always execute on the selected-strike option premium
+       // chart for both indices and F&O stocks - never on the spot chart.
++      // Commodities default to the futures contract ('spot') but honour their
++      // own dropdown.
+       s.tradeIn.index = 'premium';
+       s.tradeIn.fno = 'premium';
++      if (['spot', 'premium', 'both'].indexOf(s.tradeIn.comm) < 0) s.tradeIn.comm = 'spot';
+       if (typeof s.tradeIn.default !== 'boolean') s.tradeIn.default = false;
+     } else if (s) {
+-      s.tradeIn = { index: 'premium', fno: 'premium', default: false };
++      s.tradeIn = { index: 'premium', fno: 'premium', comm: 'spot', default: false };
+     }
+     if (s && typeof s.premiumOnly !== 'boolean') s.premiumOnly = false;
+     /* The Research-streams row was removed - streams are now scoped per-side
+@@ -2522,7 +2527,11 @@ window.createAutoExperiment = function (suffix) {
+     const byId = {};
+     list.forEach(s => {
+       const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
+-      if (!id || inst === 'INDEX') return;
++      /* Commodities live in SYMBOLS too but are a SEPARATE, toggle-gated
++         universe (state.commodity) - the movers / trend auto-scans must never
++         pick them, or strategies run on commodities while the commodity toggle
++         is OFF and nothing is +Add-ed. */
++      if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
+       byId[id] = { name, id, exch, inst, ocId, ocExch, grp };
+     });
+     for (const id in byId) {
+@@ -2575,29 +2584,108 @@ window.createAutoExperiment = function (suffix) {
+   function experimentSymbols(niftyDir) {
+     const mv = state.movers || {};
+     const nt = state.niftyTrend || {};
++    /* MCX commodity futures are NOT exclusive with the stock/F&O universes: the
++       +Add-ed commodities (backtested directly on the FUTCOM contract in spot
++       mode) are ADDED to whatever the movers / NIFTY trend-following / manual
++       symbol selection produces, so commodities can be traded alongside stocks
++       and F&O at the same time. */
++    const out = [];
++    if (state.commodity && state.commodity.enabled) out.push.apply(out, commoditySymbols());
+     if (nt.enabled) {
+       // NIFTY trend-following mode: the universe is rebuilt from the live
+       // NIFTY trend - bullish NIFTY -> top-gainer F&O stocks above the daily
+       // change% threshold, bearish NIFTY -> top-loser F&O stocks below the
+       // negative threshold (plus the user-selected indices when enabled).
+-      return pruneNiftyTrendSymbols(niftyTrendSymbols(niftyDir || _lastNiftyDir), niftyDir || _lastNiftyDir);
+-    }
+-    let base;
+-    if (mv.enabled) {
++      out.push.apply(out, pruneNiftyTrendSymbols(niftyTrendSymbols(niftyDir || _lastNiftyDir), niftyDir || _lastNiftyDir));
++    } else if (mv.enabled) {
+       // Top Movers mode: the experiment (and paper trading) runs on EVERY
+       // fetched top gainer + top loser F&O stock plus the selected indices -
+       // never on the manual symbol list or a random chart fallback. No CE/PE
+       // direction drop here: the leg is picked by the option-type selector and
+       // applied at the chart level (CE = call charts only, PE = put charts
+       // only), so all top gainers/losers are analysed regardless of direction.
+-      base = topMoverSymbols();
++      out.push.apply(out, topMoverSymbols());
+     } else {
+-      base = (state.symbols && state.symbols.length) ? state.symbols.slice() : [];
++      const base = (state.symbols && state.symbols.length) ? state.symbols.slice() : [];
++      if (base.length) {
++        out.push.apply(out, base);
++      } else {
++        const cur = (typeof selectedSymbol !== 'undefined') ? selectedSymbol : null;
++        /* A commodity chart left open must NOT auto-run here: commodities trade
++           only when the dedicated commodity toggle (state.commodity.enabled) is
++           ON, so the chart fallback skips commodities while it is OFF. */
++        if (cur && !(isCommodity(cur) && !(state.commodity && state.commodity.enabled))) out.push(cur);
++      }
+     }
+-    if (base.length) return base;
+-    if (mv.enabled) return []; // movers mode never falls back to a random chart symbol
+-    const cur = (typeof selectedSymbol !== 'undefined') ? selectedSymbol : null;
+-    return cur ? [cur] : [];
++    /* Deduplicate (a commodity could coincide with a manual symbol). */
++    const seen = {};
++    return out.filter(s => {
++      if (!s || s.id == null) return false;
++      const k = String(s.id) + ':' + (s.exch || '');
++      if (seen[k]) return false;
++      seen[k] = 1;
++      return true;
++    });
++  }
++
++  /* All MCX commodity FUTCOM symbols currently inducted into SYMBOLS by
++     loadCommodities() (or resolvable from the picker). Each row carries
++     `[name, sid, "MCX_COMM", "FUTCOM", sid, "MCX_COMM", "Commodities (MCX)"]`. */
++  function commoditySymbolsList() {
++    const list = (typeof SYMBOLS !== 'undefined' && Array.isArray(SYMBOLS)) ? SYMBOLS : [];
++    const out = [];
++    const seen = {};
++    list.forEach(s => {
++      const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
++      if (!id || String(exch || '').toUpperCase() !== 'MCX_COMM') return;
++      const key = String(id) + ':MCX_COMM';
++      if (seen[key]) return;
++      seen[key] = 1;
++      out.push({
++        name: name || ('MCX ' + id), id: id,
++        exch: 'MCX_COMM', inst: 'FUTCOM',
++        ocId: (ocId != null ? Number(ocId) : id), ocExch: 'MCX_COMM',
++        grp: grp || 'Commodities (MCX)',
++        hasOptions: (s[7] === undefined) ? true : !!s[7]
++      });
++    });
++    return out;
++  }
++
++  /* Only commodities that have a listed option chain - the ones the engine
++     dropdown offers, so a user can never pick a futures-only commodity. */
++  function optionCommodities() {
++    return commoditySymbolsList().filter(c => c.hasOptions !== false);
++  }
++
++  /* Migrate the single-selection commodity state ({enabled, sid}) saved by older
++     builds to the multi-selection list ({enabled, sids}). Idempotent. */
++  function _migrateCommodityState() {
++    if (!state.commodity) state.commodity = { enabled: false, sids: [] };
++    const c = state.commodity;
++    if (c.sid != null && !Array.isArray(c.sids)) {
++      c.sids = [];
++      const v = Number(c.sid);
++      if (c.sid !== '' && v > 0) c.sids.push(v);
++      delete c.sid;
++    }
++    if (!Array.isArray(c.sids)) c.sids = [];
++    c.sids = c.sids.filter((v, i, a) => a.indexOf(v) === i && Number(v) > 0);
++  }
++
++  /* The commodities the experiment runs on when commodity mode is ON: one symbol
++     per sid in state.commodity.sids (the user's +Add-ed list). Contract ids roll
++     over every expiry, so an expired id is dropped silently instead of breaking
++     the run. */
++  function commoditySymbols() {
++    _migrateCommodityState();
++    const all = commoditySymbolsList();
++    const out = [];
++    (state.commodity.sids || []).forEach(sid => {
++      const found = all.find(c => Number(c.id) === Number(sid));
++      if (found) out.push(found);
++    });
++    return out;
+   }
+ 
+   /* ---- NIFTY trend-following F&O picker ----
+@@ -2627,7 +2715,11 @@ window.createAutoExperiment = function (suffix) {
+     const byId = {};
+     list.forEach(s => {
+       const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
+-      if (!id || inst === 'INDEX') return;
++      /* Commodities live in SYMBOLS too but are a SEPARATE, toggle-gated
++         universe (state.commodity) - the movers / trend auto-scans must never
++         pick them, or strategies run on commodities while the commodity toggle
++         is OFF and nothing is +Add-ed. */
++      if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
+       byId[id] = { name, id, exch, inst, ocId, ocExch, grp };
+     });
+     const quoted = [];
+@@ -2783,9 +2875,10 @@ window.createAutoExperiment = function (suffix) {
+     populateNiftyTrendIndicesUI();
+     renderNiftyTrendIndicesList();
+     const on = !!nt.enabled;
++    const active = on;
+     ['aeNiftyTrendPct', 'aeNiftyTrendIndices', 'aeNiftyTrendIndicesSelect', 'aeNiftyTrendIndicesAdd'].forEach(id => {
+       const el = $id(id);
+-      if (el) { el.disabled = !on; el.style.opacity = on ? '1' : '0.5'; }
++      if (el) { el.disabled = !active; el.style.opacity = active ? '1' : '0.5'; }
+     });
+     renderNiftyTrendList();
+     applyMoversToUI();
+@@ -2802,6 +2895,7 @@ window.createAutoExperiment = function (suffix) {
+     _resetTrendScan();
+     applyNiftyTrendToUI();
+     applyMoversToUI();
++    applyCommodityToUI();
+     log('NIFTY trend-following trading ' + (state.niftyTrend.enabled ? 'enabled' : 'disabled'), state.niftyTrend.enabled ? 'ok' : 'warn');
+   }
+ 
+@@ -2829,7 +2923,11 @@ window.createAutoExperiment = function (suffix) {
+     const byId = {};
+     list.forEach(s => {
+       const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
+-      if (!id || inst === 'INDEX') return;
++      /* Commodities live in SYMBOLS too but are a SEPARATE, toggle-gated
++         universe (state.commodity) - the movers / trend auto-scans must never
++         pick them, or strategies run on commodities while the commodity toggle
++         is OFF and nothing is +Add-ed. */
++      if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
+       byId[id] = { name, id, exch, inst, ocId, ocExch, grp };
+     });
+     const rows = [];
+@@ -3611,27 +3709,27 @@ window.createAutoExperiment = function (suffix) {
+   }
+   /* Chart the strategy run + trade execution should use for an instrument type:
+      'spot' (underlying/spot chart), 'premium' (selected strike option premium
+-     chart) or 'both' (spot + premium). Indices and F&O stocks each read their
+-     own "Strategy should be run in" dropdown; commodities always run on the
+-     FUTCOM futures contract (spot). */
++     chart) or 'both' (spot + premium). Indices, F&O stocks and commodities each
++     read their own "Strategy should be run in" dropdown; commodities default to
++     the FUTCOM futures contract (spot). */
+   function runInMode(symbol) {
+     // Premium-only mode locks BOTH the strategy run chart and the trade
+     // execution chart to the option premium chart for every instrument type.
+     if (state.premiumOnly) return 'premium';
+     const ri = state.runIn || {};
+-    if (isCommodity(symbol)) return 'spot';
++    if (isCommodity(symbol)) return (ri && ri.comm) || 'spot';
+     if (!isIndex(symbol)) return ri.fno || 'spot';
+     return ri.index || 'both';
+   }
+   /* Chart the paper-trade execution should use for an instrument type. Backtest
+      trades for BOTH indices and F&O stocks always execute on the selected-strike
+      option premium chart ('premium') - never on the underlying/spot chart.
+-     Commodities are the exception: they execute on the futures contract itself
+-     ('spot'). */
++     Commodities execute per their own "Trade should be executed in" dropdown -
++     default the FUTCOM futures contract itself ('spot'). */
+   function tradeInMode(symbol) {
+     if (state.premiumOnly) return 'premium';
+-    if (isCommodity(symbol)) return 'spot';
+     const ti = state.tradeIn || {};
++    if (isCommodity(symbol)) return (ti && ti.comm) || 'spot';
+     if (!isIndex(symbol)) return 'premium';
+     return ti.index || 'premium';
+   }
+@@ -4299,8 +4397,9 @@ window.createAutoExperiment = function (suffix) {
+ 
+       // 'premium' and 'both' run-in, and spot-run symbols that execute on the
+       // premium chart, all resolve the selected-strike option chain (indices
+-      // and F&O stocks behave identically here).
+-      const contracts = await contractsFor(sym, spot);
++      // and F&O stocks behave identically here). MCX commodities trade the
++      // FUTCOM futures contract directly (spot mode) - no option chain needed.
++      const contracts = (tiMode === 'spot' || it.spotRun) ? [] : await contractsFor(sym, spot);
+       if (contracts && contracts.length) units.total += contracts.length * activeTfs.length;
+       progressFetch();
+ 
+@@ -4364,7 +4463,13 @@ window.createAutoExperiment = function (suffix) {
+         for (const t of tfs) if (it.underlyingByTf[t] && it.underlyingByTf[t].length >= 60) a++;
+         return a;
+       }
+-      if (it.spotRun || tradeInMode(it.sym) === 'spot' || !it.contracts || !it.contracts.length || !it.ocList || !it.ocList.length) return a;
++      if (it.spotRun || tradeInMode(it.sym) === 'spot') {
++        /* Spot-trade symbols (MCX commodities): the backtest executes directly
++           on the underlying futures/spot chart - one unit per timeframe. */
++        for (const t of tfs) if (it.underlyingByTf[t] && it.underlyingByTf[t].length >= 60) a++;
++        return a;
++      }
++      if (!it.contracts || !it.contracts.length || !it.ocList || !it.ocList.length) return a;
+       const riMode = runInMode(it.sym);
+       for (const { ocByTf } of it.ocList) {
+         for (const t of tfs) {
+@@ -4435,7 +4540,26 @@ window.createAutoExperiment = function (suffix) {
+       // on the underlying spot chart (a spot backtest would price the simulated
+       // trades on the underlying and report spot-based P&L, which is never
+       // wanted when "Trade should be executed in" is the option premium chart).
+-      if (it.spotRun || tiMode === 'spot' || !it.contracts || !it.contracts.length || !it.ocList || !it.ocList.length) {
++      // MCX commodities are the exception: they trade the FUTCOM futures
++      // contract directly (spot mode), so the backtest runs on the underlying
++      // futures chart itself - no option chain / premium chart involved.
++      if (it.spotRun || tiMode === 'spot') {
++        let loaded = 0;
++        for (const t of tfs) {
++          const u = underlyingByTf[t];
++          if (!u || u.length < 60) continue;
++          const tradeCandles = btSlice(u);
++          progressBacktest('Testing ' + nTpl + ' templates on ' + displayName(sym) + ' (spot, ' + t + ')...');
++          loaded++;
++          await runOnCandles(sym, tradeCandles, spot, null, t, 'underlying', null, unitTick);
++        }
++        if (loaded === 0) {
++          skipped++;
++          log('No candles for ' + displayName(sym) + ' - skipping (spot run)', 'warn');
++        }
++        continue;
++      }
++      if (!it.contracts || !it.contracts.length || !it.ocList || !it.ocList.length) {
+         skipped++;
+         log('Skipping ' + displayName(sym) + ': no option chain/premium candles (backtest trades must execute on the option premium chart)', 'warn');
+         continue;
+@@ -5738,31 +5862,38 @@ window.createAutoExperiment = function (suffix) {
+   }
+ 
+   function readRunInUI() {
+-    const idxEl = $id('aeRunInIndex'), fnoEl = $id('aeRunInFno'), defEl = $id('aeRunInDefault');
++    const idxEl = $id('aeRunInIndex'), fnoEl = $id('aeRunInFno'), commEl = $id('aeRunInComm'), defEl = $id('aeRunInDefault');
+     const idx = idxEl ? idxEl.value : 'both';
+     const fno = fnoEl ? fnoEl.value : 'spot';
++    const comm = commEl ? commEl.value : 'spot';
+     const def = defEl ? defEl.checked : false;
+-    state.runIn = state.runIn || { index: 'both', fno: 'spot', default: false };
+-    // "Strategy should be run in" now reads BOTH dropdowns: indices and F&O
+-    // stocks can each run on the spot chart, the option premium chart, or both.
++    state.runIn = state.runIn || { index: 'both', fno: 'spot', comm: 'spot', default: false };
++    // "Strategy should be run in" now reads ALL dropdowns: indices, F&O stocks
++    // and commodities can each run on the spot chart, the option premium chart,
++    // or both.
+     state.runIn.index = idx;
+     state.runIn.fno = fno;
++    state.runIn.comm = comm;
+     state.runIn.default = def;
+     save();
+-    log('Strategy run in: indices = ' + modeLabel(idx) + ', F&O stocks = ' + modeLabel(fno) + (def ? ' (saved as default for all future tasks)' : ''), def ? 'ok' : '');
++    log('Strategy run in: indices = ' + modeLabel(idx) + ', F&O stocks = ' + modeLabel(fno) + ', Commodities = ' + modeLabel(comm) + (def ? ' (saved as default for all future tasks)' : ''), def ? 'ok' : '');
+   }
+ 
+   function readTradeInUI() {
+     const defEl = $id('aeTradeInDefault');
++    const commEl = $id('aeTradeInComm');
+     const def = defEl ? defEl.checked : false;
+-    state.tradeIn = state.tradeIn || { index: 'premium', fno: 'premium', default: false };
++    const comm = commEl ? commEl.value : 'spot';
++    state.tradeIn = state.tradeIn || { index: 'premium', fno: 'premium', comm: 'spot', default: false };
+     // Backtest trades for indices and F&O stocks always execute on the
+     // selected-strike option premium chart - never on the spot chart.
++    // Commodities honour their own dropdown (default futures contract).
+     state.tradeIn.index = 'premium';
+     state.tradeIn.fno = 'premium';
++    state.tradeIn.comm = comm;
+     state.tradeIn.default = def;
+     save();
+-    log('Trade execution in: indices = ' + modeLabel('premium') + ', F&O stocks = ' + modeLabel('premium') + (def ? ' (saved as default for all future tasks)' : ''), def ? 'ok' : '');
++    log('Trade execution in: indices = ' + modeLabel('premium') + ', F&O stocks = ' + modeLabel('premium') + ', Commodities = ' + modeLabel(comm) + (def ? ' (saved as default for all future tasks)' : ''), def ? 'ok' : '');
+   }
+ 
+   function modeLabel(m) {
+@@ -6029,13 +6160,15 @@ window.createAutoExperiment = function (suffix) {
+     set('aeOptionType', st.optionType || 'both');
+     const posEl = $id('aeOnlyPositive'); if (posEl) posEl.checked = st.positiveOnly !== false;
+     syncStrikeUI();
+-    const ri = state.runIn || (state.runIn = { index: 'both', fno: 'spot', default: false });
++    const ri = state.runIn || (state.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false });
+     set('aeRunInIndex', ri.index || 'both');
+     set('aeRunInFno', ri.fno || 'spot');
++    set('aeRunInComm', ri.comm || 'spot');
+     const runInDefEl = $id('aeRunInDefault'); if (runInDefEl) runInDefEl.checked = ri.default === true;
+-    const ti = state.tradeIn || (state.tradeIn = { index: 'premium', fno: 'premium', default: false });
++    const ti = state.tradeIn || (state.tradeIn = { index: 'premium', fno: 'premium', comm: 'spot', default: false });
+     set('aeTradeInIndex', ti.index || 'premium');
+     set('aeTradeInFno', ti.fno || 'premium');
++    set('aeTradeInComm', ti.comm || 'spot');
+     const tradeInDefEl = $id('aeTradeInDefault'); if (tradeInDefEl) tradeInDefEl.checked = ti.default === true;
+     syncPremiumOnlyUI();
+     const btEl = $id('aeBacktestDays'); if (btEl) btEl.value = String(state.universal && state.universal.backtestDays ? state.universal.backtestDays : 180);
+@@ -6274,11 +6407,12 @@ window.createAutoExperiment = function (suffix) {
+     delete mv.includeIndices;
+     const btn = $id('aeMoversToggle');
+     const trendOn = !!(state.niftyTrend && state.niftyTrend.enabled);
+-    const active = !!mv.enabled && !trendOn;
++    const blocked = trendOn;
++    const active = !!mv.enabled && !blocked;
+     if (btn) {
+       btn.textContent = trendOn ? 'Top Movers: OFF - Trend Follow on' : ('Top Movers: ' + (mv.enabled ? 'ON' : 'OFF'));
+-      btn.style.background = active ? '#00d4aa' : (trendOn ? '#666' : '#e67e22');
+-      btn.style.opacity = trendOn ? '0.6' : '1';
++      btn.style.background = active ? '#00d4aa' : (blocked ? '#666' : '#e67e22');
++      btn.style.opacity = blocked ? '0.6' : '1';
+       btn.disabled = false;
+     }
+     const setVal = (id, v) => { const el = $id(id); if (el) el.value = v; };
+@@ -6301,6 +6435,75 @@ window.createAutoExperiment = function (suffix) {
+     renderMoversList();
+   }
+ 
++  /* Fill the commodity dropdown from SYMBOLS (MCX_COMM/FUTCOM rows inducted by
++     loadCommodities()). Because that induction is async, retry a few times so
++     the dropdown catches the contracts whenever they arrive. */
++  let _commodityUiTries = 0;
++  function populateCommoditiesUI() {
++    const sel = $id('aeCommoditySelect');
++    if (!sel) return;
++    const comms = optionCommodities();
++    if (!comms.length) {
++      /* Not loaded yet - the page's loadCommodities() populates SYMBOLS asynchronously. */
++      if (_commodityUiTries < 20) {
++        _commodityUiTries++;
++        setTimeout(populateCommoditiesUI, 1500);
++      }
++      return;
++    }
++    const keep = sel.value;
++    sel.innerHTML = '<option value="">-- choose commodity --</option>' + comms.map(c =>
++      '<option value="' + String(c.id) + '">' + esc(c.name) + '</option>').join('');
++    if (keep) sel.value = keep;
++  }
++
++  function applyCommodityToUI() {
++    _migrateCommodityState();
++    const comm = state.commodity;
++    const btn = $id('aeCommodityToggle');
++    if (btn) {
++      btn.textContent = 'Commodities: ' + (comm.enabled ? 'ON' : 'OFF');
++      btn.style.background = comm.enabled ? '#00d4aa' : '#e67e22';
++      btn.style.opacity = '1';
++      btn.disabled = false;
++    }
++    const sel = $id('aeCommoditySelect');
++    const addBtn = $id('aeCommodityAdd');
++    if (sel) {
++      sel.disabled = false;
++      sel.style.opacity = '1';
++    }
++    if (addBtn) {
++      const v = sel ? Number(sel.value) : NaN;
++      const picked = (v > 0) ? v : null;
++      addBtn.disabled = picked != null && comm.sids.indexOf(picked) !== -1;
++      addBtn.style.opacity = addBtn.disabled ? '0.5' : '1';
++    }
++    populateCommoditiesUI();
++    /* Chips for every +Add-ed commodity, each with its own &times; remove. */
++    const listEl = $id('aeCommodityList');
++    if (listEl) {
++      const names = {};
++      commoditySymbolsList().forEach(c => { names[Number(c.id)] = c.name; });
++      listEl.innerHTML = (comm.sids || []).map(sid => {
++        const nm = names[Number(sid)] || ('(expired ' + sid + ')');
++        return '<span style="display:inline-flex;align-items:center;gap:4px;background:#1a1a35;border:1px solid #2d2d50;color:#ffd700;border-radius:3px;padding:2px 6px;font-size:9px;margin:1px">' + esc(nm) +
++          ' <a href="javascript:void(0)" style="color:#ef5350;font-weight:700;text-decoration:none;font-size:11px" title="Remove" onclick="AutoExperiment.removeCommodity(' + Number(sid) + ')">&times;</a></span>';
++      }).join('');
++    }
++    const st = $id('aeCommodityStatus');
++    if (st) {
++      const chosen = commoditySymbols();
++      if (comm.enabled) {
++        st.innerHTML = chosen.length
++          ? 'Backtesting ' + chosen.length + ' MCX commodity' + (chosen.length > 1 ? 's' : '') + ': <b style="color:#ffd700">' + chosen.map(c => esc(c.name)).join(', ') + '</b> - alongside your stock / F&O universe.'
++          : 'No commodity selected - use + Add to pick contracts.';
++      } else {
++        st.innerHTML = 'Add MCX commodity futures to backtest them directly (spot mode), alongside stocks / F&O.';
++      }
++    }
++  }
++
+   /* Visible live list of the daily top gainers, top losers and the selected
+      indices that will be fed into the experiment, plus the change% that picked
+      them. Always shown so the user can see the movers; the master toggle only
+@@ -6315,7 +6518,11 @@ window.createAutoExperiment = function (suffix) {
+     const byId = {};
+     list.forEach(s => {
+       const name = s[0], id = Number(s[1]), exch = s[2], inst = s[3], ocId = s[4], ocExch = s[5], grp = s[6];
+-      if (!id || inst === 'INDEX') return;
++      /* Commodities live in SYMBOLS too but are a SEPARATE, toggle-gated
++         universe (state.commodity) - the movers / trend auto-scans must never
++         pick them, or strategies run on commodities while the commodity toggle
++         is OFF and nothing is +Add-ed. */
++      if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
+       byId[id] = { name, id, exch, inst, ocId, ocExch, grp };
+     });
+     const quoted = [];
+@@ -6437,6 +6644,7 @@ window.createAutoExperiment = function (suffix) {
+       niftyEntry: JSON.parse(JSON.stringify(state.niftyEntry)),
+       niftyExit: JSON.parse(JSON.stringify(state.niftyExit)),
+       niftyTf: _niftyTf,
++      commodity: state.commodity ? JSON.parse(JSON.stringify(state.commodity)) : { enabled: false, sids: [] },
+       symbols: (state.symbols || []).slice(),
+       runManual: !!state.runManual,
+       showPickedStrikes: !!state.showPickedStrikes,
+@@ -6458,12 +6666,14 @@ window.createAutoExperiment = function (suffix) {
+     if (s.niftyEntry) state.niftyEntry = Object.assign(state.niftyEntry || {}, JSON.parse(JSON.stringify(s.niftyEntry)));
+     if (s.niftyExit) state.niftyExit = Object.assign(state.niftyExit || {}, JSON.parse(JSON.stringify(s.niftyExit)));
+     if (s.niftyTf) setNiftyTf(s.niftyTf);
++    if (s.commodity) state.commodity = Object.assign({ enabled: false, sids: [] }, JSON.parse(JSON.stringify(s.commodity)));
+     if (Array.isArray(s.symbols)) state.symbols = s.symbols.slice();
+     if (typeof s.runManual === 'boolean') state.runManual = s.runManual;
+     if (typeof s.showPickedStrikes === 'boolean') state.showPickedStrikes = s.showPickedStrikes;
+     if (s.autoSend && typeof s.autoSend === 'object' && !Array.isArray(s.autoSend)) state.autoSend = JSON.parse(JSON.stringify(s.autoSend));
+     save();
+     applyUniversalToUI();
++    applyCommodityToUI();
+     renderAutoSendTplList();
+     render();
+     updateNiftyBiasStatus(null);
+@@ -6644,6 +6854,7 @@ window.createAutoExperiment = function (suffix) {
+       save();
+       applyMoversToUI();
+       applyNiftyTrendToUI();
++      applyCommodityToUI();
+       log('Daily top gainers/losers + indices auto experiment ' + (state.movers.enabled ? 'enabled' : 'disabled'), state.movers.enabled ? 'ok' : 'warn');
+     },
+     onMoversInput() {
+@@ -6656,6 +6867,45 @@ window.createAutoExperiment = function (suffix) {
+       _resetTrendScan();
+       applyNiftyTrendToUI();
+     },
++    toggleCommodity() {
++      _migrateCommodityState();
++      state.commodity.enabled = !state.commodity.enabled;
++      /* MCX commodities are NOT exclusive with movers / NIFTY trend following:
++         the +Add-ed contracts run alongside those universes. */
++      if (state.commodity.enabled && !state.commodity.sids.length) {
++        const first = optionCommodities()[0];
++        if (first) state.commodity.sids.push(first.id);
++      }
++      save();
++      applyCommodityToUI();
++      applyMoversToUI();
++      applyNiftyTrendToUI();
++      log('MCX commodity futures backtest ' + (state.commodity.enabled ? 'enabled' : 'disabled'), state.commodity.enabled ? 'ok' : 'warn');
++    },
++    addCommodity() {
++      _migrateCommodityState();
++      const sel = $id('aeCommoditySelect');
++      let sid = sel ? Number(sel.value) : NaN;
++      if (!(sid > 0)) {
++        const first = optionCommodities()[0];
++        sid = first ? first.id : 0;
++      }
++      if (!(sid > 0)) return;
++      if (state.commodity.sids.indexOf(sid) === -1) state.commodity.sids.push(sid);
++      state.commodity.enabled = true;
++      save();
++      applyCommodityToUI();
++    },
++    removeCommodity(sid) {
++      _migrateCommodityState();
++      const v = Number(sid);
++      state.commodity.sids = state.commodity.sids.filter(s => Number(s) !== v);
++      save();
++      applyCommodityToUI();
++    },
++    onCommodityInput() {
++      applyCommodityToUI();
++    },
+     addNiftyTrendIndex,
+     removeNiftyTrendIndex,
+     renderNiftyTrendList,
+@@ -6894,6 +7144,7 @@ window.createAutoExperiment = function (suffix) {
+     renderTemplateSelect();
+     applyAutoSendToUI();
+     syncDefaultTplUI();
++    applyCommodityToUI();
+     /* If a default engine-settings template is enabled, re-apply it so the
+        tab always boots from that template's configuration. */
+     applyDefaultTemplate();
+diff --git a/static/hft_runner.js b/static/hft_runner.js
+index 95f6e35..091acc1 100644
+--- a/static/hft_runner.js
++++ b/static/hft_runner.js
+@@ -107,7 +107,7 @@
+   }
+ 
+   function newRow(strategyKey, strategy) {
+-    return { id: Date.now() + '-' + Math.floor(Math.random() * 1e6), enabled: false, strategyKey: strategyKey || '', strategy: strategy || null, symbolName: '', symbolOverride: null, symbols: [], tf: '', lots: 1, margin: 0, tpPct: 0, slPct: 0, fnoLimit: true, firedBar: 0, firedBars: {}, tplName: '', astTpl: false };
++    return { id: Date.now() + '-' + Math.floor(Math.random() * 1e6), enabled: false, strategyKey: strategyKey || '', strategy: strategy || null, symbolName: '', symbolOverride: null, symbols: [], tf: '', lots: 1, margin: 0, tpPct: 0, slPct: 0, slTrailPct: 0, fnoLimit: true, firedBar: 0, firedBars: {}, tplName: '', astTpl: false };
+   }
+ 
+   /* A row's strategy definition: either an Auto Experiment result keyed from
+@@ -336,7 +336,7 @@
+       names: symbols.map(function (s) { return s.name || String(s.id); }),
+       lotSize: per[0] ? per[0].lotSize : 1,
+       lots: row.lots || 1, margin: row.margin || 0,
+-      tpPct: row.tpPct || 0, slPct: row.slPct || 0,
++      tpPct: row.tpPct || 0, slPct: row.slPct || 0, trailSlPct: row.slTrailPct || 0,
+       tplName: row.tplName || ''
+     };
+   }
+@@ -383,7 +383,8 @@
+         (info.tplName ? '[' + info.tplName + '] ' : '') + 'lots ' + info.lots +
+         (info.lotSize ? ' · lot size ' + info.lotSize : '') +
+         (info.margin ? ' · margin ' + fmtMoney(info.margin) : '') +
+-        ' · TP ' + info.tpPct + '% · SL ' + info.slPct + '%';
++        ' · TP ' + info.tpPct + '% · SL ' + info.slPct + '%' +
++        (info.trailSlPct > 0 ? ' (trail ' + info.trailSlPct + '%)' : '');
+       liveEl.style.color = '#777';
+     } else {
+       var col = info.totalPnl >= 0 ? '#00d4aa' : '#ef5350';
+@@ -480,6 +481,7 @@
+             margin: marginAvail,
+             tpPct: row.tpPct || 0,
+             slPct: row.slPct || 0,
++            slTrailPct: row.slTrailPct || 0,
+             fnoLimit: row.fnoLimit !== false
+           };
+           if (eng.lotSizeFor) opts.lotSize = eng.lotSizeFor(symbol);
+@@ -542,6 +544,21 @@
+   }
+ 
+   /* ---- public API ---- */
++  /* Strategy-owned risk snapshot: the SL / trailing-SL the AE engine actually
++     used when the strategy was designed/tested (refSlPct / autoSlPct for SL,
++     refTrailSlPct for trailing SL). When present, these WIN over the assigned
++     template's SL so the pooled runner behaves exactly like the AST engine's
++     strategy-owned risk fix. Returns { sl, trailSl } with nulls when absent. */
++  function ownRiskFor(strategy) {
++    var sl = null;
++    var trailSl = null;
++    if (strategy) {
++      if (strategy.refSlPct != null && Number(strategy.refSlPct) > 0) sl = Number(strategy.refSlPct);
++      else if (strategy.autoSlPct != null && Number(strategy.autoSlPct) > 0) sl = Number(strategy.autoSlPct);
++      if (strategy.refTrailSlPct != null && Number(strategy.refTrailSlPct) > 0) trailSl = Number(strategy.refTrailSlPct);
++    }
++    return { sl: sl, trailSl: trailSl };
++  }
+   function addStrategy(tab, strategyKey, strategy) {
+     var row = newRow(strategyKey || '', strategy || null);
+     var eng = engineFor(tab);
+@@ -551,9 +568,13 @@
+       row.margin = s.margin || 0;
+       row.tpPct = s.tpPct || 0;
+       row.slPct = s.slPct || 0;
++      row.slTrailPct = s.slTrailPct || 0;
+       row.fnoLimit = s.fnoLimit !== false;
+       if (s.symbol && s.symbol.id != null) row.symbolOverride = s.symbol;
+     }
++    var own = ownRiskFor(strategy);
++    if (own.sl != null) row.slPct = own.sl;
++    if (own.trailSl != null) row.slTrailPct = own.trailSl;
+     if (!jobs[tab]) jobs[tab] = { strategies: [] };
+     jobs[tab].strategies.push(row);
+     persist();
+@@ -584,6 +605,12 @@
+       if (settings.name) row.tplName = String(settings.name);
+       row.astTpl = settings.source === 'ast';
+     }
++    /* Strategy-owned risk wins over the template's SL: an AST strategy carries
++       the SL/trailing-SL the AE engine used (refSlPct/autoSlPct/refTrailSlPct)
++       and the pooled runner applies those instead of the template's saved SL. */
++    var own = ownRiskFor(strategy);
++    if (own.sl != null) row.slPct = own.sl;
++    if (own.trailSl != null) row.slTrailPct = own.trailSl;
+     if (!jobs[tab]) jobs[tab] = { strategies: [] };
+     jobs[tab].strategies.push(row);
+     persist();
+diff --git a/templates/index.html b/templates/index.html
+index c52a61b..54fe5bd 100644
+--- a/templates/index.html
++++ b/templates/index.html
+@@ -96,6 +96,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+ .tf-btn{padding:6px 2px;background:#1a1a35;border:1px solid #2d2d50;color:#aaa;border-radius:3px;cursor:pointer;font-size:10px;text-align:center;transition:all 0.15s}
+ .tf-btn:hover{background:#252550;color:#fff}
+ .tf-btn.active{background:#00d4aa;color:#0b0b1a;border-color:#00d4aa;font-weight:700}
++.chart-tf-grid{grid-template-columns:repeat(14,auto);margin-bottom:0;gap:2px;align-items:center}
++.chart-toolbar .tf-btn{padding:2px 6px;font-size:9px;min-width:22px}
+ .btn-action{width:100%;padding:8px;background:#00d4aa;color:#0b0b1a;border:none;border-radius:3px;cursor:pointer;font-size:11px;font-weight:700;margin:4px 0}
+ .btn-action:disabled{background:#333;color:#777;cursor:not-allowed}
+ .btn-action.warn{background:#e67e22;color:#fff}
+@@ -107,6 +109,11 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+ .cond-card{display:flex;align-items:center;justify-content:space-between;background:#0e0e24;border:1px solid #2d2d50;border-radius:3px;padding:4px 8px;margin-bottom:3px}
+ .cond-card-faded{opacity:.55;background:#0a0a1a;border-style:dashed;border-color:#1f1f3f;cursor:default}
+ .cond-card-faded .cond-card-text{color:#9a9ab0}
++/* AST controls auto-synced from a running strategy: faded out and read-only
++   (disabled + dimmed + lock style) so it is obvious the strategy drives that
++   setting rather than the AST universal input. */
++.ast-faded{opacity:.45;pointer-events:none}
++.ast-faded-label{opacity:.45;color:#9a9ab0}
+ .cond-card-lock{font-size:8px;color:#00d4aa;border:1px solid #0f4a38;border-radius:2px;padding:1px 5px;background:#0d3b2e;flex:0 0 auto}
+ .cond-card-text{font-size:9px;color:#d0d0d0;flex:1}
+ .cond-card-btns{display:flex;gap:3px;flex:0 0 auto}
+@@ -492,8 +499,6 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+         <select id="openChartSymbolSelect"></select>
+         <button class="btn-action" onclick="StratUI.openChartForStrategy()" style="margin-top:4px;font-size:10px">Open Chart at Strategy Timeframe</button>
+       </div>
+-      <h3>Timeframe</h3>
+-      <div class="tf-grid" id="tfGrid"></div>
+       <button class="btn-action btn-atm" onclick="goToATM()" disabled id="goAtmBtn">Go to ATM Strike</button>
+       <div id="savedWrap">
+         <h3>Saved Strategies</h3>
+@@ -528,6 +533,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+         <div class="chart-toolbar" style="display:flex;align-items:center;gap:8px;padding:4px 8px;border-bottom:1px solid #1e1e40">
+           <span style="font-size:11px;color:#888" id="chartSymbolLabel">NIFTY 50</span>
+           <span style="font-size:11px" id="chartPnL"></span>
++          <div class="tf-grid chart-tf-grid" id="tfGrid"></div>
+           <span style="font-size:10px;color:#666" id="chartTfLabel">5m</span>
+           <div class="menu-wrap" style="position:relative;z-index:100">
+             <button class="btn-action" onclick="IndChart.toggleMenu()" style="padding:3px 12px;font-size:10px;width:auto;margin:0">Indicators</button>
+@@ -565,6 +571,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+           <button class="btn-action" onclick="toggleOCAutoRefresh()" id="ocAutoBtn" style="padding:4px 10px;font-size:10px;width:auto;margin:0;border:1px solid #2d2d50">Auto</button>
+           <button class="btn-action" onclick="toggleOCAll()" id="ocAllBtn" style="padding:4px 10px;font-size:10px;width:auto;margin:0;border:1px solid #2d2d50">All Expiries</button>
+         </div>
++        <div id="ocInstrumentInfo" style="padding:4px 8px;background:#0e0e24;border-bottom:1px solid #1e1e40;font-size:11px;color:#d0d0d0;display:flex;gap:16px;align-items:center;flex-wrap:wrap"></div>
+         <div id="oc-chart-container"><canvas id="ocChart"></canvas></div>
+         <div id="oc-table-container">
+           <table id="oc-table">
+@@ -1158,8 +1165,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+                 <option value="premium">Option premium chart</option>
+               </select>
+             </label>
++            <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
++              <select id="astRunInComm" onchange="AISmartTrading.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
++                <option value="spot" selected>Futures contract</option>
++                <option value="premium">Option premium chart</option>
++              </select>
++            </label>
+             <label style="font-size:9px;color:#66ccff;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astRunInDefault" onchange="AISmartTrading.onRunInInput()"> Make this default setting</label>
+-            <span style="font-size:8px;color:#666">Strategy run and trade execution are done on the selected chart for each instrument type. Make this default setting saves these choices for all future tasks in this engine.</span>
++            <span style="font-size:8px;color:#666">Strategy run and trade execution are done on the selected chart for each instrument type (indices, F&amp;O stocks, commodities). Make this default setting saves these choices for all future tasks in this engine.</span>
+           </div>
+           <div class="monitor-toolbar-row" id="astTradeInRow" style="flex-wrap:wrap;margin-top:6px;align-items:center">
+             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Trade should be executed in:</b></div>
+@@ -1175,8 +1188,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+                 <option value="premium" selected>Selected strike option premium chart</option>
+               </select>
+             </label>
++            <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
++              <select id="astTradeInComm" onchange="AISmartTrading.onTradeInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
++                <option value="spot" selected>Futures contract</option>
++                <option value="premium">Option premium chart</option>
++              </select>
++            </label>
+             <label style="font-size:9px;color:#66ccff;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astTradeInDefault" onchange="AISmartTrading.onTradeInInput()"> Make this default setting</label>
+-            <span style="font-size:8px;color:#666">Trade execution is done on the selected chart for each instrument type. Make this default setting saves these choices for all future tasks in this engine.</span>
++            <span style="font-size:8px;color:#666">Trade execution is done on the selected chart for each instrument type (indices, F&amp;O stocks, commodities). Commodities default to the futures contract.</span>
+           </div>
+           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
+             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Top Gainers / Losers + Indices:</b></div>
+@@ -1214,6 +1233,18 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+             <button class="btn-action" id="astSimToggle" style="width:auto;padding:5px 12px;margin:0 8px 0 0" onclick="AISmartTrading.toggleSim()">Simulation Chart: OFF</button>
+             <span id="astSimStatus" style="font-size:9px;color:#888">When market is closed, run the algo on the simulated chart (SIM 900001) instead of real strikes.</span>
+           </div>
++          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
++            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Commodities (MCX):</b></div>
++            <button class="btn-action" id="astCommodityToggle" style="width:auto;padding:5px 12px;margin:0 8px 0 0" onclick="AISmartTrading.toggleCommodity()">Commodities: OFF</button>
++            <label style="font-size:9px;color:#888;margin-right:6px">Add commodity
++              <select id="astCommoditySelect" onchange="AISmartTrading.onCommodityInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px;min-width:150px;max-width:200px">
++                <option value="">-- choose commodity --</option>
++              </select>
++            </label>
++            <button class="btn-action" id="astCommodityAdd" style="width:auto;padding:5px 10px;margin:0 8px 0 0" onclick="AISmartTrading.addCommodity()">+ Add</button>
++            <span id="astCommodityStatus" style="font-size:9px;color:#888">Add MCX commodity futures to paper-trade them directly (spot mode), alongside stocks / F&O.</span>
++            <div id="astCommodityList" style="width:100%;margin-top:4px"></div>
++          </div>
+           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
+             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Picked Strikes:</b></div>
+             <button class="btn-action" id="astStrikesToggle" style="width:auto;padding:5px 12px;margin:0 8px 0 0" onclick="AISmartTrading.toggleStrikes()">Picked Strikes: OFF</button>
+@@ -1581,8 +1612,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+                 <option value="premium">Option premium chart</option>
+               </select>
+             </label>
++            <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
++              <select id="aeRunInComm" onchange="AutoExperiment.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
++                <option value="spot" selected>Futures contract</option>
++                <option value="premium">Option premium chart</option>
++              </select>
++            </label>
+             <label style="font-size:9px;color:#66ccff;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeRunInDefault" onchange="AutoExperiment.onRunInInput()"> Make this default setting</label>
+-            <span style="font-size:8px;color:#666">Indices and F&amp;O stocks each run the strategy on their selected chart: spot chart, option premium chart, or both (dual confirmation). "Option premium chart" runs strategies only on the selected-strike premium chart. Backtest trades always execute on the selected-strike option premium chart.</span>
++            <span style="font-size:8px;color:#666">Indices, F&amp;O stocks and commodities each run the strategy on their selected chart: spot chart, option premium chart, or both (dual confirmation). "Option premium chart" runs strategies only on the selected-strike premium chart. Backtest trades always execute on the selected-strike option premium chart.</span>
+           </div>
+           <div class="monitor-toolbar-row" id="aeTradeInRow" style="flex-wrap:wrap;margin-top:6px;align-items:center">
+             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Trade should be executed in:</b></div>
+@@ -1596,8 +1633,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+                 <option value="premium" selected>Selected strike option premium chart</option>
+               </select>
+             </label>
++            <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
++              <select id="aeTradeInComm" onchange="AutoExperiment.onTradeInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
++                <option value="spot" selected>Futures contract</option>
++                <option value="premium">Option premium chart</option>
++              </select>
++            </label>
+             <label style="font-size:9px;color:#66ccff;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeTradeInDefault" onchange="AutoExperiment.onTradeInInput()"> Make this default setting</label>
+-            <span style="font-size:8px;color:#666">Backtest trades for indices and F&amp;O stocks always execute on the selected-strike option premium chart - never on the spot chart.</span>
++            <span style="font-size:8px;color:#666">Backtest trades for indices and F&amp;O stocks always execute on the selected-strike option premium chart - never on the spot chart. Commodities honour their own dropdown (default the futures contract).</span>
+           </div>
+           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
+             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Top Gainers / Losers + Indices:</b></div>
+@@ -1630,6 +1673,18 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+           </div>
+           <div id="aeNiftyTrendList" style="display:none;margin-top:6px;font-size:9px;color:#ccc;line-height:1.7;background:#12122a;border:1px solid #2d2d50;border-radius:4px;padding:6px 8px"></div>
+           <div style="font-size:8px;color:#666;margin-top:4px">Trend + F&O top gainer/loser scan re-runs every 1 minute; any picked stock falling below the min % is dropped from trading immediately (open positions closed).</div>
++          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
++            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Commodities (MCX):</b></div>
++            <button class="btn-action" id="aeCommodityToggle" style="width:auto;padding:5px 12px;margin:0 8px 0 0" onclick="AutoExperiment.toggleCommodity()">Commodities: OFF</button>
++            <label style="font-size:9px;color:#888;margin-right:6px">Add commodity
++              <select id="aeCommoditySelect" onchange="AutoExperiment.onCommodityInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px;min-width:150px;max-width:200px">
++                <option value="">-- choose commodity --</option>
++              </select>
++            </label>
++            <button class="btn-action" id="aeCommodityAdd" style="width:auto;padding:5px 10px;margin:0 8px 0 0" onclick="AutoExperiment.addCommodity()">+ Add</button>
++            <span id="aeCommodityStatus" style="font-size:9px;color:#888">Add MCX commodity futures to backtest them directly (spot mode), alongside stocks / F&O.</span>
++            <div id="aeCommodityList" style="width:100%;margin-top:4px"></div>
++          </div>
+           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
+             <label style="font-size:9px;color:#888;margin-right:10px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeAutoSend" onchange="AutoExperiment.onAutoSendInput()"> Auto strategy sender to paper trade engine</label>
+             <span style="font-size:8px;color:#666;margin-right:8px">When ON, the experiment runs only the saved engine templates you add below (each applies its own saved settings to the research sweep) and auto-sends every created strategy to Paper Trade.</span>
+@@ -2678,7 +2733,7 @@ function startOCFastRefresh(){
+   b.textContent = "Auto ON";
+   b.classList.add("warn");
+   ocFastBusy = false;
+-  let lastAll = 0;
++  let lastAll = 0, lastSingle = 0;
+   ocFastRefreshInterval = setInterval(() => {
+     if(ocAllMode){
+       /* All-expiries mode re-fetches the whole stack - throttle to ~1 per 3s
+@@ -2694,6 +2749,12 @@ function startOCFastRefresh(){
+     const cur = document.getElementById("ocExpirySelect").value;
+     if(!cur || !/^\d{4}-\d{2}-\d{2}$/.test(cur)) return;
+     if(!ocLoaded) return;
++    /* Single-expiry refresh: min 2s between fetches. The endpoint serves the
++       RAM cache instantly so a sub-second poll added no freshness while it did
++       keep the option-chain surface hot (re-arming the cooldown that showed
++       "Rate limited" instead of the chain). */
++    if(Date.now() - lastSingle < 2000) return;
++    lastSingle = Date.now();
+     ocFastBusy = true;
+     fetchOC(cur, true);
+   }, 10);
+@@ -3797,6 +3858,7 @@ function loadChart(){
+ }
+ 
+ function ocRefresh(){
++  renderOcInstrumentInfo(null);
+   if(ocAllMode){ loadAllExpiries(); }
+   else { loadOptionChain(); }
+ }
+@@ -3865,6 +3927,7 @@ function loadAllExpiries(silent){
+     if(btn){ btn.disabled = false; btn.textContent = "Refresh"; }
+     if(d.status==="success" && d.chains && d.chains.length){
+       renderAllChains(d.chains);
++      renderOcInstrumentInfo(d.chains[0].instrument || null);
+       /* Keep the expiry dropdown permanently in sync with the full set the All
+          view just showed (fixes the stale "only 3 expiries" list). */
+       mergeOcExpiries(d.chains.map(c => c && c.expiry));
+@@ -3876,8 +3939,14 @@ function loadAllExpiries(silent){
+       }
+     } else {
+       if(allC && !silent) allC.innerHTML = '<div style="text-align:center;padding:20px;color:#ff5252">'+(d.message||"Failed to load expiries")+'</div>';
+-      document.getElementById("status").textContent = "OC: "+(d.message||"error")+" | Tap Refresh to retry";
+-      document.getElementById("status").className = "warn";
++      const amsg = String(d.message||"error");
++      if(/^no options listed/i.test(amsg)){
++        document.getElementById("status").textContent = "OC: " + amsg;
++        document.getElementById("status").className = "warn";
++      } else {
++        document.getElementById("status").textContent = "OC: " + amsg + " | Tap Refresh to retry";
++        document.getElementById("status").className = "warn";
++      }
+     }
+   }).catch(e=>{
+     ocFastBusy = false;
+@@ -3977,37 +4046,21 @@ function loadOptionChain(){
+     const immediateExpiry = (sameSymbol && savedOcExpiry && /^\d{4}-\d{2}-\d{2}$/.test(savedOcExpiry)) ? savedOcExpiry : "";
+     let chainStarted = false;
+     if(immediateExpiry){ fetchOC(immediateExpiry); chainStarted = true; }
+-    fetch("/api/expiries",{method:"POST",headers:{"Content-Type":"application/json"},
+-      body:JSON.stringify({security_id:selectedSymbol.ocId,exchange_segment:selectedSymbol.ocExch,symbol_name:selectedSymbol.name})
+-    }).then(r=>r.json()).then(d=>{
+-      if(d.status==="success" && d.data.length>0){
+-        ocExpiries = d.data;
+-        cacheSet("expiries", ocKey, ocExpiries);
+-        select.innerHTML = ocExpiries.map(e=>`<option value="${e}">${e}</option>`).join("");
+-        if(immediateExpiry && ocExpiries.indexOf(immediateExpiry) !== -1){
+-          select.value = immediateExpiry;
+-          if(!chainStarted) fetchOC(immediateExpiry);
+-        }else{
+-          select.value = ocExpiries[0];
+-          /* Always fetch the chain for the expiry we just selected. This branch
+-             also runs when there was NO saved expiry for this symbol (fresh load
+-             / new symbol) - previously the fetch was gated on chainStarted, so
+-             the table stayed stuck on "Loading option chain..." until the user
+-             pressed Refresh. A stale saved expiry (not in the fresh list) is
+-             reloaded with the first valid one so the table matches the dropdown. */
+-          fetchOC(ocExpiries[0]);
+-        }
+-      }else if(d.status==="error"){
+-        select.innerHTML = '<option>Error loading expiries</option>';
+-        if(!chainStarted && tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:20px;color:#ff5252">'+(d.message||"Failed to load expiries")+' - click Refresh to retry</td></tr>';
++    loadExpiriesForOC(ocKey, select, tbody, () => {
++      if(immediateExpiry && ocExpiries.indexOf(immediateExpiry) !== -1){
++        select.value = immediateExpiry;
++        if(!chainStarted) fetchOC(immediateExpiry);
+       }else{
+-        select.innerHTML = '<option>No expiries found</option>';
+-        if(!chainStarted && tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:20px;color:#888">No expiries available for this symbol</td></tr>';
++        select.value = ocExpiries[0];
++        /* Always fetch the chain for the expiry we just selected. This branch
++           also runs when there was NO saved expiry for this symbol (fresh load
++           / new symbol) - previously the fetch was gated on chainStarted, so
++           the table stayed stuck on "Loading option chain..." until the user
++           pressed Refresh. A stale saved expiry (not in the fresh list) is
++           reloaded with the first valid one so the table matches the dropdown. */
++        fetchOC(ocExpiries[0]);
+       }
+-    }).catch(e=>{
+-      select.innerHTML = '<option>Error loading expiries</option>';
+-      if(!chainStarted && tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:20px;color:#ff5252">Failed to load expiries</td></tr>';
+-    });
++    }, chainStarted);
+   } else {
+     /* Ensure select reflects the cached expiry array AND that the current
+        selection actually belongs to this symbol's expiry list. Without the
+@@ -4042,6 +4095,43 @@ function loadOptionChain(){
+   }
+ }
+ 
++/* Fetch the /api/expiries list with a capped auto-retry on Dhan rate-limiting
++   (503 "Rate limited"). A 30s cooldown armed on the option-chain surface used
++   to dead-end the dropdown into "Error loading expiries - click Refresh";
++   now it quietly retries after the cooldown lifts instead of forcing a manual
++   tap, so a commodity chain clicked during a cooldown still loads by itself. */
++function loadExpiriesForOC(ocKey, select, tbody, onSuccess, chainStarted, _tries){
++  if(!_tries) _tries = 0;
++  fetch("/api/expiries",{method:"POST",headers:{"Content-Type":"application/json"},
++    body:JSON.stringify({security_id:selectedSymbol.ocId,exchange_segment:selectedSymbol.ocExch,symbol_name:selectedSymbol.name})
++  }).then(r=>r.json()).then(d=>{
++    if(d.status==="success" && d.data.length>0){
++      ocExpiries = d.data;
++      cacheSet("expiries", ocKey, ocExpiries);
++      select.innerHTML = ocExpiries.map(e=>`<option value="${e}">${e}</option>`).join("");
++      if(onSuccess) onSuccess();
++    }else if(d.status==="error" && /rate.?limit/i.test(String(d.message||"")) && _tries < 15){
++      select.innerHTML = '<option>Loading expiries...</option>';
++      setTimeout(() => loadExpiriesForOC(ocKey, select, tbody, onSuccess, chainStarted, _tries+1), 7000);
++    }else if(d.status==="error" && /^no options listed/i.test(String(d.message||""))){
++      /* Terminal state: this commodity has futures only, no option chain.
++         Retrying can never succeed, so show it once without the retry hint. */
++      select.innerHTML = '<option>No options</option>';
++      renderOcInstrumentInfo(d.instrument || null);
++      if(!chainStarted && tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:20px;color:#ffb300">'+(d.message||"No options listed")+'</td></tr>';
++    }else if(d.status==="error"){
++      select.innerHTML = '<option>Error loading expiries</option>';
++      if(!chainStarted && tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:20px;color:#ff5252">'+(d.message||"Failed to load expiries")+' - click Refresh to retry</td></tr>';
++    }else{
++      select.innerHTML = '<option>No expiries found</option>';
++      if(!chainStarted && tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:20px;color:#888">No expiries available for this symbol</td></tr>';
++    }
++  }).catch(()=>{
++    select.innerHTML = '<option>Error loading expiries</option>';
++    if(!chainStarted && tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:20px;color:#ff5252">Failed to load expiries</td></tr>';
++  });
++}
++
+ function onOCExpiryChange(){
+   const v = document.getElementById("ocExpirySelect").value;
+   if(v && /^\d{4}-\d{2}-\d{2}$/.test(v)){ savedOcExpiry = v; saveState(); fetchOC(v); }
+@@ -4056,6 +4146,7 @@ function fetchOC(expiry, force){
+   if(cached && !force){
+     ocRecords = cached.data;
+     renderOptionChain(cached.data, cached.spot_price);
++    renderOcInstrumentInfo(cached.instrument || null);
+     document.getElementById("status").textContent = "Loaded "+cached.count+" strikes | Spot: "+cached.spot_price;
+     document.getElementById("ocExpirySelect").value = expiry;
+     ocLoaded = true;
+@@ -4078,7 +4169,13 @@ function fetchOC(expiry, force){
+         document.getElementById("ocRefreshBtn").disabled = false;
+         document.getElementById("ocRefreshBtn").textContent = "Refresh";
+         ocFastBusy = false;
+-        setTimeout(() => { if(!ocLoaded) fetchOC(expiry); }, 1500);
++        /* Back off the poll while a chain needs the slow Dhan /optionchain
++           REST refresh (or is gated by the 1-req/3s option-chain surface
++           limit). A fixed 1.5s retry kept the surface hot and re-armed the
++           30s cooldown, which surfaced as "Rate limited" instead of the
++           chain. Grow 1.5s -> 5s. */
++        const delay = Math.min(5000, 1500 + ocRetries * 250);
++        setTimeout(() => { if(!ocLoaded) fetchOC(expiry); }, delay);
+         return;
+       }
+       document.getElementById("status").textContent = "OC: " + (d.message || "loading") + " | Tap Refresh to retry";
+@@ -4093,7 +4190,7 @@ function fetchOC(expiry, force){
+          in the background). Render it immediately but do NOT cache so the next
+          auto-refresh re-fetches and picks up greeks once the REST chain lands. */
+       if(!d.partial){
+-        cacheSet("oc", ocKey, {data:d.data, spot_price:d.spot_price, count:d.count});
++        cacheSet("oc", ocKey, {data:d.data, spot_price:d.spot_price, count:d.count, instrument:d.instrument});
+       } else {
+         /* Auto-upgrade the partial view to the full greeks chain in ~4s instead
+            of waiting for the 10s cycle - so the user never has to press Refresh
+@@ -4108,14 +4205,39 @@ function fetchOC(expiry, force){
+       }
+       ocRecords = d.data;
+       renderOptionChain(d.data, d.spot_price);
++      renderOcInstrumentInfo(d.instrument || null);
+       document.getElementById("status").textContent = "Loaded "+d.count+" strikes | Spot: "+d.spot_price;
+       document.getElementById("status").className = "ok";
+       document.getElementById("ocExpirySelect").value = expiry;
+       ocLoaded = true;
+       ocRetries = 0;
+     } else {
+-      document.getElementById("status").textContent = "OC: " + d.message + " | Tap Refresh to retry";
+-      document.getElementById("status").className = "warn";
++      /* A 503 "Rate limited" (Dhan's 1-req/3s option-chain surface + the 30s
++         cooldown armed on empty-body responses) must NOT force a manual
++         Refresh tap - auto-retry after the cooldown lifts instead of the
++         browser hammering the endpoint. */
++      const msg = String(d.message || "");
++      if(/rate.?limit/i.test(msg)){
++        ocRetries++;
++        if(ocRetries < 30){
++          document.getElementById("status").textContent = "OC: " + msg + " - retrying...";
++          document.getElementById("status").className = "warn";
++          document.getElementById("ocRefreshBtn").disabled = false;
++          document.getElementById("ocRefreshBtn").textContent = "Refresh";
++          ocFastBusy = false;
++          setTimeout(() => { if(!ocLoaded) fetchOC(expiry); }, 7000);
++          return;
++        }
++      }
++      if(/^no options listed/i.test(msg)){
++        /* Terminal: commodity has futures only, no option chain exists.
++           Do not suggest a retry - it can never succeed. */
++        document.getElementById("status").textContent = "OC: " + msg;
++        document.getElementById("status").className = "warn";
++      } else {
++        document.getElementById("status").textContent = "OC: " + msg + " | Tap Refresh to retry";
++        document.getElementById("status").className = "warn";
++      }
+     }
+     document.getElementById("ocRefreshBtn").disabled = false;
+     document.getElementById("ocRefreshBtn").textContent = "Refresh";
+@@ -4129,6 +4251,27 @@ function fetchOC(expiry, force){
+   });
+ }
+ 
++function renderOcInstrumentInfo(inst){
++  const el = document.getElementById("ocInstrumentInfo");
++  if(!el) return;
++  if(!inst){
++    el.innerHTML = "";
++    return;
++  }
++  const esc = s => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
++  const name = inst.symbol_name || "";
++  const ts = inst.trading_symbol || "";
++  let lsTxt = '<span style="color:#888">-</span>';
++  if(inst.lot_size != null && Number(inst.lot_size) > 0){
++    const n = Number(inst.lot_size);
++    lsTxt = '<b style="color:#ffd700">' + (n % 1 === 0 ? n : n.toFixed(2)) + '</b>';
++  }
++  el.innerHTML =
++    '<span style="color:#5b9bd5;font-weight:700">' + esc(name) + '</span>' +
++    (ts && ts !== name ? '<span>Instrument: <b>' + esc(ts) + '</b></span>' : '') +
++    '<span>Lot size: ' + lsTxt + '</span>';
++}
++
+ function renderOptionChain(data, spotPrice){
+   const tbody = document.querySelector("#oc-table tbody");
+   tbody.innerHTML = "";
+@@ -4553,10 +4696,12 @@ function loadCommodities(){
+     const comms = d.data.commodities;
+     if(!comms.length) return;
+     const group = "Commodities (MCX)";
+-    /* SYMBOLS: only add the group once (idempotent across reconnect). */
++    /* SYMBOLS: only add the group once (idempotent across reconnect). The 8th
++       slot carries whether this commodity has listed options, so the AST/AE
++       engine dropdowns can show only option-bearing commodities. */
+     if(!SYMBOLS.some(s => s[6] === group)){
+       for(const c of comms){
+-        SYMBOLS.push([c.name, c.security_id, "MCX_COMM", "FUTCOM", c.security_id, "MCX_COMM", group]);
++        SYMBOLS.push([c.name, c.security_id, "MCX_COMM", "FUTCOM", c.security_id, "MCX_COMM", group, c.has_options !== false]);
+       }
+     }
+     /* WATCHLISTS: add/replace the commodity category with fresh contracts. */
