@@ -767,12 +767,13 @@
         this.candleCache[key] = { at: Date.now(), candles: d.data };
         return d.data;
       }
-      /* Dhan rate-limit / temporary-unavailable (503): the server parks the
-         key for ~30s and returns 503 so clients stop hammering. A transient
-         503 is NOT "no data" - retry with a growing backoff that rides out the
-         park window, otherwise an experiment firing many concurrent candle
-         fetches skips every rate-limited symbol and produces no strategies. */
-      if (d && (d.status === 'error' || d.status === 'unavailable') && /rate|limit|unavailable/i.test(String(d.message || ''))) {
+      /* Dhan rate-limit / temporary-unavailable / queue-busy (503): the server
+         parks the key for ~30s and returns 503 so clients stop hammering. A
+         transient 503 is NOT "no data" - retry with a growing backoff that
+         rides out the park window, otherwise an experiment firing many
+         concurrent candle fetches skips every rate-limited / queued symbol and
+         produces no strategies. */
+      if (d && (d.status === 'error' || d.status === 'unavailable') && /rate|limit|unavailable|busy|loading|retry/i.test(String(d.message || ''))) {
         for (let attempt = 1; attempt <= 3; attempt++) {
           await new Promise(r => setTimeout(r, Math.min(3000, 2000 * attempt)));
           const d2 = await fetchWithTimeout('/api/candles', {

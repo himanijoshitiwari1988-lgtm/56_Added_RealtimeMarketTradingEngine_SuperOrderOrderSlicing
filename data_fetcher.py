@@ -161,9 +161,18 @@ def _mark_daily_hist_broken():
 # intraday data, park intraday attempts for that WHOLE class for 10 minutes so
 # the class is not re-requested per sid. Daily data is unaffected - the daily
 # path is a separate branch.
+#
+# IMPORTANT: a class that HAS produced data for some sids (e.g. MCX_COMM|FUTCOM
+# where CRUDEOIL/GOLD/COPPER return rows but one stale contract is empty) must
+# NOT be parked by a single empty sid - that would block every sibling symbol in
+# the class for 10 minutes (the "every symbol skipped" experiment failure). Only
+# classes that have NEVER returned any intraday data get parked.
 _INTRADAY_EMPTY_PARK = {}
 _INTRADAY_EMPTY_SEC = 600.0
 _INTRADAY_EMPTY_LOCK = threading.Lock()
+# Classes that have produced at least one non-empty intraday frame. Once seen,
+# empty results are treated as "this sid only" and never park the class.
+_INTRADAY_HAVE_DATA = set()
 
 
 def _intraday_empty_parked(exchange_segment, instrument_type):
@@ -174,9 +183,25 @@ def _intraday_empty_parked(exchange_segment, instrument_type):
 
 
 def _mark_intraday_empty(exchange_segment, instrument_type):
+    """Park an instrument class that returned empty intraday data.
+
+    Only parks when the class has never produced intraday data. A class that
+    has data for most sids must stay live so one bad contract does not black out
+    every sibling symbol for 10 minutes.
+    """
     key = "{}|{}".format(exchange_segment, instrument_type)
     with _INTRADAY_EMPTY_LOCK:
+        if key in _INTRADAY_HAVE_DATA:
+            return
         _INTRADAY_EMPTY_PARK[key] = time.time() + _INTRADAY_EMPTY_SEC
+
+
+def _mark_intraday_data(exchange_segment, instrument_type):
+    """Record that this class produced intraday data at least once."""
+    key = "{}|{}".format(exchange_segment, instrument_type)
+    with _INTRADAY_EMPTY_LOCK:
+        _INTRADAY_HAVE_DATA.add(key)
+        _INTRADAY_EMPTY_PARK.pop(key, None)
 
 
 def _no_intraday_error():
@@ -570,7 +595,10 @@ class DataFetcher:
                                result.get("status"), result.get("remarks"))
             inner = _unwrap_sdk_response(result)
             if inner is not None:
-                return self._parse_ohlc_dataframe(inner)
+                parsed = self._parse_ohlc_dataframe(inner)
+                if parsed is not None and not parsed.empty:
+                    _mark_intraday_data(exchange_segment, instrument_type)
+                return parsed
             remarks = result.get("remarks", "Unknown error") if isinstance(result, dict) else str(result)
             code = remarks.get("error_code") if isinstance(remarks, dict) else None
             etype = remarks.get("error_type") if isinstance(remarks, dict) else None
@@ -745,6 +773,7 @@ class DataFetcher:
                 raise ValueError(
                     "Dhan does not provide candle data for this instrument (no intraday or daily data available)."
                 )
+            _mark_intraday_data(exchange_segment, instrument_type)
             return df, config["label"]
 
         if tf_key in ("week", "month", "year"):

@@ -4399,7 +4399,7 @@ window.createAutoExperiment = function (suffix) {
       // premium chart, all resolve the selected-strike option chain (indices
       // and F&O stocks behave identically here). MCX commodities trade the
       // FUTCOM futures contract directly (spot mode) - no option chain needed.
-      const contracts = (tiMode === 'spot' || it.spotRun) ? [] : await contractsFor(sym, spot);
+      const contracts = (tiMode === 'spot') ? [] : await contractsFor(sym, spot);
       if (contracts && contracts.length) units.total += contracts.length * activeTfs.length;
       progressFetch();
 
