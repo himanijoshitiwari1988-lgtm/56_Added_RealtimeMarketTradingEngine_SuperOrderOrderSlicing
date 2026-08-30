@@ -4425,6 +4425,13 @@ window.createAutoExperiment = function (suffix) {
       // underlying and report spot-based P&L).
       if (riMode === 'both') {
         if (!contracts || !contracts.length) {
+          /* Premium-only mode must never downgrade to the underlying/spot
+             chart: without an option chain the symbol is skipped so the
+             backtest honours "run + trade on the premium chart only". */
+          if (state.premiumOnly) {
+            log('No option chain for ' + displayName(sym) + ' - skipping (premium-only mode)', 'warn');
+            return { sym, underlyingByTf: null };
+          }
           /* No option chain (rate-limited / filtered away): the premium chart is
              unavailable, so fall back to the underlying chart so the strategy
              still backtests on its indicators instead of the symbol being
@@ -4454,6 +4461,13 @@ window.createAutoExperiment = function (suffix) {
       // when "Trade should be executed in" is the option premium chart (the
       // default for both F&O stocks and indices).
       if (!contracts || !contracts.length) {
+        /* Premium-only mode must never downgrade to the underlying/spot chart:
+           without an option chain the symbol is skipped so the backtest honours
+           "run + trade on the premium chart only". */
+        if (state.premiumOnly) {
+          log('No option chain for ' + displayName(sym) + ' - skipping (premium-only mode)', 'warn');
+          return { sym, underlyingByTf: null };
+        }
         /* No option chain / premium candles for this symbol: fall back to the
            underlying chart so the strategy still backtests on its indicators
            instead of the symbol being skipped. The fallback result is priced on
@@ -4584,6 +4598,14 @@ window.createAutoExperiment = function (suffix) {
         continue;
       }
       if (it.premiumFbk) {
+        /* Premium-only mode must never downgrade to the underlying/spot chart:
+           a symbol with no premium candles is skipped so the backtest honours
+           "run + trade on the premium chart only". */
+        if (state.premiumOnly) {
+          skipped++;
+          log('No candles for ' + displayName(sym) + ' - skipping (premium-only mode)', 'warn');
+          continue;
+        }
         /* Premium chart unavailable (no option chain / no premium candles):
            run the backtest on the underlying chart so the strategy still tests
            on its indicators instead of the symbol being skipped. The fallback
@@ -4622,6 +4644,10 @@ window.createAutoExperiment = function (suffix) {
           const oc = ocByTf[t];
           const underlying = underlyingByTf[t];
           if (!oc || oc.length < 60) {
+            /* Premium-only mode must never downgrade to the underlying/spot
+               chart: a strike without premium candles is skipped so the backtest
+               honours "run + trade on the premium chart only". */
+            if (state.premiumOnly) continue;
             /* Premium candles unavailable for this strike: fall back to the
                underlying chart so the strategy still backtests on its
                indicators instead of the strike being skipped. Signals and trade

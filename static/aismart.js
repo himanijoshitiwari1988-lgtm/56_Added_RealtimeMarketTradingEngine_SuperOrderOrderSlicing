@@ -1191,11 +1191,14 @@ window.createAISmartTrading = function (suffix) {
      read their own "Strategy should be run in" dropdown; commodities default to
      the FUTCOM futures contract (spot). */
   function runInMode(symbol) {
-    // The market-off simulator chart always runs + executes on its own stream.
-    if (isSimSymbol(symbol)) return 'spot';
     // Premium-only mode locks BOTH the strategy run chart and the trade
     // execution chart to the option premium chart for every instrument type.
+    // It takes precedence over the SIM spot shortcut: with premium-only ON the
+    // synthetic SIM stream has no option premium chart, so the symbol is
+    // resolved to premium and skipped upstream (never downgraded to spot).
     if (state.premiumOnly) return 'premium';
+    // The market-off simulator chart always runs + executes on its own stream.
+    if (isSimSymbol(symbol)) return 'spot';
     const ri = state.runIn || {};
     if (isCommodity(symbol)) {
       const m = (ri && ri.comm) || 'spot';
@@ -1214,8 +1217,8 @@ window.createAISmartTrading = function (suffix) {
      execute per their own "Trade should be executed in" dropdown - default the
      FUTCOM futures contract itself ('spot'). */
   function tradeInMode(symbol) {
-    if (isSimSymbol(symbol)) return 'spot';
     if (state.premiumOnly) return 'premium';
+    if (isSimSymbol(symbol)) return 'spot';
     const ti = state.tradeIn || {};
     if (isCommodity(symbol)) return (ti && ti.comm) || 'spot';
     if (!isIndex(symbol)) return 'premium';
@@ -2689,6 +2692,44 @@ window.createAISmartTrading = function (suffix) {
     const k = positionQuoteKey(p);
     return k ? (qm[k] || null) : null;
   }
+  /* The option premium chart's current price: the last candle close of the
+     premium chart the trade runs on. Falls back to the shared candle cache
+     (StratEngine) when the displayed chart isn't this option, so the Running
+     Trades / Running Positions P&L matches the option premium chart even
+     without a live quote. */
+  function positionPremiumLastClose(p) {
+    if (p.symbolId == null) return null;
+    const sid = Number(p.symbolId);
+    if (typeof selectedSymbol !== 'undefined' && selectedSymbol &&
+        selectedSymbol.id === sid && window.IndChart && IndChart.getCandles) {
+      const c = IndChart.getCandles();
+      if (c && c.length) {
+        const lc = Number(c[c.length - 1].close);
+        if (lc > 0) return lc;
+      }
+    }
+    const SE = window.StratEngine;
+    const cache = (SE && SE.candleCache) || {};
+    let best = null, bestAt = 0;
+    for (const k in cache) {
+      if (k.indexOf(sid + ':') !== 0) continue;
+      const e = cache[k];
+      if (e && e.candles && e.candles.length && e.at >= bestAt) {
+        const lc = Number(e.candles[e.candles.length - 1].close);
+        if (lc > 0) { best = lc; bestAt = e.at; }
+      }
+    }
+    return best;
+  }
+  /* Current price for a position: the live feed quote first (the same source
+     the chart overlay uses); when no live quote is streaming yet, fall back to
+     the option premium chart's last candle close so the P&L matches the
+     premium chart. */
+  function positionCurrentPrice(p) {
+    const q = positionQuote(p);
+    if (q && q.live && q.ltp != null) return Number(q.ltp);
+    return positionPremiumLastClose(p);
+  }
   /* Execution targets per the "Trade should be executed in" setting: the
      underlying/spot chart ('spot'), the selected-strike option premium chart
      ('premium'), or BOTH charts ('both' -> a position on the spot underlying
@@ -2701,8 +2742,10 @@ window.createAISmartTrading = function (suffix) {
     if (!sym) return [];
     // Premium-chart candle fallback active: the run-in premium chart has no
     // candles so the strategy evaluates on the underlying chart - execute on
-    // the underlying as well so the trade is never skipped.
-    if (_candleFbk[instrumentId(instr)]) return [sym];
+    // the underlying as well so the trade is never skipped. Premium-only mode
+    // overrides this: execution stays on the premium chart only, never the
+    // underlying.
+    if (!state.premiumOnly && _candleFbk[instrumentId(instr)]) return [sym];
     const tiMode = tradeInMode(sym);
     if (tiMode === 'spot') return [sym];
     if (instr.kind === 'option') {
@@ -2774,6 +2817,14 @@ window.createAISmartTrading = function (suffix) {
         }
       } catch (e) {}
       // Premium chart candles are unavailable (new/illiquid strike, feed gap).
+      // Premium-only mode must NEVER downgrade to the underlying/spot chart: a
+      // missing premium chart means the instrument is skipped until its premium
+      // candles return, honouring the "run + trade on the premium chart only"
+      // toggle instead of silently executing on the underlying.
+      if (state.premiumOnly) {
+        delete _candleFbk[instrumentId(instr)];
+        return null;
+      }
       // Fall back to the underlying/spot chart so the strategy still evaluates
       // its indicators and the trade still executes instead of the instrument
       // being skipped. Execution targets are switched to the underlying too.
@@ -2991,7 +3042,10 @@ window.createAISmartTrading = function (suffix) {
     // Premium-chart candles unavailable on the fast path: fall back to the
     // underlying/spot chart so the strategy still evaluates instead of the
     // instrument being skipped. Execution targets switch to the underlying too.
+    // Premium-only mode overrides this: no premium candles means the instrument
+    // is skipped until they return, never downgraded to the underlying.
     if (instr.kind === 'option') {
+      if (state.premiumOnly) return null;
       if (!_candleFbk[instrumentId(instr)]) log('Option premium candles unavailable for ' + displayName(instr.symbol) + ' - falling back to underlying chart', 'warn');
       _candleFbk[instrumentId(instr)] = 1;
       const sym = instr.symbol;
@@ -3019,8 +3073,9 @@ window.createAISmartTrading = function (suffix) {
     const sym = instr.symbol;
     if (!sym) return [];
     // Premium-chart candle fallback active: execute on the underlying so the
-    // trade is not skipped while the premium chart has no candles.
-    if (_candleFbk[instrumentId(instr)]) return [sym];
+    // trade is not skipped while the premium chart has no candles. Premium-only
+    // mode overrides this - execution stays on the premium chart only.
+    if (!state.premiumOnly && _candleFbk[instrumentId(instr)]) return [sym];
     const tiMode = tradeInMode(sym);
     if (tiMode === 'spot') return [sym];
     if (instr.kind === 'option') {
@@ -4975,8 +5030,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function runningRowHTML(p) {
-      const q = positionQuote(p);
-      const cur = (q && q.live && q.ltp != null) ? Number(q.ltp) : null;
+      const cur = positionCurrentPrice(p);
       const pnl = cur != null ? (p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty) : null;
       const chargesOn = !!(window.PaperTrade && PaperTrade.getCharges && PaperTrade.getCharges());
       const charges = (chargesOn && cur != null && window.PaperTrade && PaperTrade.chargesTotalForOpen)
@@ -5030,11 +5084,11 @@ window.createAISmartTrading = function (suffix) {
     let unreal = 0;
     for (const k in state.positions) {
       const p = state.positions[k];
-      const q = positionQuote(p);
-      if (q && q.live && q.ltp != null) {
-        const g = p.side === 'BUY' ? (Number(q.ltp) - p.entryPrice) * p.qty : (p.entryPrice - Number(q.ltp)) * p.qty;
+      const cur = positionCurrentPrice(p);
+      if (cur != null) {
+        const g = p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty;
         unreal += (chargesOn && window.PaperTrade && PaperTrade.chargesTotalForOpen)
-          ? g - PaperTrade.chargesTotalForOpen(p, Number(q.ltp))
+          ? g - PaperTrade.chargesTotalForOpen(p, cur)
           : g;
       }
     }

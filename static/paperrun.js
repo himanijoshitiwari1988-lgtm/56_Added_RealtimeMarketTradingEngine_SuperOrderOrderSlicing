@@ -74,6 +74,7 @@ window.createPaperRun = function (suffix) {
           candlestick: s.candlestick || null,
           symbol: s.symbol || null,
           runIn: st.runIn || {},
+          premiumOnly: st.premiumOnly === true,
           strike: st.strike || {},
           progress: (st.runProgress || {})[s.id != null ? s.id : s.key]
         });
@@ -85,9 +86,12 @@ window.createPaperRun = function (suffix) {
   /* The run-in mode for a strategy: 'spot', 'premium' or 'both'. For engines
      with explicit run-in settings (AI Smart / Auto Exp) the mode follows the
      symbol type (index vs F&O stock); for AE strategies that carry a resolved
-     option strike the mode is always premium. F&O stocks are always 'spot' -
-     strategies run on the underlying/spot chart only. */
+     option strike the mode is always premium. Premium-only mode locks the run
+     chart to the option premium chart for every instrument type. F&O stocks
+     default to the spot chart unless premium-only (or their own run-in choice)
+     says otherwise. */
   function runInModeFor(s, sym) {
+    if (s.premiumOnly) return 'premium';
     if (s.optionSid != null || (s.optionStrike != null && s.optionType)) return 'premium';
     const ri = s.runIn || {};
     if (!sym) {
@@ -98,8 +102,13 @@ window.createPaperRun = function (suffix) {
       if (!sym) sym = s.symbol || null;
       if (!sym && typeof selectedSymbol !== 'undefined') sym = selectedSymbol;
     }
-    if (!isIndexSym(sym)) return 'spot';
-    return ri.index || 'premium';
+    // Mirror the engine's runInMode(): commodities trade the FUTCOM contract
+    // (spot); F&O stocks read their own "Strategy should be run in" dropdown.
+    const isComm = !!(sym && (String(sym.exch || sym.ocExch || '').toUpperCase() === 'MCX_COMM' ||
+      String(sym.inst || '').toUpperCase() === 'FUTCOM'));
+    if (isComm) { const m = (ri && ri.comm) || 'spot'; return m === 'futures' ? 'spot' : m; }
+    if (!isIndexSym(sym)) return (ri && ri.fno) || 'spot';
+    return (ri && ri.index) || 'both';
   }
 
   /* The symbols a running strategy is actually trading on. Auto Experiment
@@ -221,6 +230,45 @@ window.createPaperRun = function (suffix) {
     const key = posQuoteKey(pos);
     if (!key) return null;
     return (typeof clientQuotes !== 'undefined' && clientQuotes) ? clientQuotes[key] : null;
+  }
+
+  /* The option premium chart's current price: the last candle close of the
+     premium chart the trade runs on. Falls back to the chart candle cache
+     (StratEngine) when the displayed chart isn't this option, so the Running
+     Trades P&L matches the option premium chart even without a live quote. */
+  function premiumLastClose(pos) {
+    if (pos.symbolId == null) return null;
+    const sid = Number(pos.symbolId);
+    if (typeof selectedSymbol !== 'undefined' && selectedSymbol &&
+        selectedSymbol.id === sid && window.IndChart && IndChart.getCandles) {
+      const c = IndChart.getCandles();
+      if (c && c.length) {
+        const lc = Number(c[c.length - 1].close);
+        if (lc > 0) return lc;
+      }
+    }
+    const SE = window.StratEngine;
+    const cache = (SE && SE.candleCache) || {};
+    let best = null, bestAt = 0;
+    for (const k in cache) {
+      if (k.indexOf(sid + ':') !== 0) continue;
+      const e = cache[k];
+      if (e && e.candles && e.candles.length && e.at >= bestAt) {
+        const lc = Number(e.candles[e.candles.length - 1].close);
+        if (lc > 0) { best = lc; bestAt = e.at; }
+      }
+    }
+    return best;
+  }
+
+  /* Current price for a position: the live feed quote first (the same source
+     the chart overlay uses); when the trade is on the option premium chart but
+     no live quote is streaming yet, fall back to the premium chart's last
+     candle close so the Running Trades P&L matches the option premium chart. */
+  function currentPriceForPos(pos) {
+    const q = quoteForPos(pos);
+    if (q && q.live && q.ltp != null) return Number(q.ltp);
+    return premiumLastClose(pos);
   }
 
   /* A chart-openable symbol for a position. */
@@ -375,8 +423,7 @@ window.createPaperRun = function (suffix) {
     const tag = ENGINE_TAG[t.engine] || { label: t.engine, color: '#888' };
     const p = t.pos;
     const sideCol = p.side === 'BUY' ? '#00d4aa' : '#ef5350';
-    const q = quoteForPos(p);
-    const cur = (q && q.live && q.ltp != null) ? Number(q.ltp) : null;
+    const cur = currentPriceForPos(p);
     const pnl = tradePnl(p, cur);
     const pnlCol = pnl == null ? '#888' : (pnl >= 0 ? '#00d4aa' : '#ef5350');
     const d = new Date(p.openedAt || Date.now());
@@ -473,8 +520,7 @@ window.createPaperRun = function (suffix) {
     const tag = ENGINE_TAG[t.engine] || { label: t.engine, color: '#888' };
     const p = t.pos;
     const sideCol = p.side === 'BUY' ? '#00d4aa' : '#ef5350';
-    const q = quoteForPos(p);
-    const cur = (q && q.live && q.ltp != null) ? Number(q.ltp) : null;
+    const cur = currentPriceForPos(p);
     const pnl = tradePnl(p, cur);
     /* Net P&L view when the shared Dhan broker-charge simulation is ON:
        live open positions subtract their projected round-trip charges. */
