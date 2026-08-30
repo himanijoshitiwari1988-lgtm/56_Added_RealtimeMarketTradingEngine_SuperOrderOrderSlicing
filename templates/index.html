@@ -3632,28 +3632,38 @@ function connect(){
   const tok = document.getElementById("accessToken").value.trim();
   if(!cid||!tok){alert("Please enter Client ID and Access Token");return;}
   const btn = document.getElementById("connectBtn");
+  const st = document.getElementById("status");
   btn.disabled = true; btn.textContent = "Connecting...";
-  fetch("/api/connect",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_id:cid,access_token:tok})})
-  .then(r=>r.json()).then(d=>{
-    btn.disabled = false;
-    if(d.status==="success"){
-      btn.textContent = "Connected - Reconnect";
-      document.getElementById("resetFeedBtn").style.display = "";
-      document.getElementById("status").textContent = "Connected | Loading chart...";
-      document.getElementById("status").className = "ok";
-      saveState();
-      loadChart();
-      loadOptionChain();
-      startQuotes();
-    } else {
-      alert(d.message);
-      btn.textContent = "Connect";
-    }
-  }).catch(e=>{
-    alert("Connection failed: " + e);
-    btn.disabled = false;
-    btn.textContent = "Connect";
-  });
+  if(st){ st.textContent = "Connecting to Dhan..."; st.className = "warn"; }
+  /* Fire the connect request but do NOT let the UI depend on its response - the
+     preview tunnel can hold the response while the server already connected.
+     The button is driven by /api/status polling below, which always works. */
+  fetch("/api/connect",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({client_id:cid,access_token:tok})}).catch(()=>{});
+  let tries = 0;
+  let loaded = false;
+  const iv = setInterval(() => {
+    fetch("/api/status").then(r=>r.json()).then(s=>{
+      if(s && s.connected){
+        clearInterval(iv);
+        btn.disabled = false;
+        btn.textContent = "Connected - Reconnect";
+        document.getElementById("resetFeedBtn").style.display = "";
+        if(st){ st.textContent = "Connected | Loading chart..."; st.className = "ok"; }
+        saveState();
+        if(!loaded){
+          loaded = true;
+          loadChart();
+          loadOptionChain();
+          startQuotes();
+        }
+      } else if(++tries >= 30){
+        clearInterval(iv);
+        btn.disabled = false;
+        btn.textContent = "Connect";
+        if(st){ st.textContent = "Connect timed out - tap Connect to retry"; st.className = "error"; }
+      }
+    }).catch(()=>{});
+  }, 2000);
 }
 
 /* Self-service feed recovery. When Dhan's 5-connection limit is saturated the

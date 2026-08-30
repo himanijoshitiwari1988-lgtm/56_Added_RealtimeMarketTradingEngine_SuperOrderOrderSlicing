@@ -5649,6 +5649,23 @@ window.createAISmartTrading = function (suffix) {
     sendToFinal(id) { return sendToFinal(id); },
     experimentSymbols() { return experimentSymbols(); },
     chainRateLimited(s) { return chainRateLimited(s); },
+    /* Expose the engine's resolved option contracts ("picked strikes") so the
+       Running Strategies list can show one chart row per picked premium
+       contract - the strikes the strategy is actually running on - instead of
+       resolving its own first-contract-only fallback. */
+    pickedStrikes() {
+      const out = [];
+      _pickedStrikes.forEach((rec, key) => {
+        if (rec && rec.contracts && rec.contracts.length) {
+          out.push({ key: key, symbol: rec.symbol, contracts: rec.contracts, at: rec.at });
+        }
+      });
+      return out;
+    },
+    pickedStrikesFor(symbol) {
+      if (!symbol) return null;
+      return _pickedStrikes.get(_pickedKey(symbol)) || null;
+    },
     /* Resolve the tradeable instruments for a list of template symbols, exactly
        like the engine does: spot run-in symbols stay spot; index symbols
        resolve to their selected-strike option contract (trade-in is always

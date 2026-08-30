@@ -171,9 +171,43 @@ window.createPaperRun = function (suffix) {
     return null;
   }
 
+  /* Every option premium chart an AI Smart strategy runs on, one row per picked
+     contract. AI Smart strategies run on the engine's own resolved option
+     contracts ("picked strikes" in aismart.js); each picked contract
+     (sid/strike/optionType/premium) is its own chart. Falls back to the single
+     legacy resolution when the engine has not picked anything for the symbol
+     yet. */
+  async function astPremiumChartsFor(s, sym) {
+    const out = [];
+    if (!window.AISmartTrading || !AISmartTrading.pickedStrikesFor) return out;
+    let rec = null;
+    try { rec = AISmartTrading.pickedStrikesFor(sym); } catch (e) { rec = null; }
+    if (!rec || !rec.contracts || !rec.contracts.length) return out;
+    const isIdx = isIndexSym(sym);
+    for (const c of rec.contracts) {
+      if (c.sid == null) continue;
+      out.push({
+        kind: 'premium',
+        label: 'Option premium chart',
+        sym: {
+          id: Number(c.sid),
+          exch: (sym.ocExch === 'BSE_FNO' ? 'BSE_FNO' : 'NSE_FNO'),
+          inst: isIdx ? 'OPTIDX' : 'OPTSTK',
+          name: (sym.name || '') + ' ' + c.strike + ' ' + c.optionType,
+          ocId: sym.ocId != null ? sym.ocId : sym.id,
+          ocExch: sym.ocExch != null ? sym.ocExch : sym.exch,
+          strike: c.strike, optionType: c.optionType, premium: c.premium,
+          tf: s.tf
+        }
+      });
+    }
+    return out;
+  }
+
   /* The charts a strategy runs on, each with its label and an opener. The spot
-     chart and the selected-strike option premium chart are listed separately,
-     once per symbol the strategy is actually trading on. */
+     chart and the selected-strike option premium charts are listed separately,
+     once per symbol the strategy is actually trading on. AI Smart strategies
+     list every picked premium contract as its own chart. */
   async function chartsForStrategy(s) {
     const syms = strategySymbols(s);
     const charts = [];
@@ -184,8 +218,16 @@ window.createPaperRun = function (suffix) {
         if (spot) charts.push({ kind: 'spot', label: 'Spot chart', sym: spot });
       }
       if (mode === 'premium' || mode === 'both') {
+        if (s.engine === 'ast') {
+          let premCharts = [];
+          try { premCharts = await astPremiumChartsFor(s, sym); } catch (e) { premCharts = []; }
+          if (premCharts.length) {
+            charts.push.apply(charts, premCharts);
+            continue;
+          }
+        }
         const prem = await premiumSymbolFor(s, sym);
-        charts.push({ kind: 'premium', label: 'Option premium chart', sym: prem });
+        if (prem) charts.push({ kind: 'premium', label: 'Option premium chart', sym: prem });
       }
     }
     if (!charts.length) {
@@ -559,8 +601,18 @@ window.createPaperRun = function (suffix) {
   let _chartCache = {};
 
   function chartCacheKey(s) {
-    return String(s.engine) + ':' + String(s.id) + ':' +
+    let key = String(s.engine) + ':' + String(s.id) + ':' +
       strategySymbols(s).map(x => (x && x.id != null ? String(x.id) : '') + ':' + (x && (x.exch || ''))).join(',');
+    /* AI Smart chart rows come from the engine's live picked strikes; fold a
+       fingerprint of them into the key so the cache refreshes when the engine
+       resolves new/extra premium contracts for the same symbol set. */
+    if (s.engine === 'ast' && window.AISmartTrading && AISmartTrading.pickedStrikes) {
+      try {
+        const ps = AISmartTrading.pickedStrikes();
+        key += ':' + ps.map(r => (r.key || '') + ':' + ((r.contracts || []).length)).join(',');
+      } catch (e) {}
+    }
+    return key;
   }
 
   async function renderStrategies() {

@@ -25,7 +25,7 @@ class DhanBroker:
         # blocking a request thread for the SDK's 60s default (pre-market the
         # option chain and quote endpoints can stall and make the UI look hung).
         try:
-            self._context.dhan_http.timeout = 20
+            self._context.dhan_http.timeout = 6
         except Exception:
             pass
         self._dhan = dhanhq(self._context)

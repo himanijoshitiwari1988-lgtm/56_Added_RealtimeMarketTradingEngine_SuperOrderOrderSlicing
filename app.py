@@ -10,6 +10,7 @@ import json
 import math
 import os
 import random
+import select
 import time
 import threading
 import tempfile
@@ -19,7 +20,7 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 
 from broker import DhanBroker
-from data_fetcher import DataFetcher, TIMEFRAME_CONFIG, _unwrap_sdk_response, rate_limit_cooldown_active, _throttle, auth_error, _market_open_now, oc_rate_limited
+from data_fetcher import DataFetcher, TIMEFRAME_CONFIG, _unwrap_sdk_response, rate_limit_cooldown_active, rate_limit_cooldown_remaining, _throttle, auth_error, _market_open_now, oc_rate_limited
 from dhanhq.marketfeed import MarketFeed
 from werkzeug.serving import ThreadedWSGIServer, WSGIRequestHandler
 
@@ -2521,7 +2522,24 @@ def api_expiries():
                              args=(cache_key, security_id, exchange_segment),
                              daemon=True).start()
         return jsonify({"status": "success", "data": stale, "stale": True})
-    # Truly cold start (no cache at all): fetch synchronously with retries.
+    # Truly cold start (no cache at all). Serve the LOCAL scrip-master expiry
+    # list instantly when available - it never touches Dhan, so a Dhan
+    # rate-limit / hang can never block the dropdown. The authoritative Dhan
+    # list is refreshed in the background and takes over the cache.
+    scrip_exps = _scrip_expiries(symbol_name, exchange_segment)
+    if scrip_exps:
+        _cache_set(cache_key, scrip_exps, "expiries")
+        with _EXPIRY_FAIL_LOCK:
+            _EXPIRY_FAIL_CACHE.pop(cache_key, None)
+        with _DATA_INFLIGHT_LOCK:
+            inflight = cache_key in _DATA_INFLIGHT
+            _DATA_INFLIGHT.add(cache_key)
+        if not inflight:
+            threading.Thread(target=_refresh_expiries_bg,
+                             args=(cache_key, security_id, exchange_segment),
+                             daemon=True).start()
+        return jsonify({"status": "success", "data": scrip_exps, "stale": True})
+    # No scrip-master strikes for this symbol: only now do we depend on Dhan.
     # If a rate-limit cooldown is active, fail fast instead of hammering Dhan
     # (the frontend retries after the window lifts). A recent failure for this
     # same underlying is served from the negative cache so the every-~2s poll
@@ -2614,6 +2632,44 @@ def _oc_bucket(symbol_name, fno_seg, expiry):
         if hit:
             return hit
     return None
+
+
+def _scrip_expiries(symbol_name, fno_seg):
+    """Derive a symbol's expiry list from the LOCAL scrip master option-strike
+    map - no Dhan call, returns in microseconds. Used as an instant fallback for
+    the cold-cache expiry paths so the dropdown never blocks on Dhan's slow
+    /optionchain/expirylist REST endpoint (which, when it hangs, also holds the
+    option-chain surface lock and freezes every other request). Returns a sorted
+    list, or None when the scrip master has no strikes for this symbol."""
+    prefix = _fno_underlying(symbol_name)
+    exch = _scrip_exch_for(fno_seg)
+    try:
+        _get_scrip_master()
+    except Exception:
+        return None
+    oc_map = _SCRIP_CACHE.get("oc_map", {}) or {}
+    out = set()
+    for (x, p, ex) in oc_map:
+        if p != prefix.upper():
+            continue
+        if exch and x != exch:
+            # Accept a scrip exchange-id that differs from the API segment's
+            # (e.g. BSE rows for an NSE_FNO request) so a naming mismatch never
+            # forces the slow REST path.
+            if not (x in ("NSE", "BSE", "MCX", "NCDEX")):
+                continue
+        if ex:
+            out.add(str(ex)[:10])
+    if not out:
+        # Some commodities only carry FUT rows in the scrip master; their expiry
+        # dates are the ones their (OPT) strikes share, so list them too.
+        fo = _SCRIP_CACHE.get("fo_by_type", {}) or {}
+        for (p, inst), rows in fo.items():
+            if p == prefix.upper() and inst in ("FUTIDX", "FUTSTK", "FUTCOM"):
+                for r in rows:
+                    if r.get("expiry_date"):
+                        out.add(str(r["expiry_date"])[:10])
+    return sorted(out) if out else None
 
 
 def _oc_view_and_ids(bucket, fno_seg, spot, subscribe_window):
@@ -2881,11 +2937,21 @@ def _oc_refresh_worker():
 
     Each successful fetch is persisted into the scrip-master bucket (inside
     `_fetch_option_chain_data`), so a commodity chain that needed the slow REST
-    path once becomes instant on every later load. When Dhan rate-limits the OC
-    surface mid-queue the remaining jobs fail fast (the surface gate raises
-    immediately) instead of piling up, and the per-chain `_DATA_INFLIGHT` guard
-    is released so a later request can retry after the cooldown clears."""
+    path once becomes instant on every later load.
+
+    When Dhan rate-limits the OC surface the worker PARKS (waits out the
+    cooldown) instead of popping-and-discarding the next job: jobs that arrive
+    during a rate-limit storm stay queued and are retried after the window
+    lifts, so a chain is never left stuck at the zero/blank instant view because
+    its one refresh happened to land inside the storm. Hard failures (invalid
+    security, no options) still discard the job and release `_DATA_INFLIGHT` so
+    a later request can retry."""
     while True:
+        # Park while any cooldown is active so queued jobs are attempted after
+        # the rate-limit window lifts instead of failing fast and being dropped.
+        if oc_rate_limited() or rate_limit_cooldown_active():
+            time.sleep(2.0)
+            continue
         job = None
         with _OC_REFRESH_LOCK:
             if _OC_REFRESH_QUEUE:
@@ -2977,6 +3043,12 @@ def api_option_chain():
     cache_key = ("option_chain", security_id, exchange_segment, expiry)
     cached = _cache_get(cache_key)
     if cached is not None:
+        # A partial (scrip-master instant) chain has strikes but no greeks/IV/
+        # LTP yet. Re-arm the REST refresh every time it is served so a refresh
+        # that failed on a rate-limit is retried by the parked worker instead of
+        # the table staying at 0 / "--" forever.
+        if cached.get("partial"):
+            _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry, prefix)
         _seed_chain_quotes(cached["records"])
         _ws_subscribe_oc_strikes(cached["records"], fno_seg)
         return jsonify({"status": "success", "data": cached["records"],
@@ -3171,14 +3243,23 @@ def api_auto_strikes():
     exp_cache_key = ("expiries", security_id, exchange_segment)
     expiries = _cache_get(exp_cache_key)
     if expiries is None:
-        if rate_limit_cooldown_active():
+        # Serve the scrip-master expiry list instantly instead of blocking the
+        # request thread on Dhan's slow /optionchain/expirylist REST call (which
+        # hangs and holds the option-chain surface lock, freezing the whole OC
+        # panel + every auto_strikes call for stocks/commodities).
+        scrip_exps = _scrip_expiries(symbol_name, exchange_segment)
+        if scrip_exps:
+            expiries = scrip_exps
+            _cache_set(exp_cache_key, expiries, "expiries")
+        elif rate_limit_cooldown_active():
             return jsonify({"status": "error",
                             "message": "Rate limited - wait a few seconds and retry"}), 503
-        try:
-            expiries = fetcher.fetch_expiry_list(security_id, exchange_segment)
-            _cache_set(exp_cache_key, expiries, "expiries")
-        except Exception:
-            return jsonify({"status": "error", "message": "No expiries"}), 500
+        else:
+            try:
+                expiries = fetcher.fetch_expiry_list(security_id, exchange_segment)
+                _cache_set(exp_cache_key, expiries, "expiries")
+            except Exception:
+                return jsonify({"status": "error", "message": "No expiries"}), 500
     if not expiries:
         return jsonify({"status": "error", "message": "No expiries"}), 500
     expiry = expiries[0]
@@ -3186,15 +3267,36 @@ def api_auto_strikes():
     oc_cache_key = ("option_chain", security_id, exchange_segment, expiry)
     cached = _cache_get(oc_cache_key)
     if cached is None:
+        # Never block a request thread on Dhan's slow /optionchain REST call
+        # (it can hang for minutes and holds the option-chain surface lock,
+        # which also froze the OC panel + expiry list). Kick the greeks refresh
+        # into the background worker and serve the instant scrip-master +
+        # live-quote chain first, exactly like the /api/option_chain panel.
+        _start_rest_refresh(oc_cache_key, security_id, exchange_segment, expiry,
+                            _fno_underlying(symbol_name) if symbol_name else None)
         try:
-            cached = _fetch_option_chain_data(security_id, exchange_segment, expiry,
-                                              _fno_underlying(symbol_name) if symbol_name else None)
-            _cache_set(oc_cache_key, cached, "option_chain")
-        except Exception as e:
-            return jsonify({"status": "error", "message": str(e)}), 500
+            inst = _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot)
+        except Exception:
+            inst = None
+        if inst is not None and inst.get("records"):
+            _seed_chain_quotes(inst["records"])
+            _cache_set(oc_cache_key, {"records": inst["records"], "spot": inst["spot"],
+                                       "count": len(inst["records"]), "partial": True},
+                       "option_chain")
+            cached = {"records": inst["records"], "spot": inst["spot"],
+                      "count": len(inst["records"]), "partial": True}
+        else:
+            return jsonify({"status": "error", "message": "Option chain loading - retry in a moment"}), 202
     records = cached.get("records") or []
     if not records:
         return jsonify({"status": "error", "message": "No option chain data"}), 500
+    # Re-arm the greeks refresh whenever a PARTIAL chain is served (same reason
+    # as /api/option_chain): the instant scrip-master view has strikes but no
+    # LTP/greeks, and a refresh that failed on a rate-limit must be retried by
+    # the parked worker instead of leaving premiums/deltas at 0/None forever.
+    if cached.get("partial"):
+        _start_rest_refresh(oc_cache_key, security_id, exchange_segment, expiry,
+                            _fno_underlying(symbol_name) if symbol_name else None)
     if not spot:
         spot = float(cached.get("spot", 0) or 0)
 
@@ -4359,6 +4461,24 @@ def api_auto_research():
     })
 
 
+# Seconds a pooled connection may stay silent before _OneShotRequestHandler
+# gives up and frees its pool slot. The preview tunnel keeps ~200 connections
+# open; with one request per connection, a short idle cap reclaims those slots
+# within a few seconds instead of letting the pool queue grow. Long enough to
+# never interrupt a request that is actually in flight (a real request line
+# arrives immediately on connect), short enough to churn idle sockets fast.
+_ONESHOT_IDLE_TIMEOUT = 5
+
+# How long a pool worker waits for an accepted socket to deliver its first
+# byte before closing it as an idle tunnel connection (see
+# _BoundedThreadWSGIServer for the reasoning). Genuine clients send the request
+# line within ~1ms of connect, so a short wait never drops a real request -
+# only the tunnel's parked keep-alive sockets. The wait happens inside the pool
+# worker, in parallel, so it never serializes the single-threaded accept loop.
+_WORKER_READY_TIMEOUT = 0.005
+
+
+
 class _OneShotRequestHandler(WSGIRequestHandler):
     """Serves exactly ONE HTTP request per connection.
 
@@ -4375,6 +4495,12 @@ class _OneShotRequestHandler(WSGIRequestHandler):
 
     def handle(self):
         self.close_connection = True
+        # The preview tunnel also holds connections that never send a request
+        # (idle keep-alive). A bare readline() parks a bounded-pool worker
+        # forever waiting on a request line that never comes, so cap the wait -
+        # a connection silent for _ONESHOT_IDLE_TIMEOUT is dropped and its pool
+        # slot freed for real traffic.
+        self.connection.settimeout(_ONESHOT_IDLE_TIMEOUT)
         self.handle_one_request()
 
 
@@ -4396,7 +4522,7 @@ class _BoundedThreadWSGIServer(ThreadedWSGIServer):
     block_on_close = True
 
     def __init__(self, host, port, app, request_handler=None, passthrough_errors=False,
-                 ssl_context=None, fd=None, max_threads=128):
+                 ssl_context=None, fd=None, max_threads=512):
         if request_handler is None:
             request_handler = _OneShotRequestHandler
         super().__init__(host, port, app, request_handler, passthrough_errors,
@@ -4405,7 +4531,31 @@ class _BoundedThreadWSGIServer(ThreadedWSGIServer):
                                         thread_name_prefix="wsgi-pool")
 
     def process_request(self, request, client_address):
+        # The preview tunnel holds ~200 connections open that never send a
+        # request. A real HTTP client sends its request line immediately after
+        # connect, so the accept loop hands every socket to the pool and lets
+        # the worker check readiness there (in parallel). Doing the check here,
+        # in the single-threaded accept loop, would serialize every idle
+        # connection the tunnel reopens and stall real requests behind them.
         self._pool.submit(self.process_request_thread, request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        # Called on a pool worker (see process_request). Only a connection that
+        # has already received data - a real HTTP request - is worth a handler;
+        # a connection still silent after a short wait is an idle tunnel
+        # keep-alive socket and is closed here before it can consume the
+        # handler's readline loop.
+        try:
+            r, _, _ = select.select([request], [], [], _WORKER_READY_TIMEOUT)
+            if not r:
+                try: request.close()
+                except Exception: pass
+                return
+        except Exception:
+            try: request.close()
+            except Exception: pass
+            return
+        super().process_request_thread(request, client_address)
 
 
 if __name__ == "__main__":
