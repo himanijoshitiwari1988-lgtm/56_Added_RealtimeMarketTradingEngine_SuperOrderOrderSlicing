@@ -586,7 +586,18 @@ def _rebuild_daily_queue():
     _DAILY_FILL_QUEUE = []
     if not _QUOTE_SECURITIES:
         return
-    for seg in ("NSE_EQ",):
+    # Equities (NSE_EQ) and commodity futures (MCX_COMM / NCD_FNO) get the
+    # daily-candle backfill so change / change_pct appear in the watchlist even
+    # after hours, when the WS feed sends no ticks and the REST quote API has no
+    # fresh data. Commodities used to be skipped here entirely, leaving their
+    # sidebar rows stuck at "--" whenever the market was closed or the browser's
+    # async /api/commodities load finished after the first /api/quotes poll.
+    # Commodities are enqueued FIRST: the single fill thread walks the queue
+    # sequentially and every NSE_EQ sid without a close costs one rate-limited
+    # Dhan daily call (~1.5s each), so MCX rows at the tail waited minutes for a
+    # pass to finally reach them. Filling the ~30 commodities up front shows
+    # their change within the first few seconds.
+    for seg in ("MCX_COMM", "NCD_FNO", "NSE_EQ"):
         for sid in _QUOTE_SECURITIES.get(seg, []):
             _DAILY_FILL_QUEUE.append((seg, sid))
     _DAILY_FILL_IDX = 0
@@ -753,7 +764,7 @@ def _daily_fill_loop():
                         entry["close"] != entry["ltp"] and \
                         (time.time() - entry.get("at", 0)) <= 30:
                     continue
-            ltp_d, pc = _last_two_daily(sid, seg, "EQUITY")
+            ltp_d, pc = _last_two_daily(sid, seg, "EQUITY" if seg == "NSE_EQ" else "FUTCOM")
             if pc:
                 ltp = (entry or {}).get("ltp") or ltp_d
                 chg = ltp - pc

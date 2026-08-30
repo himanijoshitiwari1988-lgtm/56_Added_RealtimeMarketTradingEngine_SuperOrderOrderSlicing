@@ -55,7 +55,7 @@
 
   var NIFTY = { name: 'NIFTY 50', id: 13, exch: 'IDX_I', inst: 'INDEX' };
   var POLL_MS = 800;
-  var TREND_REFRESH_MS = 30 * 1000;
+  var TREND_REFRESH_MS = 60 * 1000;
   var OPT_TTL_MS = 120 * 1000;
   var REV_REARM_MS = 90 * 1000;
   var IND_CACHE = new WeakMap();
@@ -74,6 +74,7 @@
     lotSize: null,   // override (null = auto from /api/lot_sizes)
     lots: 1,         // number of lots (quantity = lots x lot size)
     strike: { mode: 'both_atm', count: 3, positiveOnly: true },   // option-strike pick (AST dropdown) + only-+green-premium filter
+    premiumChart: true,   // place trades on the option premium chart (CE/PE); OFF = trade the underlying spot/futures directly
     limitOrder: { enabled: false },  // auto BUY F&O limit above price (~100% fill)
     slMode: 'manual',  // 'auto' = auto stoploss (ATR candle-derived base + hunt guard) / 'manual' = user SL % / 'trail' = ATR base + trailing SL ratchet
     guardBuf: 5,
@@ -176,6 +177,7 @@
         state.strike.count = (Number(j.strike.count) > 0) ? Math.round(Number(j.strike.count)) : 3;
         state.strike.positiveOnly = j.strike.positiveOnly !== false;
       }
+      if (j.premiumChart != null) state.premiumChart = !!j.premiumChart;
       if (j.limitOrder && typeof j.limitOrder === 'object') {
         state.limitOrder.enabled = !!j.limitOrder.enabled;
       }
@@ -197,6 +199,7 @@
         slPct: state.slPct, tpPct: state.tpPct, fixedTp: state.fixedTp,
         margin: state.margin, niftyTf: state.niftyTf, stockTf: state.stockTf,
         lotSize: state.lotSize, lots: state.lots, strike: state.strike,
+        premiumChart: state.premiumChart,
         limitOrder: state.limitOrder,
         enabledStocks: state.stocks.filter(function (s) { return s.enabled; }).map(function (s) { return s.sym.name; })
       }));
@@ -698,6 +701,14 @@
       enterCommodity(stock);
       return;
     }
+    /* Premium chart OFF: trade the underlying equity spot directly instead of
+       resolving an option contract. Side 'CE'/'PE' maps to a plain underlying
+       BUY on the spot (a bullish stock is bought outright; a bearish stock's
+       spot is still bought as a directional long on the underlying). */
+    if (!state.premiumChart) {
+      enterUnderlying(stock, '');
+      return;
+    }
     if (!window.AISmartTrading || typeof AISmartTrading.resolveStockOption !== 'function') return;
     var optKey = stock.sym.name + ':' + side;
     if (state.optInFlight[optKey]) return;
@@ -740,6 +751,16 @@
      quote, sized by the curated MCX lot. Mirrors enterWithOption but the
      executed instrument is the futures spot symbol (no option leg). */
   function enterCommodity(stock) {
+    enterUnderlying(stock, 'FUT');
+  }
+
+  /* Underlying (spot/futures) entry used when "Place trade in option premium
+     chart" is OFF: instead of resolving an option contract and buying the
+     premium, the engine BUYs the underlying itself (equity spot for NSE stocks,
+     the futures contract for commodities). Same sizing / SL / trail as the
+     option path, keyed under the same ntd: position so positions are unique per
+     stock. */
+  function enterUnderlying(stock, label) {
     var sym = stock.sym;
     if (!sym) return;
     var q = quoteForSym(sym);
@@ -771,7 +792,7 @@
       var lp = ntPaper().fnoLimitPrice('BUY', q, fillRef);
       if (lp > 0) fillTxt = lp.toFixed(2);
     }
-    stock.status = ok ? ('BUY ' + sym.name + ' FUT @ ' + fillTxt + (state.limitOrder.enabled ? ' LIMIT' : '')) : ('entry: ' + (ntPaper().lastAutoSkip || 'rejected'));
+    stock.status = ok ? ('BUY ' + sym.name + (label ? ' ' + label : '') + ' @ ' + fillTxt + (state.limitOrder.enabled ? ' LIMIT' : '')) : ('entry: ' + (ntPaper().lastAutoSkip || 'rejected'));
     if (ok) {
       stock._trd = {
         side: 'LONG',
@@ -889,13 +910,17 @@
   function computeActive() {
     var g = sideGroups();
     /* Manual selection only: enabled bull/bear rows (capped per side) plus
-       enabled neutral rows that pass the NIFTY condition gate. */
+       enabled neutral rows that pass the NIFTY condition gate. Every side is
+       ALSO gated on the NIFTY trend-following threshold (tfOk): while the
+       trend filter is ON, a stock below the set daily-change% is dropped from
+       the active set immediately - never traded - exactly like the AST/AE
+       trend-following picker (per-tick prune below the set percentage). */
     for (var j = 0; j < state.stocks.length; j++) state.stocks[j].active = false;
     var bullCap = state.bullCount > 0 ? state.bullCount : Infinity;
     var bearCap = state.bearCount > 0 ? state.bearCount : Infinity;
     var bIdx = 0, rIdx = 0;
-    for (j = 0; j < g.bulls.length; j++) { var b = g.bulls[j]; if (b.enabled && bIdx < bullCap) { b.active = true; bIdx++; } }
-    for (j = 0; j < g.bears.length; j++) { var r = g.bears[j]; if (r.enabled && rIdx < bearCap) { r.active = true; rIdx++; } }
+    for (j = 0; j < g.bulls.length; j++) { var b = g.bulls[j]; if (b.enabled && b.tfOk !== false && bIdx < bullCap) { b.active = true; bIdx++; } }
+    for (j = 0; j < g.bears.length; j++) { var r = g.bears[j]; if (r.enabled && r.tfOk !== false && rIdx < bearCap) { r.active = true; rIdx++; } }
     for (j = 0; j < g.neus.length; j++) { var nn = g.neus[j]; if (nn.enabled && nn.tfOk !== false && condFor(state.nifty.current)) nn.active = true; }
   }
 
@@ -1057,6 +1082,7 @@
     var alertAt = {};
     var tradeAt = {};
     var alertSeq = 0;
+    var _alertInputVal = '';
 
     var TF_SECS = { '1min': 60, '2min': 120, '3min': 180, '4min': 240, '5min': 300, '10min': 600, '15min': 900, '30min': 1800, '1hour': 3600, '4hour': 14400 };
     var ALERT_COLORS = ['#ff5252', '#26a69a', '#7ad7ff', '#ff9800', '#b39ddb', '#ff6b6b', '#ffb300', '#66ccff'];
@@ -1281,10 +1307,10 @@
       if (remaining < targets.length) targets = targets.slice(0, remaining);
       for (var i = 0; i < targets.length; i++) {
         var st = targets[i];
-        st.status = 'BB%b alert ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY bullish' : 'SELL bearish');
+        st.status = 'BB%b alert ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish');
         try { resolveAndEnter(st, side, null); } catch (e) {}
       }
-      toast('BB%b trade alert @ ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY bullish picks' : 'SELL bearish picks') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
+      toast('BB%b trade alert @ ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY CE bullish picks' : 'BUY PE bearish picks') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
     }
     /* "+" button popover: list the pane's alert lines (with remove) + add input. */
     function toggleAlertBox() {
@@ -1345,7 +1371,7 @@
           var opts = [
             ['auto', 'Auto - per NIFTY trend'],
             ['bull', 'Bullish stocks (BUY)'],
-            ['bear', 'Bearish stocks (SELL)']
+            ['bear', 'Bearish stocks (BUY PE)']
           ];
           var curMode = (ln.trade && ln.trade.mode) || 'auto';
           for (var oi = 0; oi < opts.length; oi++) {
@@ -1366,14 +1392,41 @@
         })(alertLines[i]);
       }
       box.appendChild(list);
+      var quickRow = document.createElement('div');
+      quickRow.style.cssText = 'display:flex;gap:4px;margin-bottom:6px';
+      var last = (window.IndChart && IndChart.computeLastTwo) ? IndChart.computeLastTwo('bbpct', settings, 'v0', candles) : null;
+      var lastVal = (last && last.last != null && !isNaN(last.last)) ? fmtV(last.last) : '0.5';
+      /* Quick-add buttons: add a bullish (BUY CE) alert and a bearish (BUY PE)
+         alert side-by-side, so both conditions can be armed together. Each
+         quick alert pre-arms trade execution on its own side. All trades are
+         BUY-side only (buy the CE contract for bullish, buy the PE contract
+         for bearish) - no SELL/short orders exist in this engine. */
+      var quickBtn = function (label, mode, color) {
+        var b = document.createElement('button');
+        b.textContent = label;
+        b.title = 'Add a BB%b alert for the ' + (mode === 'bull' ? 'BULLISH' : 'BEARISH') + ' side (executes trades on this side when crossed)';
+        b.style.cssText = 'flex:1;background:#12122a;border:1px solid ' + color + ';color:' + color + ';border-radius:3px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer';
+        b.onmouseover = function () { b.style.background = color; b.style.color = '#0b0b1a'; };
+        b.onmouseout = function () { b.style.background = '#12122a'; b.style.color = color; };
+        b.onclick = function () {
+          var v = parseFloat(_alertInputVal || inp.value);
+          if (isNaN(v)) v = parseFloat(lastVal);
+          if (isNaN(v)) { inp.focus(); return; }
+          addAlertLine(v, mode);
+        };
+        return b;
+      };
+      quickRow.appendChild(quickBtn('+ BULLISH alert (BUY CE)', 'bull', '#00d4aa'));
+      quickRow.appendChild(quickBtn('+ BEARISH alert (BUY PE)', 'bear', '#ff4d6a'));
+      box.appendChild(quickRow);
       var addRow = document.createElement('div');
       addRow.style.cssText = 'display:flex;gap:4px';
       var inp = document.createElement('input');
       inp.type = 'number'; inp.step = '0.05';
       inp.style.cssText = 'flex:1;min-width:0;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px';
-      var last = (window.IndChart && IndChart.computeLastTwo) ? IndChart.computeLastTwo('bbpct', settings, 'v0', candles) : null;
-      inp.value = (last && last.last != null && !isNaN(last.last)) ? fmtV(last.last) : '0.5';
+      inp.value = (_alertInputVal !== '') ? _alertInputVal : lastVal;
       inp.placeholder = 'Value (e.g. 0.5, 1.0)';
+      inp.addEventListener('input', function () { _alertInputVal = inp.value; });
       var btn = document.createElement('button');
       btn.textContent = '+ Add';
       btn.style.cssText = 'background:#00d4aa;color:#0b0b1a;border:none;border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer';
@@ -1386,9 +1439,17 @@
       addRow.appendChild(inp); addRow.appendChild(btn);
       box.appendChild(addRow);
     }
-    function addAlertLine(price) {
-      if (alertLines.some(function (l) { return Math.abs(Number(l.price) - price) < 1e-9; })) return;
-      alertLines.push({ id: 'al' + (alertSeq++), price: price, color: ALERT_COLORS[alertLines.length % ALERT_COLORS.length], trade: { enabled: false, mode: 'auto' } });
+    function addAlertLine(price, mode) {
+      mode = (mode === 'bull' || mode === 'bear') ? mode : (mode || 'auto');
+      /* Multiple alerts at the SAME price are allowed (e.g. one bullish and one
+         bearish draw-line on the same value) - each line is a separate alert
+         with its own trade side, so no duplicate-price rejection. */
+      alertLines.push({
+        id: 'al' + (alertSeq++),
+        price: price,
+        color: ALERT_COLORS[alertLines.length % ALERT_COLORS.length],
+        trade: mode === 'auto' ? { enabled: false, mode: 'auto' } : { enabled: true, mode: mode }
+      });
       applyAlertLines();
       renderAlertBox();
     }
@@ -1913,11 +1974,41 @@
     /* Daily % change up-to-date + re-sort of the F&O list so any stock that
        moved up into the top / flipped sign shows at its new rank. */
     state._sortDirty = true;
-    var line = '30s refresh @ ' + timeStr() + ' · NIFTY ' + state.nifty.current + ' · chg ' + chgTxt +
+    var line = '60s refresh @ ' + timeStr() + ' · NIFTY ' + state.nifty.current + ' · chg ' + chgTxt +
       ' · ' + fmtNum(performance.now() - t0, 1) + 'ms';
     state.trendRefresh = line;
     setText('ntrTrendRefresh', line);
     console.log('[SmartNTrader]', line);
+  }
+
+  /* Stopped-state status pulse (AST/AE poll-timer port): while the engine is
+     NOT running the NIFTY direction is still computed from the server candle
+     series (available even with the market closed, like AST's niftyBias) so
+     the NIFTY Trend Following fetched-stock list, NIFTY cards and F&O table
+     stay live and visible. tick() already does all of this while running, so
+     this only acts when state.running is false. */
+  function statusPulse() {
+    if (!state.visible || state.running) return;
+    var nk = symKey(NIFTY);
+    if (!state.series[nk] || (Date.now() - (state.seriesAt[nk] || 0)) > TREND_REFRESH_MS) {
+      ensureCandles(NIFTY, state.niftyTf, nk, TREND_REFRESH_MS);
+    }
+    var niftyInd = indicators(state.series[nk]);
+    var niftyTrend = detectNifty(niftyInd);
+    if (niftyTrend && niftyTrend.current !== '...') {
+      state.nifty.overall = niftyTrend.overall;
+      state.nifty.current = niftyTrend.current;
+      state.nifty.reversal = niftyTrend.reversal;
+      state.nifty.bbPct = niftyTrend.bbPct;
+      state.nifty.bb = niftyTrend.bb;
+    }
+    var nq = quoteForSym(NIFTY);
+    if (nq && nq.ltp) {
+      state.nifty.ltp = Number(nq.ltp);
+      state.nifty.chg = nq.change !== undefined ? Number(nq.change) : 0;
+      state.nifty.chgPct = nq.change_pct !== undefined ? Number(nq.change_pct) : 0;
+    }
+    render();
   }
 
   /* ---------------- position reads ---------------- */
@@ -2112,6 +2203,7 @@
     if (tpi) { tpi.disabled = !state.trend.enabled; tpi.style.opacity = state.trend.enabled ? '1' : '0.5'; }
 
     renderStockRows();
+    renderFetched();
     renderPicked();
     renderPositions();
     renderSummary();
@@ -2123,12 +2215,75 @@
      values (LTP, %Chg, score) still update in place every tick, so the table
      stays live without reordering the DOM constantly. */
 
+  /* Fetched-stocks display (AST renderNiftyTrendList port). Shows exactly the
+     stocks the engine currently fetches by whichever method is active:
+       - NIFTY Trend Following ON -> F&O stocks on the live NIFTY trend side
+         whose daily change% is at/above the set threshold (pct for bullish,
+         -pct for bearish), biggest movers first. Green border = currently
+         active (enabled + qualifies + cap slot), dim = qualifies but not
+         enabled so not traded yet.
+       - Trend following OFF -> the manually enabled rows.
+     The list re-renders every tick from the live client quote cache, so a
+     stock that drops below the threshold disappears from the fetched set the
+     same second its quote falls. */
+  var _fetchedHtml = '';
+  function renderFetched() {
+    var box = el('ntrFetched');
+    if (!box) return;
+    var nc = state.nifty.current;
+    var out = '';
+    if (trendFilterActive()) {
+      var thresh = trendPct();
+      var rows = [];
+      for (var i = 0; i < state.stocks.length; i++) {
+        var s = state.stocks[i];
+        if (isCommodity(s.sym)) continue;
+        var chg = dailyChangePct(s);
+        if (isNaN(chg)) continue;
+        var ok = (nc === 'BULL' && chg >= thresh) || (nc === 'BEAR' && chg <= -thresh);
+        if (!ok) continue;
+        rows.push({ s: s, chg: chg });
+      }
+      rows.sort(function (a, b) { return nc === 'BULL' ? b.chg - a.chg : a.chg - b.chg; });
+      if (rows.length) {
+        out = '<div style="font-size:9px;color:' + (nc === 'BULL' ? '#00d4aa' : '#ff4d6a') + ';margin-bottom:2px">NIFTY ' + nc +
+          ' &middot; fetched ' + rows.length + ' F&amp;O stock' + (rows.length === 1 ? '' : 's') + ' with daily change% ' + (nc === 'BULL' ? '&ge; +' : '&le; -') + thresh + '%</div>';
+        for (var r = 0; r < rows.length; r++) {
+          var f = rows[r];
+          var s2 = f.s;
+          var border = s2.active ? '#00d4aa' : '#2d2d50';
+          var col = s2.active ? '#d0d0d0' : '#777';
+          out += '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;background:#12122a;border:1px solid ' + border + ';border-radius:3px;padding:2px 6px;color:' + col + '" title="' + s2.sym.name + ' ' + (f.chg >= 0 ? '+' : '') + f.chg.toFixed(2) + '% daily' + (s2.active ? ' · ACTIVE (traded)' : ' · qualifies, not enabled') + '">' + s2.sym.name +
+            ' <b style="color:' + (f.chg >= 0 ? '#00d4aa' : '#ff4d6a') + '">' + (f.chg >= 0 ? '+' : '') + f.chg.toFixed(2) + '%</b></span>';
+        }
+      } else {
+        out = '<span style="font-size:10px;color:#555">No F&amp;O stocks currently qualify at ' + thresh + '% on NIFTY ' + (nc === 'BULL' || nc === 'BEAR' ? nc.toLowerCase() : 'trend unknown') + ' - lower the threshold or wait for stronger daily moves.</span>';
+      }
+    } else {
+      var list = state.stocks.filter(function (s) { return !!s.enabled; });
+      if (list.length) {
+        out = '<div style="font-size:9px;color:#888;margin-bottom:2px">Trend following OFF - fetching the ' + list.length + ' manually enabled row' + (list.length === 1 ? '' : 's') + ':</div>';
+        for (var m = 0; m < list.length; m++) {
+          var ms = list[m];
+          var mc = dailyChangePct(ms);
+          var border2 = ms.active ? '#00d4aa' : '#2d2d50';
+          var col2 = ms.active ? '#d0d0d0' : '#777';
+          out += '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;background:#12122a;border:1px solid ' + border2 + ';border-radius:3px;padding:2px 6px;color:' + col2 + '">' + ms.sym.name +
+            ' <b style="color:' + (mc >= 0 ? '#00d4aa' : '#ff4d6a') + '">' + (isNaN(mc) ? '--' : (mc >= 0 ? '+' : '') + mc.toFixed(2) + '%') + '</b></span>';
+        }
+      } else {
+        out = '<span style="font-size:10px;color:#555">No stocks fetched yet - check rows in the F&amp;O table or enable NIFTY Trend Following.</span>';
+      }
+    }
+    if (out !== _fetchedHtml) { _fetchedHtml = out; box.innerHTML = out; }
+  }
+
   /* One section for every manually enabled F&O stock + its picked strike.
      Blue chip = open position on that strike, amber = strike resolved but not
      yet in position, gray = still resolving the chain. */
   var _pickedHtml = '';
   function renderPicked() {
-    var box = el('ntrPicked');
+    var box = el('ntrPicked');    var box = el('ntrPicked');
     if (!box) return;
     var list = state.stocks.filter(function (s) { return !!s.enabled; });
     var out = '';
@@ -2480,6 +2635,15 @@
     state.strike.positiveOnly = !!el('ntrGreenOnly').checked;
     saveSettings();
   }
+  function onPremiumChartChange() {
+    state.premiumChart = !!el('ntrPremiumChart').checked;
+    saveSettings();
+    syncPremiumChartUI();
+  }
+  function syncPremiumChartUI() {
+    var pc = el('ntrPremiumChart');
+    if (pc) pc.checked = !!state.premiumChart;
+  }
   function syncGreenUI() {
     var g = el('ntrGreenOnly');
     if (g) g.checked = !!state.strike.positiveOnly;
@@ -2606,6 +2770,7 @@
     state._sortDirty = true;
     setInterval(tick, POLL_MS);
     setInterval(refreshTrendData, TREND_REFRESH_MS);
+    setInterval(statusPulse, POLL_MS);
     NiftyChart.init();
     StrikeChart.init();
     state.visible = true;
@@ -2662,6 +2827,9 @@
     var gr = el('ntrGreenOnly');
     if (gr) { gr.checked = !!state.strike.positiveOnly; gr.addEventListener('change', onGreenOnlyChange); }
     syncGreenUI();
+    var pc = el('ntrPremiumChart');
+    if (pc) { pc.checked = !!state.premiumChart; pc.addEventListener('change', onPremiumChartChange); }
+    syncPremiumChartUI();
     var lo = el('ntrLimitOrder');
     if (lo) { lo.checked = !!state.limitOrder.enabled; lo.addEventListener('change', onLimitOrderChange); }
     syncLimitUI();

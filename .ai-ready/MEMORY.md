@@ -4,6 +4,37 @@
 > quickly. Read this first, then `SESSION.md` / `CHANGELOG.md` for project
 > history.
 
+## Update (2026-08-30)
+
+**Fixed Smart NTrader parity + commodity backfill; backed up to
+`29_Fixed_SmartNTrader_BulishBearishTradeAlert`.**
+- `static/smart_ntrader.js` (served v=46): NIFTY trend-following parity with the
+  AST/AE engines — 60s scan (was 30s), per-tick below-threshold symbol prune,
+  immediate force-exit of open positions that drop below threshold, strict
+  buy-only semantics (bullish = BUY CE, bearish = BUY PE; no SELL/short
+  anywhere), and an always-on `statusPulse()` poller (init `setInterval(...)`)
+  so the Fetched Stocks list keeps showing set-threshold stocks even while the
+  market is closed / engine stopped. Also the `enterUnderlying()` spot-vs-
+  futures entry path + `premiumChart` toggle.
+- `app.py`: commodity daily-candle backfill segments expanded from
+  `("NSE_EQ",)` to `("MCX_COMM", "NCD_FNO", "NSE_EQ")` — commodities enqueued
+  FIRST with `FUTCOM` instrument so commodity change% shows after hours.
+- `static/aismart.js` (v=96) / `static/autoexperiment.v13.js` (v=122): `runIn.comm`
+  accepts `'futures'` (maps to 'spot' for commodities — near-month FUTCOM is the
+  underlying); `isMarketOpenNow()` gate removed from live paths in aismart.
+- `static/final_strategy.js` (+168) / `static/hft_runner.js` (+74) /
+  `static/strategy_container.js` (+3): AST -> Final Strategy save (sendToFinal)
+  + HFT runner additions.
+- `templates/index.html` (+27): AI Smart P&L / Win Rate / Realized P&L summary
+  cards moved to the top of the AI Smart Trading Engine section (`astSummary`,
+  ~line 988).
+- **Backup:** full working tree + `CHANGES_COMPLETE.patch` (all 8 modified
+  files, 540 insertions / 62 deletions) + `CHANGES_SUMMARY.txt` +
+  `BACKUP_README.md` pushed as complete history (4 existing commits + new backup
+  commit) to the new repo
+  `29_Fixed_SmartNTrader_BulishBearishTradeAlert` on GitHub (verified via
+  `git ls-remote`).
+
 ## Update (2026-08-28)
 
 **Tied the chart trail-SL line to the live running-profit line + the Trail SL %

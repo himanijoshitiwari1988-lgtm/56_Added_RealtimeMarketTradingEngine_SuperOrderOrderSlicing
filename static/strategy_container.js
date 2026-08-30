@@ -739,6 +739,7 @@ window.createStrategyContainer = function () {
       : '<span style="color:#00d4aa;font-size:8px;border:1px solid #00d4aa;border-radius:2px;padding:1px 4px;font-weight:700">BULLISH</span>';
     return '<tr>' +
       '<td style="text-align:center"><input type="checkbox" class="sc-sel" data-rid="' + esc(strategyIdentity(s)) + '" onchange="StrategyContainer.selRow(this)" title="Select for pooled paper trading"></td>' +
+      '<td style="text-align:center"><button class="btn-action" style="width:auto;padding:1px 6px;margin:0;font-size:8px;background:#ffd700;color:#0a0a18" onclick="if(window.FinalStrategy)FinalStrategy.saveFromContainer(\'' + esc(strategyIdentity(s)) + '\')" title="Save this strategy to the Final Strategy section (with its win rate, avg/trade, SL / trail SL, timeframe and running settings)">Final</button></td>' +
       '<td style="max-width:190px"><div style="font-weight:700;color:#d0d0d0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(name) + '">' + esc(name) + '</div>' +
         '<div style="font-size:8px;color:#777;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(meta) + refTxt + '</div></td>' +
       '<td>' + badge + '</td>' +
@@ -760,7 +761,7 @@ window.createStrategyContainer = function () {
     }
     return '<div style="margin-top:6px"><div style="font-size:10px;font-weight:700;color:' + color + ';margin:4px 0 2px">' + title + ' Strategies <span style="color:#666;font-weight:400">(' + list.length + ')</span></div>' +
       '<table class="account-table" style="font-size:9px"><thead><tr>' +
-      '<th style="text-align:center" title="Select for pooled paper trading">Sel</th><th>Strategy</th><th>Type</th><th>Trades (W/L)</th><th>Win Rate</th><th>Total P&L</th><th>Avg/Trade</th><th>Days</th><th>Last Day</th><th>Last Day P&L</th><th>Best Day</th><th>PF</th>' +
+      '<th style="text-align:center" title="Select for pooled paper trading">Sel</th><th style="text-align:center" title="Save to Final Strategy section">Final</th><th>Strategy</th><th>Type</th><th>Trades (W/L)</th><th>Win Rate</th><th>Total P&L</th><th>Avg/Trade</th><th>Days</th><th>Last Day</th><th>Last Day P&L</th><th>Best Day</th><th>PF</th>' +
       '</tr></thead><tbody>' + list.map(rowHTML).join('') + '</tbody></table></div>';
   }
 

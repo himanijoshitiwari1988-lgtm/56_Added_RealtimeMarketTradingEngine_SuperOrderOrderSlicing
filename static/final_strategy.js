@@ -175,6 +175,18 @@
     return sum;
   }
 
+  /* Resolve the RAW AST engine-settings snapshot captured while the strategy
+     was running (the exact SL / trail SL / TP / timeframes / run-in settings),
+     so a saved Final Strategy can be re-run with its original settings - the
+     same way the AE -> AST import captures the engine settings at entry time. */
+  function resolveSnapshotFor(st) {
+    const id = astIdFor(st);
+    if (!id) return null;
+    const snap = astSnapshotFor(id);
+    if (!snap) return null;
+    try { return JSON.parse(JSON.stringify(snap)); } catch (e) { return null; }
+  }
+
   /* ---------------- composite score ---------------- */
   function compositeScore(s, maxes) {
     const win = Math.max(0, Math.min(100, Number(s.winRate) || 0));
@@ -235,11 +247,15 @@
           profitFactor: st.profitFactor, score: c.sc
         };
         const settings = resolveSettingsFor(st);
+        const snapshot = resolveSnapshotFor(st);
+        const stratDef = JSON.parse(JSON.stringify(strat || {}));
         if (existing) {
           existing.stats = stats;
           existing.lastUpdated = now;
           if (settings) existing.settings = settings;
           else if (!existing.settings) existing.settings = null;
+          if (snapshot) existing.snapshot = snapshot;
+          if (stratDef && Object.keys(stratDef).length) existing.strategy = stratDef;
         } else {
           byKey.set(key, {
             key: key,
@@ -250,7 +266,10 @@
             symbol: (strat.symbol && strat.symbol.name) || null,
             addedAt: now, lastUpdated: now,
             stats: stats,
-            settings: settings || null
+            settings: settings || null,
+            snapshot: snapshot || null,
+            strategy: (stratDef && Object.keys(stratDef).length) ? stratDef : null,
+            source: 'auto'
           });
         }
       });
@@ -319,6 +338,9 @@
     const settingsChips = set
       ? chip('SL', set.sl, '#ff9800') + chip('TP', set.tp, '#00d4aa') + chip('Lots', set.lots) + chip('Margin', set.margin) + chip('TF', set.tfs)
       : '<span style="font-size:8px;color:#666">no run settings recorded</span>';
+    const srcBadge = s.source && s.source !== 'auto'
+      ? '<span style="font-size:8px;color:#b39ddb;border:1px solid #2d2d50;border-radius:3px;padding:0 4px">' + esc(s.source === 'container' ? 'Container' : (s.source === 'pooled' ? 'Pooled' : (s.source === 'ast' ? 'AST' : 'Manual'))) + '</span>'
+      : '';
     return '<div style="background:#12122a;border:1px solid #2d2d50;border-radius:4px;padding:5px 8px;margin:2px 0;font-size:10px" data-fs-row="' + esc(s.key) + '">' +
       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
         '<input type="checkbox" class="fs-sel" data-fs-key="' + esc(s.key) + '" ' + checked + 'title="Tick to select this strategy">' +
@@ -326,6 +348,7 @@
         '<span style="color:#fff;font-weight:700;flex:1;min-width:110px">' + esc(s.name) +
           (meta ? ' <span style="color:#666;font-weight:400;font-size:9px">· ' + esc(meta) + '</span>' : '') +
         '</span>' +
+        srcBadge +
         '<span style="color:#888;font-size:9px">' + st.trades + ' <span style="color:#666">(' + st.wins + '/' + st.losses + ')</span></span>' +
         '<span style="color:' + wrCls + ';font-weight:700;min-width:44px;text-align:right">' + fmtPct(st.winRate) + '</span>' +
         '<span style="color:' + netCls + ';font-weight:700;min-width:80px;text-align:right">' + fmtMoneySigned(st.totalNet) + '</span>' +
@@ -334,6 +357,7 @@
       '</div>' +
       '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:3px">' + settingsChips +
         '<button data-fs-details="' + esc(s.key) + '" style="background:none;border:1px solid #66ccff;color:#66ccff;border-radius:3px;padding:1px 6px;font-size:8px;cursor:pointer">Settings details</button>' +
+        '<button data-fs-run="' + esc(s.key) + '" title="Send this strategy to the AI Smart Trading engine and run it with its saved settings" style="background:#ffd700;border:none;color:#0a0a18;border-radius:3px;padding:1px 8px;font-size:8px;font-weight:700;cursor:pointer">Run</button>' +
         '<span style="margin-left:auto;font-size:8px;color:#666">score ' + (st.score != null ? st.score : '--') + '</span>' +
       '</div>' +
       '<div class="fs-details" data-fs-detail="' + esc(s.key) + '" style="display:none">' + detailsHTML(s) + '</div>' +
@@ -383,11 +407,18 @@
     });
     host.addEventListener('click', e => {
       const btn = e.target && e.target.closest ? e.target.closest('[data-fs-details]') : null;
-      if (!btn) return;
-      const key = btn.getAttribute('data-fs-details');
-      const hostEl = btn.closest('[data-fs-row]');
-      const detail = hostEl ? hostEl.querySelector('.fs-details') : null;
-      if (detail) detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+      if (btn) {
+        const key = btn.getAttribute('data-fs-details');
+        const hostEl = btn.closest('[data-fs-row]');
+        const detail = hostEl ? hostEl.querySelector('.fs-details') : null;
+        if (detail) detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+        return;
+      }
+      const runBtn = e.target && e.target.closest ? e.target.closest('[data-fs-run]') : null;
+      if (runBtn) {
+        const key = runBtn.getAttribute('data-fs-run');
+        runStrategy(key);
+      }
     });
   }
 
@@ -424,6 +455,128 @@
     render();
   }
 
+  /* ---------------- manual save (Send to Final Strategy) ---------------- */
+  /* Save an explicitly chosen strategy (from the Strategy Container, Pooled
+     Strategy Runner or AST engine) into the Final Strategy section. The entry
+     carries the strategy definition + its raw engine-settings snapshot so it can
+     be re-run later with its ORIGINAL settings (SL / trail SL / TP / timeframes
+     / run-in) - exactly the AE -> AST pattern. */
+  function saveStrategy(payload) {
+    if (!payload || !payload.key) return null;
+    const now = Date.now();
+    const strat = payload.strategy || {};
+    const byKey = new Map(store.strategies.map(x => [x.key, x]));
+    const existing = byKey.get(payload.key);
+    const stats = payload.stats || (existing ? existing.stats : {});
+    let settings = payload.settings || null;
+    let snapshot = payload.snapshot || null;
+    if (!settings && snapshot) settings = summarizeSettings(snapshot);
+    const entry = existing || {};
+    entry.key = payload.key;
+    entry.name = payload.name || (strat.name || 'Strategy').replace(/^AE:\s*/, '');
+    entry.cat = (payload.cat || strat.cat || 'bullish') === 'bearish' ? 'bearish' : 'bullish';
+    entry.method = payload.method || strat.method || '';
+    entry.tf = payload.tf || strat.tf || '';
+    entry.symbol = payload.symbol || (strat.symbol && strat.symbol.name) || null;
+    entry.addedAt = entry.addedAt || now;
+    entry.lastUpdated = now;
+    entry.stats = stats;
+    if (settings) entry.settings = settings;
+    if (snapshot) entry.snapshot = snapshot;
+    if (strat && Object.keys(strat).length) entry.strategy = JSON.parse(JSON.stringify(strat));
+    entry.source = payload.source || 'manual';
+    delete store.excluded[payload.key];
+    byKey.set(payload.key, entry);
+    store.strategies = Array.from(byKey.values());
+    store.strategies.sort((a, b) => (b.stats.score - a.stats.score) || (b.stats.winRate - a.stats.winRate));
+    store.updatedAt = now;
+    save();
+    render();
+    return entry;
+  }
+
+  /* Run a saved Final Strategy in the AI Smart Trading engine with its ORIGINAL
+     settings: apply the captured engine-settings snapshot, then import the
+     strategy definition the same way the AE engine hands a strategy to AST
+     (importFromPaperTrade), which enables + ticks it. */
+  function runStrategy(key) {
+    const entry = store.strategies.find(x => x.key === key);
+    if (!entry) return false;
+    const AST = window.AISmartTrading;
+    if (!AST || typeof AST.importFromPaperTrade !== 'function') {
+      alert('AI Smart Trading engine not ready yet.');
+      return false;
+    }
+    const strat = entry.strategy || {};
+    if (entry.snapshot && typeof AST.applySnapshot === 'function') {
+      try { AST.applySnapshot(JSON.parse(JSON.stringify(entry.snapshot))); } catch (e) {}
+    }
+    const payload = [{
+      key: strat.key || strat.aeKey || ('fs:' + key),
+      name: entry.name || strat.name || 'Final Strategy',
+      cat: entry.cat || strat.cat || 'bullish',
+      method: strat.method || entry.method || '',
+      tf: strat.tf || entry.tf || '5min',
+      score: strat.score || 0,
+      verdict: strat.verdict || 'Moderate',
+      entry: strat.entry || null,
+      exit: strat.exit || null,
+      entryExtra: strat.entryExtra || null,
+      exitExtra: strat.exitExtra || null,
+      entryThreshold: strat.entryThreshold != null ? strat.entryThreshold : null,
+      candlestick: strat.candlestick || { enabled: false, entry: [], exit: [] },
+      refSlPct: (strat.refSlPct != null) ? strat.refSlPct : (strat.autoSlPct != null ? strat.autoSlPct : null),
+      refTrailSlPct: (strat.refTrailSlPct != null) ? strat.refTrailSlPct : null
+    }];
+    let n = 0;
+    try { n = AST.importFromPaperTrade(payload); } catch (e) {}
+    if (n > 0) {
+      if (typeof switchTab === 'function') {
+        try { switchTab('papertrade', document.querySelector('[data-tab="papertrade"]')); } catch (e) {}
+      }
+    } else {
+      alert('Strategy could not be imported into the AI Smart Trading engine (it may already be running).');
+    }
+    return n > 0;
+  }
+
+  /* Save a strategy from the Strategy Container (by its identity key) into the
+     Final Strategy section. Resolves the container's aggregated stats + the AST
+     settings snapshot captured while it ran. */
+  function saveFromContainer(key) {
+    if (!key) return null;
+    if (!window.StrategyContainer || typeof StrategyContainer.computeStats !== 'function') {
+      alert('Strategy Container not ready yet.');
+      return null;
+    }
+    let st = null;
+    try { st = StrategyContainer.computeStats().find(x => x.key === key) || null; } catch (e) { st = null; }
+    if (!st) return null;
+    const strat = st.strat || {};
+    const snapshot = resolveSnapshotFor(st);
+    const settings = resolveSettingsFor(st);
+    return saveStrategy({
+      key: key,
+      name: (strat.name || 'Strategy').replace(/^AE:\s*/, ''),
+      cat: strat.cat === 'bearish' ? 'bearish' : 'bullish',
+      method: strat.method || '',
+      tf: strat.tf || '',
+      symbol: (strat.symbol && strat.symbol.name) || null,
+      stats: {
+        trades: st.trades, wins: st.wins, losses: st.losses,
+        winRate: Math.round(st.winRate * 10) / 10,
+        totalNet: Math.round((st.totalNet || 0) * 100) / 100,
+        avgPerTrade: Math.round((st.avgPerTrade || 0) * 100) / 100,
+        daysTraded: st.daysTraded, lastDay: st.lastDay || null,
+        profitFactor: st.profitFactor
+      },
+      settings: settings || null,
+      snapshot: snapshot || null,
+      strategy: JSON.parse(JSON.stringify(strat || {})),
+      source: 'container'
+    });
+  }
+
   /* ---------------- public API ---------------- */
   const api = {
     scan: scan,
@@ -431,6 +584,9 @@
     toggleSelectAll: toggleSelectAll,
     removeSelected: removeSelected,
     removeAll: removeAll,
+    saveStrategy: saveStrategy,
+    runStrategy: runStrategy,
+    saveFromContainer: saveFromContainer,
     getState: function () { return store; }
   };
   window.FinalStrategy = api;

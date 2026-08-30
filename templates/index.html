@@ -985,6 +985,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <span id="astPerfInfo" style="font-size:9px;color:#888"></span>
             <span style="font-size:9px;color:#666">Tick saved strategies to trade them live with the settings below (no backtest)</span>
           </div>
+          <div id="astSummary" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
           <div class="monitor-toolbar" style="border:1px solid #1e1e40;border-radius:4px;margin:4px 0">
             <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
               <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#b39ddb">Template:</b></div>
@@ -1167,7 +1168,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             </label>
             <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
               <select id="astRunInComm" onchange="AISmartTrading.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-                <option value="spot" selected>Futures contract</option>
+                <option value="spot" selected>Spot chart</option>
+                <option value="futures">Futures contract</option>
                 <option value="premium">Option premium chart</option>
               </select>
             </label>
@@ -1381,7 +1383,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <div class="account-section" id="fsSection" style="flex:1.4;overflow-y:auto;border-top:1px solid #ffd700;margin-top:8px;padding-top:6px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0">
               <h3 style="font-size:11px;color:#ffd700;text-transform:uppercase;margin:0">Final Strategy <span id="fsCount" style="color:#666"></span></h3>
-              <span style="font-size:9px;color:#888">Best performing strategies auto-saved from Paper Trade / Strategy Container / Pooled Strategy Runner</span>
+              <span style="font-size:9px;color:#888">Best performing strategies auto-saved from Paper Trade / Strategy Container / Pooled Strategy Runner — or saved manually via the gold <b>Final</b> button on any running strategy. Use <b>Run</b> on a row to re-run it in the AI Smart Trading engine with its original settings.</span>
             </div>
             <div class="monitor-toolbar" style="border:1px solid #4a3a0a;border-radius:4px;margin:4px 0">
               <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
@@ -1402,7 +1404,6 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <div id="astRunningList"></div>
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Closed AI Smart Trades</h3>
           <div id="astClosedList"></div>
-          <div id="astSummary" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
           <div id="astLog" style="max-height:140px;overflow-y:auto;font-size:9px;color:#888;line-height:1.5;border-top:1px solid #1e1e40;margin-top:6px;padding:6px 8px"></div>
         </div>
       </div>
@@ -1614,7 +1615,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             </label>
             <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
               <select id="aeRunInComm" onchange="AutoExperiment.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-                <option value="spot" selected>Futures contract</option>
+                <option value="spot" selected>Spot chart</option>
+                <option value="futures">Futures contract</option>
                 <option value="premium">Option premium chart</option>
               </select>
             </label>
@@ -1817,7 +1819,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <button class="btn-action" id="ntrToggle" style="width:auto;padding:4px 12px;margin:0;font-size:10px">Start</button>
           <span style="font-size:9px;color:#888" id="ntrStatus">STOPPED</span>
           <span style="flex:1"></span>
-          <span id="ntrTrendRefresh" style="font-size:9px;color:#66ccff">30s refresh --</span>
+          <span id="ntrTrendRefresh" style="font-size:9px;color:#66ccff">60s refresh --</span>
           <span id="ntrTick" style="font-size:9px;color:#666">tick --ms</span>
         </div>
         <div style="display:flex;align-items:center;gap:10px;padding:5px 8px;border-bottom:1px solid #1e1e40;flex-wrap:wrap">
@@ -1865,6 +1867,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           </label>
           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">Number of Strikes <input type="number" id="ntrStrikeCount" value="3" min="0" step="1" title="How many strikes on each side (ATM mode always resolves the single ATM strike)" style="width:44px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"></label>
           <label style="font-size:10px;color:#00d4aa;display:flex;align-items:center;gap:4px" title="Only pick strikes whose premium (LTP) and LTP change are both positive and rising. A strike with minus/zero LTP or a falling/minus LTP change is skipped and the next positive rising strike is chosen instead. OFF = accept any strike including red (minus) premiums."><input type="checkbox" id="ntrGreenOnly" checked> Only +green premium strikes (skip minus LTP / LTP change)</label>
+          <label style="font-size:10px;color:#ffd700;display:flex;align-items:center;gap:4px" title="Place trades on the option premium chart (CE for bullish / PE for bearish). OFF = trade the underlying spot/futures directly instead of an option premium."><input type="checkbox" id="ntrPremiumChart" checked> Place trade in option premium chart</label>
           <label style="font-size:10px;color:#00d4aa;display:flex;align-items:center;gap:4px;border-left:1px solid #2d2d50;padding-left:10px" title="Place every BUY F&O entry as an automatic LIMIT order. The system computes the best marketable limit price - crossing the best ask plus a safety buffer - so the order is fulfilled ~100% of the time and is always ABOVE the current price. OFF = market order at the live price."><input type="checkbox" id="ntrLimitOrder"> BUY F&amp;O Limit Order (auto)</label>
           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">NIFTY TF <select id="ntrNiftyTf" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"><option value="1min">1min</option><option value="5min" selected>5min</option><option value="15min">15min</option></select></label>
           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">Stock TF <select id="ntrStockTf" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"><option value="1min">1min</option><option value="5min" selected>5min</option><option value="15min">15min</option></select></label>
@@ -1977,6 +1980,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               <tbody id="ntrBody"></tbody>
             </table>
           </div>
+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Fetched Stocks <span style="text-transform:none;color:#666;font-weight:normal">(NIFTY trend following / active method)</span></h3>
+          <div id="ntrFetched" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Stocks the engine currently fetches: when NIFTY Trend Following is ON these are the F&O stocks whose live daily change% is at/above the set threshold on the NIFTY trend side; when OFF it is the manually enabled rows. Green border = active (tradable), dim = fetched but not enabled."></div>
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Picked Stocks &amp; Strikes <span style="text-transform:none;color:#666;font-weight:normal">(manual selection)</span></h3>
           <div id="ntrPicked" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Every manually enabled F&O stock and its picked strike. Blue = open position, amber = strike resolved, gray = still resolving."></div>
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
@@ -5518,17 +5523,17 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/aitrades.js?v=1"></script>
 <script src="/static/strategies.js?v=64"></script>
 <script src="/static/papertrade.js?v=28"></script>
-<script src="/static/strategy_container.js?v=14"></script>
-<script src="/static/autoexperiment.v13.js?v=122"></script>
+<script src="/static/strategy_container.js?v=15"></script>
+<script src="/static/autoexperiment.v13.js?v=124"></script>
 <script src="/static/indextrend.js?v=2"></script>
 <script src="/static/simulator.js?v=2"></script>
-<script src="/static/aismart.js?v=93"></script>
+<script src="/static/aismart.js?v=96"></script>
 <script src="/static/paperrun.js?v=16"></script>
 <script src="/static/paperstrategies.js?v=4"></script>
 <script src="/static/hft_pool.js?v=2"></script>
-<script src="/static/hft_runner.js?v=6"></script>
-<script src="/static/final_strategy.js?v=1"></script>
-<script src="/static/smart_ntrader.js?v=40"></script>
+<script src="/static/hft_runner.js?v=7"></script>
+<script src="/static/final_strategy.js?v=2"></script>
+<script src="/static/smart_ntrader.js?v=46"></script>
 <script src="/static/backup.js?v=1"></script>
 <script>
 /* Engine instantiation for the base tabs and every duplicated tab. The cloned

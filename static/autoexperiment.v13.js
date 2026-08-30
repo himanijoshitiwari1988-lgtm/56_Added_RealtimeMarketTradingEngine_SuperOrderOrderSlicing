@@ -2340,11 +2340,14 @@ window.createAutoExperiment = function (suffix) {
       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
       // premium chart) or 'both' (spot + premium). Indices default to 'both',
       // F&O stocks default to 'spot'. Commodities default to the futures
-      // contract ('spot') but honour their own dropdown.
+      // contract ('spot') but honour their own dropdown. Commodities also
+      // accept 'futures' (explicit futures-contract chart, same underlying
+      // near-month FUTCOM chart as 'spot').
       const OK = ['spot', 'premium', 'both'];
+      const COMM_OK = ['spot', 'premium', 'both', 'futures'];
       if (OK.indexOf(s.runIn.index) < 0) s.runIn.index = 'both';
       if (OK.indexOf(s.runIn.fno) < 0) s.runIn.fno = 'spot';
-      if (OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
+      if (COMM_OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
       if (typeof s.runIn.default !== 'boolean') s.runIn.default = false;
     } else if (s) {
       s.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false };
@@ -3718,7 +3721,14 @@ window.createAutoExperiment = function (suffix) {
     // execution chart to the option premium chart for every instrument type.
     if (state.premiumOnly) return 'premium';
     const ri = state.runIn || {};
-    if (isCommodity(symbol)) return (ri && ri.comm) || 'spot';
+    if (isCommodity(symbol)) {
+      const m = (ri && ri.comm) || 'spot';
+      // Commodities have no separate index/equity spot - both "Spot chart" and
+      // "Futures contract" run on the near-month FUTCOM underlying chart, so
+      // 'futures' behaves exactly like 'spot' (the near-month contract is the
+      // commodity's underlying/main chart).
+      return m === 'futures' ? 'spot' : m;
+    }
     if (!isIndex(symbol)) return ri.fno || 'spot';
     return ri.index || 'both';
   }
@@ -4948,14 +4958,6 @@ window.createAutoExperiment = function (suffix) {
     return d.getUTCFullYear() + '-' + (d.getUTCMonth() + 1) + '-' + d.getUTCDate();
   }
 
-  function isMarketOpenNow() {
-    try {
-      const now = Math.floor(Date.now() / 1000);
-      if (typeof isMarketOpen === 'function') return !!isMarketOpen(now);
-    } catch (e) {}
-    return true;
-  }
-
   /* ---- open/close time gates ----
      The "start trading after" and "no trade after" selectors restrict when a
      strategy may open new trades. Candle timestamps are stored as IST wall-clock
@@ -5097,7 +5099,6 @@ window.createAutoExperiment = function (suffix) {
     const u = state.universal;
     if (!liveTimeGateOk()) return 0; // open/close time gate blocks new entries
     if (u && u.aiTrades) {
-      if (!isMarketOpenNow()) return 0; // market open time condition
       aiTradesDecisionFor(candles, liveOICtx(r));
       return null;
     }
@@ -5901,7 +5902,9 @@ window.createAutoExperiment = function (suffix) {
   }
 
   function modeLabel(m) {
-    return m === 'spot' ? 'spot chart' : (m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart');
+    if (m === 'spot') return 'spot chart';
+    if (m === 'futures') return 'futures contract';
+    return m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart';
   }
 
   /* Premium-only mode: a single master toggle that locks the strategy run
@@ -6984,7 +6987,6 @@ window.createAutoExperiment = function (suffix) {
       optionInst,
       allowedTradesFor,
       liveTimeGateOk,
-      isMarketOpenNow,
       aiTrailEngineFor,
       dropAiTrailEngine,
       applyFilters,

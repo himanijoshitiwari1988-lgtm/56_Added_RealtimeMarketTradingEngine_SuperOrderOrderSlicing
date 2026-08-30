@@ -1,11 +1,23 @@
- app.py                       | 301 +++++++++++++++++++++---
- static/aismart.js            | 534 ++++++++++++++++++++++++++++++++++++++-----
- static/autoexperiment.v13.js | 339 +++++++++++++++++++++++----
- static/hft_runner.js         |  33 ++-
- templates/index.html         | 233 +++++++++++++++----
- 5 files changed, 1261 insertions(+), 179 deletions(-)
+CHANGES_SUMMARY for backup (Smart NTrader buy-only/trend-following + AST/AE commodity fixes)
+Generated: 2026-08-30 19:04 UTC
+Diff of uncommitted work against commit 86520e1
+
+ app.py                       |  15 +++-
+ static/aismart.js            |  87 ++++++++++++++++---
+ static/autoexperiment.v13.js |  30 ++++---
+ static/final_strategy.js     | 168 ++++++++++++++++++++++++++++++++++--
+ static/hft_runner.js         |  74 ++++++++++++++++
+ static/smart_ntrader.js      | 198 +++++++++++++++++++++++++++++++++++++++----
+ static/strategy_container.js |   3 +-
+ templates/index.html         |  27 +++---
+ 8 files changed, 540 insertions(+), 62 deletions(-)
+
+--- name-status ---
 M	app.py
 M	static/aismart.js
 M	static/autoexperiment.v13.js
+M	static/final_strategy.js
 M	static/hft_runner.js
+M	static/smart_ntrader.js
+M	static/strategy_container.js
 M	templates/index.html

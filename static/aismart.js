@@ -936,11 +936,14 @@ window.createAISmartTrading = function (suffix) {
       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
       // premium chart) or 'both' (spot + premium). Indices default to 'both',
       // F&O stocks default to 'spot'. Commodities default to the futures
-      // contract ('spot') but honour their own dropdown.
+      // contract ('spot') but honour their own dropdown. Commodities also
+      // accept 'futures' (explicit futures-contract chart, same underlying
+      // near-month FUTCOM chart as 'spot').
       const OK = ['spot', 'premium', 'both'];
+      const COMM_OK = ['spot', 'premium', 'both', 'futures'];
       if (OK.indexOf(s.runIn.index) < 0) s.runIn.index = 'both';
       if (OK.indexOf(s.runIn.fno) < 0) s.runIn.fno = 'spot';
-      if (OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
+      if (COMM_OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
       if (typeof s.runIn.default !== 'boolean') s.runIn.default = false;
     } else if (s) {
       s.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false };
@@ -1188,7 +1191,14 @@ window.createAISmartTrading = function (suffix) {
     // execution chart to the option premium chart for every instrument type.
     if (state.premiumOnly) return 'premium';
     const ri = state.runIn || {};
-    if (isCommodity(symbol)) return (ri && ri.comm) || 'spot';
+    if (isCommodity(symbol)) {
+      const m = (ri && ri.comm) || 'spot';
+      // Commodities have no separate index/equity spot - both "Spot chart" and
+      // "Futures contract" run on the near-month FUTCOM underlying chart, so
+      // 'futures' behaves exactly like 'spot' (the near-month contract is the
+      // commodity's underlying/main chart).
+      return m === 'futures' ? 'spot' : m;
+    }
     if (!isIndex(symbol)) return ri.fno || 'spot';
     return ri.index || 'both';
   }
@@ -2845,13 +2855,6 @@ window.createAISmartTrading = function (suffix) {
     if (minute >= t) { _autoSquareOffDoneDay = day; return true; }
     return false;
   }
-  function isMarketOpenNow() {
-    try {
-      const now = Math.floor(Date.now() / 1000);
-      if (typeof isMarketOpen === 'function') return !!isMarketOpen(now);
-    } catch (e) {}
-    return true;
-  }
   function resetTradeCountsIfNewDay() {
     const day = istDay();
     if (day !== state.tradeCountDay) {
@@ -2901,7 +2904,6 @@ window.createAISmartTrading = function (suffix) {
     const u = state.universal;
     if (!liveTimeGateOk()) return 0;
     if (u && u.aiTrades) {
-      if (!isMarketOpenNow()) return 0;
       const r = { key: s.id, optionSid: instr.kind === 'option' ? instr.sid : null, symbol: instr.symbol };
       aiTradesDecisionFor(candles, liveOICtx(r));
       return null;
@@ -3028,7 +3030,7 @@ window.createAISmartTrading = function (suffix) {
     const ptState = pt.getState ? pt.getState() : null;
     const autoPositions = (ptState && ptState.autoPositions) || {};
     if (!(u && u.hft)) return;
-      if (!liveTimeGateOk() || !isMarketOpenNow()) return;
+      if (!liveTimeGateOk()) return;
       const strategies = activeStrategies();
       if (!strategies.length) return;
       const instruments = hftInstruments();
@@ -3852,7 +3854,9 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function modeLabel(m) {
-    return m === 'spot' ? 'spot chart' : (m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart');
+    if (m === 'spot') return 'spot chart';
+    if (m === 'futures') return 'futures contract';
+    return m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart';
   }
 
   /* Premium-only mode: a single master toggle that locks the strategy run
@@ -4622,6 +4626,7 @@ window.createAISmartTrading = function (suffix) {
       '<span style="color:#fff;flex:1">' + esc(s.name) + (s.tf ? ' <span style="color:#666">· ' + esc(s.tf) + '</span>' : '') + '</span>' +
       '<span style="color:#888;min-width:46px;text-align:right">' + esc(gLabel) + '</span>' +
       '<span style="color:' + (isActive ? '#00d4aa' : '#555') + ';min-width:52px;text-align:right;font-weight:700">' + (isActive ? 'ACTIVE' : 'IDLE') + '</span>' +
+      '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ffd700;color:#0a0a18" onclick="AISmartTrading.sendToFinal(\'' + esc(s.id) + '\')" title="Save this strategy to the Final Strategy section with its settings">Final</button>' +
       '</div>';
   }
 
@@ -4737,6 +4742,7 @@ window.createAISmartTrading = function (suffix) {
         '<span style="color:#fff;flex:1">' + esc(s.name) + (s.tf ? ' <span style="color:#666">· ' + esc(s.tf) + '</span>' : '') + '</span>' +
         '<span style="color:' + vCol + ';min-width:36px;text-align:right">' + (s.score || 0) + '</span>' +
         '<span style="color:#888;min-width:40px;text-align:right;font-size:9px">' + tag + '</span>' +
+        '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ffd700;color:#0a0a18" onclick="AISmartTrading.sendToFinal(\'' + esc(s.id) + '\')" title="Save this strategy to the Final Strategy section with its settings">Final</button>' +
         '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px" onclick="AISmartTrading.openChart(\'' + esc(s.id) + '\')">Open Chart</button>' +
         '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ef5350;color:#fff" onclick="AISmartTrading.' + removeFn + '(\'' + esc(s.id) + '\')">Remove</button>' +
         '</div>';
@@ -5166,6 +5172,56 @@ window.createAISmartTrading = function (suffix) {
     render();
   }
 
+  /* Save an AST-engine strategy (saved / imported / manual / AI-pick) into the
+     Final Strategy section. Captures the strategy definition + a raw snapshot of
+     the engine settings currently applied, so it can be re-run later with its
+     original SL / trail SL / TP / timeframes / run-in settings - the same way
+     the AE engine hands a strategy to AST. */
+  function sendToFinal(id) {
+    if (!window.FinalStrategy || typeof FinalStrategy.saveStrategy !== 'function') {
+      log('Final Strategy module not ready', 'warn');
+      return null;
+    }
+    let s = null;
+    const saved = loadSaved().find(x => String(x.id) === String(id));
+    const imported = (state.imported || []).find(x => String(x.id) === String(id));
+    const manual = (state.manual || []).find(x => String(x.id) === String(id));
+    const aiPick = (state.aiPicks || []).find(x => String(x.id) === String(id));
+    s = saved || imported || manual || aiPick;
+    if (!s) { log('Strategy not found: ' + id, 'warn'); return null; }
+    setSettingsFor(id);
+    const snapshot = state.settingsSnapshots ? state.settingsSnapshots[id] : null;
+    const closed = (state.closed || []).filter(t => t && t.strategyId != null && String(t.strategyId) === String(id));
+    let wins = 0, losses = 0, net = 0;
+    closed.forEach(t => {
+      const p = (t.netPnl != null) ? Number(t.netPnl) : Number(t.pnl || 0);
+      net += p;
+      if (p > 0) wins++; else if (p < 0) losses++;
+    });
+    const entry = FinalStrategy.saveStrategy({
+      key: 'ast:' + id,
+      name: (s.name || 'Strategy').replace(/^AE:\s*/, ''),
+      cat: s.cat === 'bearish' ? 'bearish' : 'bullish',
+      method: s.method || '',
+      tf: s.tf || '',
+      symbol: (s.symbol && s.symbol.name) || null,
+      stats: {
+        trades: closed.length, wins: wins, losses: losses,
+        winRate: closed.length ? Math.round((wins / closed.length) * 1000) / 10 : 0,
+        totalNet: Math.round(net * 100) / 100,
+        avgPerTrade: closed.length ? Math.round((net / closed.length) * 100) / 100 : 0,
+        daysTraded: 0, lastDay: null,
+        profitFactor: null
+      },
+      settings: null,
+      snapshot: snapshot ? JSON.parse(JSON.stringify(snapshot)) : null,
+      strategy: JSON.parse(JSON.stringify(s || {})),
+      source: 'ast'
+    });
+    if (entry) log('"' + entry.name + '" saved to Final Strategy', 'ok');
+    return entry;
+  }
+
   /* Remove strategies from the saved strategy library (localStorage), either all
      of one category or only the ticked ones. Also drops them from the selected
      lists, untracks them from state.selected and squares off any open position
@@ -5497,6 +5553,11 @@ window.createAISmartTrading = function (suffix) {
     /* Engine-settings snapshot captured while a strategy was running
        (strategyId -> { capturedAt, settings }), for the Final Strategy panel. */
     getSettingsSnapshot(id) { return (state.settingsSnapshots && id != null) ? state.settingsSnapshots[id] : null; },
+    /* Re-apply a captured engine-settings snapshot (SL / trail SL / TP /
+       timeframes / run-in) so a saved Final Strategy runs with its original
+       settings - the same restore path the saved templates use. */
+    applySnapshot(snap) { try { applyEngineSettings(snap); return true; } catch (e) { return false; } },
+    sendToFinal(id) { return sendToFinal(id); },
     experimentSymbols() { return experimentSymbols(); },
     chainRateLimited(s) { return chainRateLimited(s); },
     /* Resolve the tradeable instruments for a list of template symbols, exactly

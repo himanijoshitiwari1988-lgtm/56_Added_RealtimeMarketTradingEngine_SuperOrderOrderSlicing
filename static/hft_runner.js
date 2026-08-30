@@ -257,6 +257,13 @@
     };
     wrap.appendChild(det);
 
+    var fin = document.createElement('button');
+    fin.textContent = 'Final';
+    fin.title = 'Save this pooled strategy to the Final Strategy section (with its win rate, avg/trade, SL / trail SL, timeframe and running settings)';
+    fin.style.cssText = 'background:#ffd700;color:#0a0a18;border:none;border-radius:3px;cursor:pointer;padding:2px 6px;font-size:9px;font-weight:700';
+    fin.onclick = function () { sendToFinal(tab, row); };
+    wrap.appendChild(fin);
+
     var close = document.createElement('button');
     close.textContent = 'close';
     close.title = 'Square off this row\'s open positions';
@@ -645,6 +652,72 @@
     renderList(tab);
   }
 
+  /* Save a pooled-runner row into the Final Strategy section. Captures the
+     row's own trade settings (lots / margin / TP / SL / trail SL / timeframes /
+     instruments) as a raw engine-settings snapshot so the saved strategy can be
+     re-run with the exact settings it used on this row. */
+  function sendToFinal(tab, row) {
+    if (!window.FinalStrategy || typeof FinalStrategy.saveStrategy !== 'function') {
+      alert('Final Strategy module not ready yet.');
+      return null;
+    }
+    if (!row) return null;
+    var rmap = resultsMap();
+    var r = resolveStrategy(row, rmap);
+    if (!r && !row.strategy) {
+      alert('Strategy definition not found for this row.');
+      return null;
+    }
+    var stats = rowStats(tab, row);
+    var tf = row.tf || (r && r.tf) || '5min';
+    var tfs = {};
+    tfs[tf] = true;
+    var symbols = resolveSymbols(row, r);
+    var snapshot = {
+      universal: {
+        lots: row.lots || 1,
+        margin: row.margin || 0,
+        manualSL: true,
+        manualSLPct: Number(row.slPct) || 0,
+        manualTrailSL: true,
+        manualTrailSLPct: Number(row.slTrailPct) || 0,
+        manualTP: Number(row.tpPct) > 0,
+        manualTPPct: Number(row.tpPct) || 0,
+        tfs: tfs,
+        fnoLimit: row.fnoLimit !== false
+      },
+      strike: {},
+      runIn: {},
+      tradeIn: {},
+      premiumOnly: false,
+      filters: {},
+      capturedAt: Date.now()
+    };
+    var strat = row.strategy || r || {};
+    var entry = FinalStrategy.saveStrategy({
+      key: rowKeyFor(tab, row) + (strat.aeKey ? ':' + strat.aeKey : ''),
+      name: (strat.name || 'Pooled Strategy').replace(/^AE:\s*/, ''),
+      cat: (strat.cat === 'bearish') ? 'bearish' : 'bullish',
+      method: strat.method || '',
+      tf: tf,
+      symbol: (symbols && symbols[0] && symbols[0].name) || (strat.symbol && strat.symbol.name) || null,
+      stats: {
+        trades: stats.trades, wins: stats.wins, losses: stats.losses,
+        winRate: stats.winRate == null ? 0 : Math.round(stats.winRate * 10) / 10,
+        totalNet: Math.round((stats.realized || 0) * 100) / 100,
+        avgPerTrade: stats.trades ? Math.round(((stats.realized || 0) / stats.trades) * 100) / 100 : 0,
+        daysTraded: 0, lastDay: null,
+        profitFactor: null
+      },
+      settings: null,
+      snapshot: snapshot,
+      strategy: JSON.parse(JSON.stringify(strat || {})),
+      source: 'pooled'
+    });
+    if (entry) alert('"' + entry.name + '" saved to Final Strategy.');
+    return entry;
+  }
+
   function closePosition(btnEl) {
     var rowEl = btnEl.closest('.hft-row');
     if (!rowEl) return;
@@ -706,6 +779,7 @@
     bulkAddStrategies: bulkAddStrategies,
     removeStrategy: removeStrategy,
     closePosition: closePosition,
+    sendToFinal: sendToFinal,
     refreshSelects: refreshSelects,
     init: init,
     jobs: jobs,
