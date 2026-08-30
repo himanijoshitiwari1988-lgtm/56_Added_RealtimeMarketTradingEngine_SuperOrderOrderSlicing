@@ -315,7 +315,19 @@
           try {
             candles = await this.fetchOptionCandles(lstate.security_id, lstate.exchange_segment, lstate.instrument_type || 'OPTIDX', st.tf);
           } catch (e) { continue; }
-          if (!candles || candles.length < 3) continue;
+          if (!candles || candles.length < 3) {
+            /* Premium chart candles unavailable (new/illiquid strike, feed gap):
+               fall back to the underlying strategy chart so the strategy still
+               evaluates its indicators and still trades this leg instead of
+               skipping it. */
+            try {
+              candles = await this.fetchCandles(st);
+            } catch (e) { candles = []; }
+            if (!candles || candles.length < 3) continue;
+            lstate.fallbackCandles = true;
+          } else {
+            lstate.fallbackCandles = false;
+          }
           lstate.candles = candles;
           const entryEdge = this.evalCondEdge(st.entry, candles, lstate.entrySig);
           const exitEdge = (st.exit && st.exit.indId) ? this.evalCondEdge(st.exit, candles, lstate.exitSig) : false;
@@ -327,7 +339,7 @@
           if (!lstate.inPosition) {
             const canEnter = entryEdge && ((!st.entry.gap || !st.entry.gap.enabled) || entryGap) && candleEntryOk && icOk;
             if (canEnter) {
-              StratUI.log(state.id, 'ENTRY ' + lstate.strike + ' ' + lstate.leg + ' [option premium chart]', 'entry');
+              StratUI.log(state.id, 'ENTRY ' + lstate.strike + ' ' + lstate.leg + (lstate.fallbackCandles ? ' [underlying chart - premium candles missing]' : ' [option premium chart]'), 'entry');
               const res = await this.placeOrder(lstate, 'BUY', lstate.qty);
               StratUI.log(state.id, 'Order: ' + JSON.stringify(res.data || res), 'trade');
               lstate.inPosition = true;
@@ -336,7 +348,7 @@
           } else {
             const exitCondMet = exitEdge && ((!st.exit.gap || !st.exit.gap.enabled) || exitGap);
             if (this.signalExitAllowed(st) && (exitCondMet || candleExitSig)) {
-              StratUI.log(state.id, 'EXIT ' + lstate.strike + ' ' + lstate.leg + ' [option premium chart]', 'exit');
+              StratUI.log(state.id, 'EXIT ' + lstate.strike + ' ' + lstate.leg + (lstate.fallbackCandles ? ' [underlying chart - premium candles missing]' : ' [option premium chart]'), 'exit');
               const res = await this.placeOrder(lstate, 'SELL', lstate.qty);
               StratUI.log(state.id, 'Exit order: ' + JSON.stringify(res.data || res), 'trade');
               lstate.inPosition = false;

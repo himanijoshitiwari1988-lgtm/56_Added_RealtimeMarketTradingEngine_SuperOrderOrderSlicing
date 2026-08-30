@@ -6,6 +6,37 @@
 
 ## Update (2026-08-30)
 
+**Premium-chart candle fallback (all engines): strategy never skips when the
+run-in option premium chart has no candles.** When a strategy runs in Premium
+mode ("Run Strategy In" = option premium chart) and the premium candles are
+missing/unavailable, every engine now falls back to the underlying/spot chart so
+the strategy still evaluates its indicators AND still executes the trade instead
+of skipping the instrument:
+- `static/aismart.js` (v=97): `candlesForInstrument` no longer returns null for
+  indices/premium-only when option candles are unavailable — it sets
+  `_candleFbk[instrumentId]` and returns the underlying spot candles;
+  `executionSymbolsFor`/`hftTargetsFor` return `[underlying]` while the fallback
+  flag is set so the paper trade executes on the underlying (live-quote fill);
+  flag clears automatically once the premium candles come back. Fast path
+  `hftCandlesFor` mirrors the same fallback against `SE.candleCache`.
+- `static/hft_runner.js` (v=8): pooled runner "no candle data" branch now falls
+  back to the underlying spot chart (via `resolveOptionSymbols`' `spotId` →
+  original template symbol) and executes the pooled BUY on the underlying,
+  tagged `[premium chart missing]`. `_noChain` index guard unchanged (raw index
+  notional can't fit margin).
+- `static/strategies.js` (v=65): container `indexTick` option leg with `<3`
+  premium candles falls back to `fetchCandles(st)` (underlying strategy chart)
+  and still evaluates + trades the leg; entry/exit logs tagged
+  `[underlying chart - premium candles missing]`.
+- `static/autoexperiment.v13.js` (v=125): AE backtest no longer skips symbols /
+  strikes with a missing option chain or `oc.length < 60` — premium/both run-in
+  falls back to a `premiumFbk` unit that backtests on the underlying chart
+  (`runBasis='underlying'`, expanded into per-strike contracts downstream).
+- Invariant preserved: index raw-notional margin guard (`_noChain`) unchanged;
+  premium trades still price on the option contract wherever its data exists.
+
+## Update (2026-08-30)
+
 **Fixed Smart NTrader parity + commodity backfill; backed up to
 `29_Fixed_SmartNTrader_BulishBearishTradeAlert`.**
 - `static/smart_ntrader.js` (served v=46): NIFTY trend-following parity with the

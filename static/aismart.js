@@ -82,6 +82,12 @@ window.createAISmartTrading = function (suffix) {
   const _contractsCache = new Map();
   const _CONTRACTS_CACHE_MS = 120 * 1000;
   const _CACHE_MAX = 3000;
+  /* Premium-chart candle fallback: set per instrument when its run-in option
+     premium chart has no candles. While set, the strategy evaluates its
+     indicators on the underlying/spot chart AND executes on the underlying so
+     the instrument is never skipped on a missing premium chart. Cleared as soon
+     as the premium candles come back. */
+  const _candleFbk = {};
   /* Client-side option-chain rate-limit backoff. Dhan limits the option-chain
      surface independently of the chart surface; when /api/auto_strikes answers
      "Rate limited" the engine backs off ~30s before trying again instead of
@@ -2693,6 +2699,10 @@ window.createAISmartTrading = function (suffix) {
   async function executionSymbolsFor(instr) {
     const sym = instr.symbol;
     if (!sym) return [];
+    // Premium-chart candle fallback active: the run-in premium chart has no
+    // candles so the strategy evaluates on the underlying chart - execute on
+    // the underlying as well so the trade is never skipped.
+    if (_candleFbk[instrumentId(instr)]) return [sym];
     const tiMode = tradeInMode(sym);
     if (tiMode === 'spot') return [sym];
     if (instr.kind === 'option') {
@@ -2757,12 +2767,18 @@ window.createAISmartTrading = function (suffix) {
       const optSym = { id: Number(instr.sid), exch: optionExch(instr.symbol), inst: optionInst(instr.symbol), name: (instr.symbol.name || '') };
       try {
         const c = await SE.fetchCandlesFor(optSym, tf);
-        if (c && c.length >= 10) return c;
+        if (c && c.length >= 10) {
+          // Premium chart is back - resume premium evaluation/execution.
+          delete _candleFbk[instrumentId(instr)];
+          return c;
+        }
       } catch (e) {}
-      // Indices, and F&O stocks under premium-only mode, wait for the premium
-      // chart - they never downgrade to the spot chart. F&O stocks outside
-      // premium-only still fall back to spot (their default run chart).
-      if (isIndex(instr.symbol) || state.premiumOnly) return null;
+      // Premium chart candles are unavailable (new/illiquid strike, feed gap).
+      // Fall back to the underlying/spot chart so the strategy still evaluates
+      // its indicators and the trade still executes instead of the instrument
+      // being skipped. Execution targets are switched to the underlying too.
+      if (!_candleFbk[instrumentId(instr)]) log('Option premium candles unavailable for ' + displayName(instr.symbol) + ' - falling back to underlying chart', 'warn');
+      _candleFbk[instrumentId(instr)] = 1;
     }
     if (instr.kind === 'both') {
       // Combined run-in instrument: the primary run chart is the underlying
@@ -2967,7 +2983,23 @@ window.createAISmartTrading = function (suffix) {
       key = sym.id + ':' + (sym.exch || '') + ':' + tf + ':0';
     }
     const hit = cache[key];
-    return (hit && hit.candles && hit.candles.length >= 10) ? hit.candles : null;
+    if (hit && hit.candles && hit.candles.length >= 10) {
+      // Premium chart is back - resume premium evaluation/execution.
+      delete _candleFbk[instrumentId(instr)];
+      return hit.candles;
+    }
+    // Premium-chart candles unavailable on the fast path: fall back to the
+    // underlying/spot chart so the strategy still evaluates instead of the
+    // instrument being skipped. Execution targets switch to the underlying too.
+    if (instr.kind === 'option') {
+      if (!_candleFbk[instrumentId(instr)]) log('Option premium candles unavailable for ' + displayName(instr.symbol) + ' - falling back to underlying chart', 'warn');
+      _candleFbk[instrumentId(instr)] = 1;
+      const sym = instr.symbol;
+      const sKey = sym.id + ':' + (sym.exch || '') + ':' + tf + ':0';
+      const sHit = cache[sKey];
+      return (sHit && sHit.candles && sHit.candles.length >= 10) ? sHit.candles : null;
+    }
+    return null;
   }
 
   function hftConfirmCandlesFor(instr, tf, SE) {
@@ -2986,6 +3018,9 @@ window.createAISmartTrading = function (suffix) {
   function hftTargetsFor(instr) {
     const sym = instr.symbol;
     if (!sym) return [];
+    // Premium-chart candle fallback active: execute on the underlying so the
+    // trade is not skipped while the premium chart has no candles.
+    if (_candleFbk[instrumentId(instr)]) return [sym];
     const tiMode = tradeInMode(sym);
     if (tiMode === 'spot') return [sym];
     if (instr.kind === 'option') {

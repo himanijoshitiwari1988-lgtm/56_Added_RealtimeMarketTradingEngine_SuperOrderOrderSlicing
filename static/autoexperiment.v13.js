@@ -4425,8 +4425,13 @@ window.createAutoExperiment = function (suffix) {
       // underlying and report spot-based P&L).
       if (riMode === 'both') {
         if (!contracts || !contracts.length) {
-          log('No option chain for ' + displayName(sym) + ' - skipping (both run needs spot + premium, trade executes on the premium chart)', 'warn');
-          return { sym, underlyingByTf, spot, contracts: [] };
+          /* No option chain (rate-limited / filtered away): the premium chart is
+             unavailable, so fall back to the underlying chart so the strategy
+             still backtests on its indicators instead of the symbol being
+             skipped. The fallback result is priced on the underlying and later
+             expanded into per-strike contracts. */
+          log('No option chain for ' + displayName(sym) + ' - falling back to underlying chart backtest (premium candles unavailable)', 'warn');
+          return { sym, underlyingByTf, spot, contracts: [], ocList: [], premiumFbk: true };
         }
         const ocList = await tfPool(contracts, 2, async (c) => {
           const ocByTf = {};
@@ -4449,8 +4454,12 @@ window.createAutoExperiment = function (suffix) {
       // when "Trade should be executed in" is the option premium chart (the
       // default for both F&O stocks and indices).
       if (!contracts || !contracts.length) {
-        log('No option chain for ' + displayName(sym) + ' - skipping (backtest trades must execute on the option premium chart)', 'warn');
-        return { sym, underlyingByTf, spot, contracts: [] };
+        /* No option chain / premium candles for this symbol: fall back to the
+           underlying chart so the strategy still backtests on its indicators
+           instead of the symbol being skipped. The fallback result is priced on
+           the underlying and later expanded into per-strike contracts. */
+        log('No option chain for ' + displayName(sym) + ' - falling back to underlying chart backtest (premium candles unavailable)', 'warn');
+        return { sym, underlyingByTf, spot, contracts: [], ocList: [], premiumFbk: true };
       }
       const ocList = await tfPool(contracts, 2, async (c) => {
         const ocByTf = {};
@@ -4477,9 +4486,10 @@ window.createAutoExperiment = function (suffix) {
         for (const t of tfs) if (it.underlyingByTf[t] && it.underlyingByTf[t].length >= 60) a++;
         return a;
       }
-      if (it.spotRun || tradeInMode(it.sym) === 'spot') {
-        /* Spot-trade symbols (MCX commodities): the backtest executes directly
-           on the underlying futures/spot chart - one unit per timeframe. */
+      if (it.spotRun || tradeInMode(it.sym) === 'spot' || it.premiumFbk) {
+        /* Spot-trade symbols (MCX commodities) and premium-chart fallback units
+           backtest directly on the underlying futures/spot chart - one unit per
+           timeframe. */
         for (const t of tfs) if (it.underlyingByTf[t] && it.underlyingByTf[t].length >= 60) a++;
         return a;
       }
@@ -4573,6 +4583,26 @@ window.createAutoExperiment = function (suffix) {
         }
         continue;
       }
+      if (it.premiumFbk) {
+        /* Premium chart unavailable (no option chain / no premium candles):
+           run the backtest on the underlying chart so the strategy still tests
+           on its indicators instead of the symbol being skipped. The fallback
+           result is priced on the underlying and expanded per-strike later. */
+        let loaded = 0;
+        for (const t of tfs) {
+          const u = underlyingByTf[t];
+          if (!u || u.length < 60) continue;
+          const tradeCandles = btSlice(u);
+          progressBacktest('Testing ' + nTpl + ' templates on ' + displayName(sym) + ' (underlying fallback - premium candles unavailable, ' + t + ')...');
+          loaded++;
+          await runOnCandles(sym, tradeCandles, spot, null, t, 'underlying', null, unitTick);
+        }
+        if (loaded === 0) {
+          skipped++;
+          log('No candles for ' + displayName(sym) + ' - skipping (premium fallback)', 'warn');
+        }
+        continue;
+      }
       if (!it.contracts || !it.contracts.length || !it.ocList || !it.ocList.length) {
         skipped++;
         log('Skipping ' + displayName(sym) + ': no option chain/premium candles (backtest trades must execute on the option premium chart)', 'warn');
@@ -4590,8 +4620,23 @@ window.createAutoExperiment = function (suffix) {
         let tfLoaded = 0;
         for (const t of tfs) {
           const oc = ocByTf[t];
-          if (!oc || oc.length < 60) continue;
           const underlying = underlyingByTf[t];
+          if (!oc || oc.length < 60) {
+            /* Premium candles unavailable for this strike: fall back to the
+               underlying chart so the strategy still backtests on its
+               indicators instead of the strike being skipped. Signals and trade
+               pricing both run on the underlying; the result is expanded into
+               per-strike contracts later. Spot run-in signals (F&O stocks) still
+               need premium candles to price the option trade, so those wait. */
+            if (riMode === 'spot') continue;
+            if (!underlying || underlying.length < 60) continue;
+            const tradeCandles = btSlice(underlying);
+            progressBacktest('Testing ' + nTpl + ' templates on ' + displayName(sym) + ' ' + c.strike + ' ' + c.optionType + ' (' + t + ', underlying fallback - premium candles unavailable)...');
+            tfLoaded++;
+            loaded++;
+            await runOnCandles(sym, tradeCandles, spot, null, t, 'underlying', { signalCandles: [tradeCandles], tradeCandles }, unitTick);
+            continue;
+          }
           const tradeCandles = btSlice(oc);
           let signalCandles = null;
           if (riMode === 'spot') {

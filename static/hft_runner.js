@@ -440,6 +440,14 @@
     var eng = engineFor(tab);
     var rowKey = rowKeyFor(tab, row) + strategyKeyPart(row, r);
     if (statusEl) { statusEl.textContent = effSymbols.length + ' instruments · ' + tf; statusEl.style.color = '#888'; }
+    var origById = {};
+    symbols.forEach(function (s0) { if (s0 && s0.id != null) origById[String(s0.id)] = s0; });
+    function underlyingSpotFor(symbol) {
+      if (!symbol || symbol.spotId == null) return null;
+      var o = origById[String(symbol.spotId)];
+      if (o) return o;
+      return { id: Number(symbol.spotId), exch: symbol.spotExch || symbol.exch, inst: 'INDEX', name: symbol.name };
+    }
     effSymbols.forEach(function (symbol) {
       var symKey = String(symbol.id) + ':' + (symbol.exch || '');
       /* Index symbol whose option chain could not be resolved (rate-limited /
@@ -452,15 +460,15 @@
         if (stNC) { stNC.textContent = 'option chain unavailable - retrying'; stNC.style.color = '#ff9800'; }
         return;
       }
-      HftPool.getCandles(symbol, tf).then(function (candles) {
+      /* Evaluate the entry signal on the given candle series and, when it fires,
+         place the pooled paper BUY on the given execution symbol. execSymbol is
+         the option contract normally, or the underlying spot symbol when the
+         premium chart has no candles (fallback path). */
+      function trySignal(candles, execSymbol, isFbk) {
         var st = statusEl;
-        if (!candles || !candles.length) {
-          if (st) { st.textContent = 'no candle data for ' + (symbol.name || symbol.id) + ' - retrying'; st.style.color = '#ef5350'; }
-          return;
-        }
         var lastTs = candles[candles.length - 1].time || 0;
         var signal = HftPool.evalEntry(r, candles);
-        var q = HftPool.quote(symbol);
+        var q = HftPool.quote(execSymbol);
         var ltp = q ? q.ltp : null;
         var fired = row.firedBars ? row.firedBars[symKey] : 0;
         if (signal && lastTs !== (fired || 0)) {
@@ -472,8 +480,8 @@
              pooled trade can never exceed the margin the template assigns. The
              engine itself re-checks against its live used-margin, so capping
              here just picks the largest whole lots that fit before the call. */
-          var fillRef = ltp || (symbol.premium != null ? Number(symbol.premium) : 0);
-          var lotSz = (eng.lotSizeFor) ? (Number(eng.lotSizeFor(symbol)) || 1) : 1;
+          var fillRef = ltp || (execSymbol.premium != null ? Number(execSymbol.premium) : 0);
+          var lotSz = (eng.lotSizeFor) ? (Number(eng.lotSizeFor(execSymbol)) || 1) : 1;
           var marginAvail = (row.margin > 0) ? row.margin : ((eng && typeof eng.getTradeSettings === 'function' && eng.getTradeSettings()) ? (Number(eng.getTradeSettings().margin) || 0) : 0);
           var lotsN = Math.max(1, Math.round(Number(row.lots) || 1));
           if (fillRef > 0 && lotSz > 0 && marginAvail > 0) {
@@ -482,8 +490,8 @@
           }
           var opts = {
             key: rowKey,
-            posKey: posKeyFor(symbol, tab, row),
-            symbol: symbol,
+            posKey: posKeyFor(execSymbol, tab, row),
+            symbol: execSymbol,
             lots: lotsN,
             margin: marginAvail,
             tpPct: row.tpPct || 0,
@@ -491,23 +499,45 @@
             slTrailPct: row.slTrailPct || 0,
             fnoLimit: row.fnoLimit !== false
           };
-          if (eng.lotSizeFor) opts.lotSize = eng.lotSizeFor(symbol);
-          if (symbol.premium != null) opts.fallbackLtp = symbol.premium;
+          if (eng.lotSizeFor) opts.lotSize = eng.lotSizeFor(execSymbol);
+          if (execSymbol.premium != null) opts.fallbackLtp = execSymbol.premium;
           var ok = eng.autoEntry('BUY', opts);
           if (!row.firedBars) row.firedBars = {};
           row.firedBars[symKey] = lastTs;
           row.firedBar = lastTs;
           persist();
           if (st) {
-            if (ok) { st.textContent = 'BUY ' + (symbol.name || symbol.id) + ' ' + tf + ' bar ' + lastTs; st.style.color = '#00d4aa'; }
+            if (ok) { st.textContent = 'BUY ' + (execSymbol.name || execSymbol.id) + ' ' + tf + ' bar ' + lastTs + (isFbk ? ' [premium chart missing]' : ''); st.style.color = '#00d4aa'; }
             else { st.textContent = 'entry: ' + (eng.lastAutoSkip || 'rejected'); st.style.color = '#ef5350'; }
           }
         } else {
           if (st) {
-            st.textContent = (signal ? 'signal ON ' + (symbol.name || symbol.id) + ' (bar ' + lastTs + ')' : 'waiting') + (ltp != null ? ' | LTP ' + ltp : '');
+            st.textContent = (signal ? 'signal ON ' + (execSymbol.name || execSymbol.id) + ' (bar ' + lastTs + ')' : 'waiting') + (ltp != null ? ' | LTP ' + ltp : '') + (isFbk ? ' [premium chart missing]' : '');
             st.style.color = signal ? '#00d4aa' : '#888';
           }
         }
+      }
+      HftPool.getCandles(symbol, tf).then(function (candles) {
+        var st = statusEl;
+        if (!candles || !candles.length) {
+          /* Premium chart candles unavailable (new/illiquid strike, feed gap):
+             fall back to the underlying spot chart so the strategy still
+             evaluates its indicators and still trades instead of being
+             skipped. The pooled trade executes on the underlying symbol. */
+          var spot = underlyingSpotFor(symbol);
+          if (spot && spot.id !== symbol.id) {
+            return HftPool.getCandles(spot, tf).then(function (spotCandles) {
+              if (!spotCandles || !spotCandles.length) {
+                if (st) { st.textContent = 'no candle data for ' + (symbol.name || symbol.id) + ' - retrying'; st.style.color = '#ef5350'; }
+                return;
+              }
+              trySignal(spotCandles, spot, true);
+            });
+          }
+          if (st) { st.textContent = 'no candle data for ' + (symbol.name || symbol.id) + ' - retrying'; st.style.color = '#ef5350'; }
+          return;
+        }
+        trySignal(candles, symbol, false);
       }).catch(function () {
         if (statusEl) { statusEl.textContent = 'fetch failed'; statusEl.style.color = '#ef5350'; }
       });
