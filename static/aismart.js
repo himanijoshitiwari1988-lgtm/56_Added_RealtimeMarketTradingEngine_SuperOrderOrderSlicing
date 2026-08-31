@@ -88,6 +88,10 @@ window.createAISmartTrading = function (suffix) {
      the instrument is never skipped on a missing premium chart. Cleared as soon
      as the premium candles come back. */
   const _candleFbk = {};
+  /* Live Data Pool: instruments resolved by the most recent engine tick, reused
+     by the pool readout so it never re-resolves option chains (zero extra Dhan
+     calls - it only reads the shared candle cache + live feed). */
+  let _lastInstruments = [];
   /* Client-side option-chain rate-limit backoff. Dhan limits the option-chain
      surface independently of the chart surface; when /api/auto_strikes answers
      "Rate limited" the engine backs off ~30s before trying again instead of
@@ -1026,7 +1030,8 @@ window.createAISmartTrading = function (suffix) {
          (strategyId -> { capturedAt, settings }). The Final Strategy section
          reads these to show the exact SL / Trail SL / TP / AI settings that
          were applied while a strategy was running. */
-      settingsSnapshots: {}
+      settingsSnapshots: {},
+      dataPool: false // Live Data Pool monitor: shared realtime candle/indicator/filter readout for every resolved instrument
     };
   }
 
@@ -1096,6 +1101,7 @@ window.createAISmartTrading = function (suffix) {
       if (typeof s.universal.mtfConfirm !== 'boolean') s.universal.mtfConfirm = false;
       if (typeof s.universal.fnoLimit !== 'boolean') s.universal.fnoLimit = true;
       if (typeof s.universal.astUseOwnSettings !== 'boolean') s.universal.astUseOwnSettings = false;
+      if (typeof s.dataPool !== 'boolean') s.dataPool = false;
       if (!s.universal.tfs || typeof s.universal.tfs !== 'object') s.universal.tfs = { '1min': true, '5min': true };
       if (typeof s.universal.tfs['1min'] !== 'boolean') s.universal.tfs['1min'] = true;
       if (typeof s.universal.tfs['5min'] !== 'boolean') s.universal.tfs['5min'] = true;
@@ -3732,6 +3738,7 @@ window.createAISmartTrading = function (suffix) {
           ? await resolveInstruments(effectiveRunInSide(null, rsiCfg))
           : await resolveInstruments();
       } catch (e) { instruments = []; }
+      _lastInstruments = instruments;
       if (!instruments.length) {
         diag('noInstruments', 15000, 'No tradeable instruments resolved - open a chart symbol, enable Top Movers, or enable NIFTY trend-following', 'warn');
         return;
@@ -3991,7 +3998,7 @@ window.createAISmartTrading = function (suffix) {
 
   function startPoll() {
     if (_pollTimer) clearInterval(_pollTimer);
-    _pollTimer = setInterval(() => { tick(); refreshNiftyStatus(); renderMoversList(); renderNiftyTrendList(); renderPickedStrikes(); }, POLL_MS);
+    _pollTimer = setInterval(() => { tick(); refreshNiftyStatus(); renderMoversList(); renderNiftyTrendList(); renderPickedStrikes(); if (state.dataPool) poolScan(); }, POLL_MS);
   }
   function stopPoll() {
     if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
@@ -4550,6 +4557,9 @@ window.createAISmartTrading = function (suffix) {
     const tf1El = $id('astTf1min'); if (tf1El) tf1El.checked = (u.tfs ? u.tfs['1min'] !== false : true);
     const tf5El = $id('astTf5min'); if (tf5El) tf5El.checked = (u.tfs ? u.tfs['5min'] !== false : true);
     const useOwnEl = $id('astUseOwnSettings'); if (useOwnEl) useOwnEl.checked = u.astUseOwnSettings === true;
+    const dpEl = $id('astDataPool'); if (dpEl) dpEl.checked = state.dataPool === true;
+    const dpBody = $id('astDataPoolBody'); if (dpBody) dpBody.style.display = state.dataPool ? 'block' : 'none';
+    const dpInfo = $id('astDataPoolInfo'); if (dpInfo) dpInfo.textContent = state.dataPool ? 'scanning...' : 'OFF - shared pool feeds strategies only';
     const tlEl = $id('astTradeLimit'); if (tlEl) tlEl.checked = !!u.tradeLimitEnabled;
     const tlCntEl = $id('astTradeLimitCount'); if (tlCntEl) tlCntEl.value = (Number(u.tradeLimitCount) > 0 ? u.tradeLimitCount : 5);
     const aiTrEl = $id('astAiTrades'); if (aiTrEl) aiTrEl.checked = !!u.aiTrades;
@@ -5099,6 +5109,86 @@ window.createAISmartTrading = function (suffix) {
         cb.addEventListener('change', () => api.onStrategyCheck(cb.getAttribute('data-key'), cb.checked));
       });
     });
+  }
+
+  /* ----- Live Data Pool -----
+     Shared realtime readout: every resolved instrument's forming candle
+     (open/high/low/close/volume) + live indicator values + entry-condition
+     PASS/FAIL. The pool reads the SAME shared candle cache + live 5ms feed the
+     strategies use, so what is shown here is exactly what they trade. It never
+     re-resolves option chains (reuses the last tick's instruments) so it adds
+     zero extra Dhan calls. */
+  function poolIndValue(indId, settings, i, candles) {
+    const r = readTwo(indId, settings, 'v0', i, candles);
+    return (r && r.last != null && !isNaN(r.last)) ? r.last : null;
+  }
+  function poolNum(v) {
+    const n = Number(v);
+    return (isFinite(n)) ? n.toFixed(2) : '--';
+  }
+  function poolTF() {
+    const acts = activeStrategies();
+    for (const s of acts) { const t = pickTimeframe(s); if (t) return t; }
+    return '1min';
+  }
+  let _poolBusy = false;
+  let _poolResolveAt = 0;
+  async function poolScan() {
+    if (state.dataPool !== true) return;
+    if (_poolBusy) return;
+    _poolBusy = true;
+    const host = $id('astDataPoolBody');
+    try {
+      const tf = poolTF();
+      const acts = activeStrategies();
+      const rows = [];
+      if (!_lastInstruments.length) {
+        /* Engine idle (auto OFF): resolve the selected universe once per 15s so
+           the pool still shows live data without hammering the chain surface. */
+        const now = Date.now();
+        if (now - _poolResolveAt > 15000) {
+          _poolResolveAt = now;
+          try { _lastInstruments = await resolveInstruments(); } catch (e) { _lastInstruments = []; }
+        }
+      }
+      for (const instr of _lastInstruments) {
+        let candles = null;
+        try { candles = await candlesForInstrument(instr, tf); } catch (e) { candles = null; }
+        if (!candles || candles.length < 10) continue;
+        const i = candles.length - 1;
+        const bar = candles[i];
+        if (!bar) continue;
+        const ema9 = poolIndValue('ema', { length: 9, source: 'close' }, i, candles);
+        const ema21 = poolIndValue('ema', { length: 21, source: 'close' }, i, candles);
+        const ema35 = poolIndValue('ema', { length: 35, source: 'close' }, i, candles);
+        const st = poolIndValue('supertrend', { atrPeriod: 10, factor: 3 }, i, candles);
+        const vwap = poolIndValue('vwap', { anchor: 'session' }, i, candles);
+        let cond = 'FAIL';
+        for (const s of acts) {
+          try { if (entryFireAt(s, candles, i)) { cond = 'PASS'; break; } } catch (e) {}
+        }
+        rows.push('<tr><td>' + displayName(instr.symbol) + '</td><td>' + (instr.kind || '') + '</td><td>' + tf + '</td>' +
+          '<td>' + poolNum(bar.open) + '</td><td>' + poolNum(bar.high) + '</td><td>' + poolNum(bar.low) + '</td><td>' + poolNum(bar.close) + '</td><td>' + Number(bar.volume || 0) + '</td>' +
+          '<td>' + poolNum(ema9) + '</td><td>' + poolNum(ema21) + '</td><td>' + poolNum(ema35) + '</td><td>' + poolNum(st) + '</td><td>' + poolNum(vwap) + '</td>' +
+          '<td style="color:' + (cond === 'PASS' ? '#00d4aa' : '#888') + ';font-weight:700">' + cond + '</td></tr>');
+      }
+      const info = $id('astDataPoolInfo');
+      if (info) info.textContent = rows.length + ' instrument(s) live · ' + _lastInstruments.length + ' resolved · strategies read the same values';
+      if (host) host.innerHTML = '<table class="account-table"><thead><tr><th>Symbol</th><th>Type</th><th>TF</th><th>O</th><th>H</th><th>L</th><th>C</th><th>Vol</th><th>EMA9</th><th>EMA21</th><th>EMA35</th><th>SuperTrend</th><th>VWAP</th><th>Entry</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+    } catch (e) {
+    } finally {
+      _poolBusy = false;
+    }
+  }
+  function onDataPoolToggle() {
+    const el = $id('astDataPool');
+    state.dataPool = !!(el && el.checked);
+    save();
+    const host = $id('astDataPoolBody');
+    const info = $id('astDataPoolInfo');
+    if (host) host.style.display = state.dataPool ? 'block' : 'none';
+    if (info) info.textContent = state.dataPool ? 'scanning...' : 'OFF - shared pool feeds strategies only';
+    if (state.dataPool) poolScan();
   }
 
   /* The engine's own state.positions rows are a copy made at entry time.
@@ -5909,6 +5999,7 @@ window.createAISmartTrading = function (suffix) {
   const api = {
     toggleAuto,
     onUniversalInput() { readUniversal(); },
+    onDataPoolToggle() { onDataPoolToggle(); },
     toggleAutoSl,
     onStrikeInput() { readStrikeUI(); },
     onRunInInput() { readRunInUI(); },

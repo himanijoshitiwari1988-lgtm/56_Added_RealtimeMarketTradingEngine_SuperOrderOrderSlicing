@@ -948,6 +948,11 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <span style="font-size:9px;color:#666">Tick saved strategies to trade them live with the settings below (no backtest)</span>
           </div>
           <div id="astSummary" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;border:1px solid #1e1e40;border-radius:3px;padding:4px 8px">
+            <label style="font-size:9px;color:#00d4aa;display:flex;align-items:center;gap:3px;cursor:pointer;font-weight:700" title="Live Data Pool: shows the shared realtime candle (open/high/low/close/volume), indicator values and the entry-condition PASS/FAIL for every resolved symbol. The strategies read the exact same pool, so what you see is what they trade."><input type="checkbox" id="astDataPool" onchange="AISmartTrading.onDataPoolToggle()" style="accent-color:#00d4aa"> Data Pool (live candle + indicator + filter readout)</label>
+            <span id="astDataPoolInfo" style="font-size:9px;color:#666">OFF - shared pool feeds strategies only</span>
+          </div>
+          <div id="astDataPoolBody" style="display:none;margin-top:6px;max-height:240px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a"></div>
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
           <div style="max-height:220px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="astRunningTable">
