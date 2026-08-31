@@ -5152,29 +5152,46 @@ window.createAISmartTrading = function (suffix) {
         }
       }
       for (const instr of _lastInstruments) {
-        let candles = null;
-        try { candles = await candlesForInstrument(instr, tf); } catch (e) { candles = null; }
-        if (!candles || candles.length < 10) continue;
-        const i = candles.length - 1;
-        const bar = candles[i];
-        if (!bar) continue;
-        const ema9 = poolIndValue('ema', { length: 9, source: 'close' }, i, candles);
-        const ema21 = poolIndValue('ema', { length: 21, source: 'close' }, i, candles);
-        const ema35 = poolIndValue('ema', { length: 35, source: 'close' }, i, candles);
-        const st = poolIndValue('supertrend', { atrPeriod: 10, factor: 3 }, i, candles);
-        const vwap = poolIndValue('vwap', { anchor: 'session' }, i, candles);
-        let cond = 'FAIL';
-        for (const s of acts) {
-          try { if (entryFireAt(s, candles, i)) { cond = 'PASS'; break; } } catch (e) {}
+        const sources = [];
+        try {
+          const c = await candlesForInstrument(instr, tf);
+          if (c && c.length >= 10) {
+            if (instr.kind === 'option') {
+              sources.push({ chart: _candleFbk[instrumentId(instr)] ? 'spot' : 'premium', candles: c });
+            } else {
+              sources.push({ chart: 'spot', candles: c });
+            }
+          }
+        } catch (e) {}
+        if (instr.kind === 'both') {
+          try {
+            const pc = await confirmCandlesFor(instr, tf);
+            if (pc && pc.length >= 10) sources.push({ chart: 'premium', candles: pc });
+          } catch (e) {}
         }
-        rows.push('<tr><td>' + displayName(instr.symbol) + '</td><td>' + (instr.kind || '') + '</td><td>' + tf + '</td>' +
-          '<td>' + poolNum(bar.open) + '</td><td>' + poolNum(bar.high) + '</td><td>' + poolNum(bar.low) + '</td><td>' + poolNum(bar.close) + '</td><td>' + Number(bar.volume || 0) + '</td>' +
-          '<td>' + poolNum(ema9) + '</td><td>' + poolNum(ema21) + '</td><td>' + poolNum(ema35) + '</td><td>' + poolNum(st) + '</td><td>' + poolNum(vwap) + '</td>' +
-          '<td style="color:' + (cond === 'PASS' ? '#00d4aa' : '#888') + ';font-weight:700">' + cond + '</td></tr>');
+        for (const src of sources) {
+          const candles = src.candles;
+          const i = candles.length - 1;
+          const bar = candles[i];
+          if (!bar) continue;
+          const ema9 = poolIndValue('ema', { length: 9, source: 'close' }, i, candles);
+          const ema21 = poolIndValue('ema', { length: 21, source: 'close' }, i, candles);
+          const ema35 = poolIndValue('ema', { length: 35, source: 'close' }, i, candles);
+          const st = poolIndValue('supertrend', { atrPeriod: 10, factor: 3 }, i, candles);
+          const vwap = poolIndValue('vwap', { anchor: 'session' }, i, candles);
+          let cond = 'FAIL';
+          for (const s of acts) {
+            try { if (entryFireAt(s, candles, i)) { cond = 'PASS'; break; } } catch (e) {}
+          }
+          rows.push('<tr><td>' + displayName(instr.symbol) + '</td><td>' + (instr.kind || '') + '</td><td>' + src.chart + '</td><td>' + tf + '</td>' +
+            '<td>' + poolNum(bar.open) + '</td><td>' + poolNum(bar.high) + '</td><td>' + poolNum(bar.low) + '</td><td>' + poolNum(bar.close) + '</td><td>' + Number(bar.volume || 0) + '</td>' +
+            '<td>' + poolNum(ema9) + '</td><td>' + poolNum(ema21) + '</td><td>' + poolNum(ema35) + '</td><td>' + poolNum(st) + '</td><td>' + poolNum(vwap) + '</td>' +
+            '<td style="color:' + (cond === 'PASS' ? '#00d4aa' : '#888') + ';font-weight:700">' + cond + '</td></tr>');
+        }
       }
       const info = $id('astDataPoolInfo');
-      if (info) info.textContent = rows.length + ' instrument(s) live · ' + _lastInstruments.length + ' resolved · strategies read the same values';
-      if (host) host.innerHTML = '<table class="account-table"><thead><tr><th>Symbol</th><th>Type</th><th>TF</th><th>O</th><th>H</th><th>L</th><th>C</th><th>Vol</th><th>EMA9</th><th>EMA21</th><th>EMA35</th><th>SuperTrend</th><th>VWAP</th><th>Entry</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
+      if (info) info.textContent = rows.length + ' readout(s) live · ' + _lastInstruments.length + ' instrument(s) resolved · spot + premium where run-in = both';
+      if (host) host.innerHTML = '<table class="account-table"><thead><tr><th>Symbol</th><th>Type</th><th>Chart</th><th>TF</th><th>O</th><th>H</th><th>L</th><th>C</th><th>Vol</th><th>EMA9</th><th>EMA21</th><th>EMA35</th><th>SuperTrend</th><th>VWAP</th><th>Entry</th></tr></thead><tbody>' + rows.join('') + '</tbody></table>';
     } catch (e) {
     } finally {
       _poolBusy = false;
