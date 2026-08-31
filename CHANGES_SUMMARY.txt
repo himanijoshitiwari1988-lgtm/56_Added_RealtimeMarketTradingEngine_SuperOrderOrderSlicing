@@ -1,23 +1,43 @@
-CHANGES_SUMMARY for backup (Smart NTrader buy-only/trend-following + AST/AE commodity fixes)
-Generated: 2026-08-30 19:04 UTC
-Diff of uncommitted work against commit 86520e1
+CHANGES_SUMMARY for backup (NIFTY trend-following / Top-Movers auto CE-PE leg picker fix + Data Pool enhancements)
+Generated: 2026-08-31 UTC
+Diff of uncommitted work against commit 9049ba4
 
- app.py                       |  15 +++-
- static/aismart.js            |  87 ++++++++++++++++---
- static/autoexperiment.v13.js |  30 ++++---
- static/final_strategy.js     | 168 ++++++++++++++++++++++++++++++++++--
- static/hft_runner.js         |  74 ++++++++++++++++
- static/smart_ntrader.js      | 198 +++++++++++++++++++++++++++++++++++++++----
- static/strategy_container.js |   3 +-
- templates/index.html         |  27 +++---
- 8 files changed, 540 insertions(+), 62 deletions(-)
+ static/aismart.js    |  95 +++++++++++++++++++++++++++++++++++++++-------------
+ templates/index.html |   3 +-
+ 2 files changed, 74 insertions(+), 24 deletions(-)
 
 --- name-status ---
-M	app.py
 M	static/aismart.js
-M	static/autoexperiment.v13.js
-M	static/final_strategy.js
-M	static/hft_runner.js
-M	static/smart_ntrader.js
-M	static/strategy_container.js
 M	templates/index.html
+
+--- change description ---
+1) NIFTY trend-following / Top Movers auto CE-PE leg picker FIX (static/aismart.js
+   contractsFor): the engine now pins the option side to the LIVE NIFTY
+   direction when NIFTY trend-following is enabled (bearish -> PE puts only,
+   bullish -> CE calls only) for every symbol it picked, and pins it to the
+   stock's own daily move in Top Movers mode (gainer -> CE, loser -> PE).
+   Previously the NIFTY trend direction was never used (moverDirectionFor only
+   works in movers mode and trendDirectionFor read each stock's own candles),
+   strategyDirectionFor() overrode the mover direction, and the auto-side block
+   was skipped entirely when the "+green premium" filter was off. Fix reorders
+   the sources (nifty side -> mover direction -> filter direction -> strategy
+   category -> underlying trend) and extends the guard to run in NIFTY trend
+   mode.
+
+2) Data Pool: every selected strike gets its own premium readout (poolScan):
+   'both' run-in instruments now expand ALL resolved contracts into separate
+   premium rows instead of only contracts[0]; each row is labelled
+   "<Symbol> <strike> <CE/PE>" and the Type column reads 'option'. The spot row
+   only appears when the run-in actually includes the spot chart.
+
+3) Data Pool: manual Refresh button (AISmartTrading.poolRefresh()): forces the
+   pool to re-resolve the selected universe right now (ignoring the 15s idle
+   throttle) so newly added premium charts / symbols / strikes and changed
+   indicator or data values show up immediately. New _poolForceResolve flag +
+   HTML button next to the Data Pool toggle.
+
+4) Data Pool: volume fallback to the live quote (poolVolume): the Vol column
+   prefers the forming candle's volume, and when it is 0 (option premium
+   candles often carry no volume) falls back to the live quote's volume for the
+   same instrument/strike so the pool never shows an empty volume for a strike
+   that actually has volume.

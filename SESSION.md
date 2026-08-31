@@ -15,6 +15,28 @@ Backup date: 2026-08-16
 - **Outstanding / next natural step:** (1) Manual browser verification (hard refresh): open the Paper Trade tab, tick strategies in AI Paper Trade, click "Send selected strategies to the AI Smart Trading Engine", confirm they appear in the engine's Selected Strategies section with tickboxes/Remove/Clear All, then press "Run Paper Trading" and confirm paper entries + `#astPerfInfo` green (<10ms/strategy) and no console errors in `#astLog`; (2) confirm the "Max trades" input enables when its checkbox is checked; (3) if edits continue, bump the `aismart.js?v=` / `aipt.js?v=` cache-busters. Full detail in the session sections below.
 - **IMPORTANT:** SESSION.md intentionally contains NO credentials (tokens/keys are never committed). Do not commit tokens.
 
+## Update (2026-08-31, current session: NIFTY trend-following / Top-Movers auto CE-PE leg picker fix + Data Pool enhancements)
+
+Backup pushed to `himanijoshitiwari1988-lgtm/33_fixed_NiftyTrendFollowingLegPickerAuto` (branch `main`) — the complete working tree of `32_Added8IndicaterFilters_FixedOptionChainIssue` plus all uncommitted work (CHANGES_COMPLETE.patch / CHANGES_SUMMARY.txt capture the diff against commit `9049ba4`).
+
+Server: background terminal `term_1788209134822_2`, port 8081, log `/tmp/terminal_term_1788209134822_2.log`. Live preview: `https://8081-268efaeaa05a291e.monkeycode-ai.live`.
+
+**1. NIFTY trend-following / Top Movers auto CE-PE leg picker FIX (`static/aismart.js` `contractsFor`).** User report: for bearish the engine should automatically take the PE put chart, for bullish the CE call chart, and send it to the strategy — but it wasn't happening. Three root causes fixed:
+- NIFTY trend direction (`_lastNiftyDir`) was never consulted in NIFTY trend mode — `moverDirectionFor()` only works in movers mode and `trendDirectionFor()` analysed each stock's own 5-min candles, not the NIFTY index.
+- `strategyDirectionFor()` was first in precedence, so a shared strategy category overrode the mover/trend direction.
+- The whole auto-side block was skipped when "+green premium" was unchecked.
+Fix: precedence reordered to `ntSide || moverDirectionFor || activeFilterDirection || strategyDirectionFor || trendDirectionFor`; guard extended to run when NIFTY trend mode has a direction (bearish -> PE, bullish -> CE) and in Top Movers mode (gainer -> CE, loser -> PE). Explicit per-call optionType overrides (Smart NTrader) still win.
+
+**2. Data Pool — every selected strike as its own premium row (`poolScan`).** 'both' run-in instruments now expand ALL resolved contracts into separate premium readouts labelled `<Symbol> <strike> <CE/PE>` (previously only `contracts[0]` got a premium row, and every row was labelled with just the index name). `confirmCandlesFor(instr, tf, ci)` added to fetch a specific contract's premium candles. Spot rows only appear when the run-in actually includes spot.
+
+**3. Data Pool — manual Refresh button.** `AISmartTrading.poolRefresh()` sets `_poolForceResolve` (bypasses the 15s idle re-resolve throttle) and re-runs `poolScan()` so newly added premium charts / symbols / strikes and changed indicator or data values appear immediately. HTML Refresh button beside the Data Pool toggle.
+
+**4. Data Pool — live volume fallback (`poolVolume`).** Vol column prefers the forming candle's volume; when 0 (option premium candles often carry no volume) it falls back to the live quote's volume for the same instrument/strike, so strikes with real volume never show an empty column.
+
+Verified: `node --check` clean on `static/aismart.js`; server serves the new code (cache-buster `aismart.js?v=101`). 
+
+**Outstanding / next natural step:** browser verification on the live preview — confirm NIFTY trend mode picks PE puts on bearish / CE calls on bullish, Top Movers picks CE for gainers / PE for losers, and the Data Pool shows one premium row per selected strike with real volume (Refresh button surfaces newly added charts immediately).
+
 ## Update (2026-08-30, current session: pool idle-handling refinement + per-picked-contract premium charts)
 
 Working tree at `/workspace` (git repo `7685cf6`, app source under `repo-tmp/`). Server: background terminal `term_1788125880230_15` (PID 8368), port 8081, log `/tmp/terminal_term_1788125880230_15.log`.

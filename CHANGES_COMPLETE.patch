@@ -1,1093 +1,1295 @@
-diff --git a/app.py b/app.py
-index 516cfcf..abf2a44 100644
---- a/app.py
-+++ b/app.py
-@@ -586,7 +586,18 @@ def _rebuild_daily_queue():
-     _DAILY_FILL_QUEUE = []
-     if not _QUOTE_SECURITIES:
-         return
--    for seg in ("NSE_EQ",):
-+    # Equities (NSE_EQ) and commodity futures (MCX_COMM / NCD_FNO) get the
-+    # daily-candle backfill so change / change_pct appear in the watchlist even
-+    # after hours, when the WS feed sends no ticks and the REST quote API has no
-+    # fresh data. Commodities used to be skipped here entirely, leaving their
-+    # sidebar rows stuck at "--" whenever the market was closed or the browser's
-+    # async /api/commodities load finished after the first /api/quotes poll.
-+    # Commodities are enqueued FIRST: the single fill thread walks the queue
-+    # sequentially and every NSE_EQ sid without a close costs one rate-limited
-+    # Dhan daily call (~1.5s each), so MCX rows at the tail waited minutes for a
-+    # pass to finally reach them. Filling the ~30 commodities up front shows
-+    # their change within the first few seconds.
-+    for seg in ("MCX_COMM", "NCD_FNO", "NSE_EQ"):
-         for sid in _QUOTE_SECURITIES.get(seg, []):
-             _DAILY_FILL_QUEUE.append((seg, sid))
-     _DAILY_FILL_IDX = 0
-@@ -753,7 +764,7 @@ def _daily_fill_loop():
-                         entry["close"] != entry["ltp"] and \
-                         (time.time() - entry.get("at", 0)) <= 30:
-                     continue
--            ltp_d, pc = _last_two_daily(sid, seg, "EQUITY")
-+            ltp_d, pc = _last_two_daily(sid, seg, "EQUITY" if seg == "NSE_EQ" else "FUTCOM")
-             if pc:
-                 ltp = (entry or {}).get("ltp") or ltp_d
-                 chg = ltp - pc
+diff --git a/CHANGES_COMPLETE.patch b/CHANGES_COMPLETE.patch
+index 998c5a8..e69de29 100644
+--- a/CHANGES_COMPLETE.patch
++++ b/CHANGES_COMPLETE.patch
+@@ -1,1093 +0,0 @@
+-diff --git a/app.py b/app.py
+-index 516cfcf..abf2a44 100644
+---- a/app.py
+-+++ b/app.py
+-@@ -586,7 +586,18 @@ def _rebuild_daily_queue():
+-     _DAILY_FILL_QUEUE = []
+-     if not _QUOTE_SECURITIES:
+-         return
+--    for seg in ("NSE_EQ",):
+-+    # Equities (NSE_EQ) and commodity futures (MCX_COMM / NCD_FNO) get the
+-+    # daily-candle backfill so change / change_pct appear in the watchlist even
+-+    # after hours, when the WS feed sends no ticks and the REST quote API has no
+-+    # fresh data. Commodities used to be skipped here entirely, leaving their
+-+    # sidebar rows stuck at "--" whenever the market was closed or the browser's
+-+    # async /api/commodities load finished after the first /api/quotes poll.
+-+    # Commodities are enqueued FIRST: the single fill thread walks the queue
+-+    # sequentially and every NSE_EQ sid without a close costs one rate-limited
+-+    # Dhan daily call (~1.5s each), so MCX rows at the tail waited minutes for a
+-+    # pass to finally reach them. Filling the ~30 commodities up front shows
+-+    # their change within the first few seconds.
+-+    for seg in ("MCX_COMM", "NCD_FNO", "NSE_EQ"):
+-         for sid in _QUOTE_SECURITIES.get(seg, []):
+-             _DAILY_FILL_QUEUE.append((seg, sid))
+-     _DAILY_FILL_IDX = 0
+-@@ -753,7 +764,7 @@ def _daily_fill_loop():
+-                         entry["close"] != entry["ltp"] and \
+-                         (time.time() - entry.get("at", 0)) <= 30:
+-                     continue
+--            ltp_d, pc = _last_two_daily(sid, seg, "EQUITY")
+-+            ltp_d, pc = _last_two_daily(sid, seg, "EQUITY" if seg == "NSE_EQ" else "FUTCOM")
+-             if pc:
+-                 ltp = (entry or {}).get("ltp") or ltp_d
+-                 chg = ltp - pc
+-diff --git a/static/aismart.js b/static/aismart.js
+-index 04849b5..4488425 100644
+---- a/static/aismart.js
+-+++ b/static/aismart.js
+-@@ -936,11 +936,14 @@ window.createAISmartTrading = function (suffix) {
+-       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
+-       // premium chart) or 'both' (spot + premium). Indices default to 'both',
+-       // F&O stocks default to 'spot'. Commodities default to the futures
+--      // contract ('spot') but honour their own dropdown.
+-+      // contract ('spot') but honour their own dropdown. Commodities also
+-+      // accept 'futures' (explicit futures-contract chart, same underlying
+-+      // near-month FUTCOM chart as 'spot').
+-       const OK = ['spot', 'premium', 'both'];
+-+      const COMM_OK = ['spot', 'premium', 'both', 'futures'];
+-       if (OK.indexOf(s.runIn.index) < 0) s.runIn.index = 'both';
+-       if (OK.indexOf(s.runIn.fno) < 0) s.runIn.fno = 'spot';
+--      if (OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
+-+      if (COMM_OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
+-       if (typeof s.runIn.default !== 'boolean') s.runIn.default = false;
+-     } else if (s) {
+-       s.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false };
+-@@ -1188,7 +1191,14 @@ window.createAISmartTrading = function (suffix) {
+-     // execution chart to the option premium chart for every instrument type.
+-     if (state.premiumOnly) return 'premium';
+-     const ri = state.runIn || {};
+--    if (isCommodity(symbol)) return (ri && ri.comm) || 'spot';
+-+    if (isCommodity(symbol)) {
+-+      const m = (ri && ri.comm) || 'spot';
+-+      // Commodities have no separate index/equity spot - both "Spot chart" and
+-+      // "Futures contract" run on the near-month FUTCOM underlying chart, so
+-+      // 'futures' behaves exactly like 'spot' (the near-month contract is the
+-+      // commodity's underlying/main chart).
+-+      return m === 'futures' ? 'spot' : m;
+-+    }
+-     if (!isIndex(symbol)) return ri.fno || 'spot';
+-     return ri.index || 'both';
+-   }
+-@@ -2845,13 +2855,6 @@ window.createAISmartTrading = function (suffix) {
+-     if (minute >= t) { _autoSquareOffDoneDay = day; return true; }
+-     return false;
+-   }
+--  function isMarketOpenNow() {
+--    try {
+--      const now = Math.floor(Date.now() / 1000);
+--      if (typeof isMarketOpen === 'function') return !!isMarketOpen(now);
+--    } catch (e) {}
+--    return true;
+--  }
+-   function resetTradeCountsIfNewDay() {
+-     const day = istDay();
+-     if (day !== state.tradeCountDay) {
+-@@ -2901,7 +2904,6 @@ window.createAISmartTrading = function (suffix) {
+-     const u = state.universal;
+-     if (!liveTimeGateOk()) return 0;
+-     if (u && u.aiTrades) {
+--      if (!isMarketOpenNow()) return 0;
+-       const r = { key: s.id, optionSid: instr.kind === 'option' ? instr.sid : null, symbol: instr.symbol };
+-       aiTradesDecisionFor(candles, liveOICtx(r));
+-       return null;
+-@@ -3028,7 +3030,7 @@ window.createAISmartTrading = function (suffix) {
+-     const ptState = pt.getState ? pt.getState() : null;
+-     const autoPositions = (ptState && ptState.autoPositions) || {};
+-     if (!(u && u.hft)) return;
+--      if (!liveTimeGateOk() || !isMarketOpenNow()) return;
+-+      if (!liveTimeGateOk()) return;
+-       const strategies = activeStrategies();
+-       if (!strategies.length) return;
+-       const instruments = hftInstruments();
+-@@ -3852,7 +3854,9 @@ window.createAISmartTrading = function (suffix) {
+-   }
+- 
+-   function modeLabel(m) {
+--    return m === 'spot' ? 'spot chart' : (m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart');
+-+    if (m === 'spot') return 'spot chart';
+-+    if (m === 'futures') return 'futures contract';
+-+    return m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart';
+-   }
+- 
+-   /* Premium-only mode: a single master toggle that locks the strategy run
+-@@ -4622,6 +4626,7 @@ window.createAISmartTrading = function (suffix) {
+-       '<span style="color:#fff;flex:1">' + esc(s.name) + (s.tf ? ' <span style="color:#666">· ' + esc(s.tf) + '</span>' : '') + '</span>' +
+-       '<span style="color:#888;min-width:46px;text-align:right">' + esc(gLabel) + '</span>' +
+-       '<span style="color:' + (isActive ? '#00d4aa' : '#555') + ';min-width:52px;text-align:right;font-weight:700">' + (isActive ? 'ACTIVE' : 'IDLE') + '</span>' +
+-+      '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ffd700;color:#0a0a18" onclick="AISmartTrading.sendToFinal(\'' + esc(s.id) + '\')" title="Save this strategy to the Final Strategy section with its settings">Final</button>' +
+-       '</div>';
+-   }
+- 
+-@@ -4737,6 +4742,7 @@ window.createAISmartTrading = function (suffix) {
+-         '<span style="color:#fff;flex:1">' + esc(s.name) + (s.tf ? ' <span style="color:#666">· ' + esc(s.tf) + '</span>' : '') + '</span>' +
+-         '<span style="color:' + vCol + ';min-width:36px;text-align:right">' + (s.score || 0) + '</span>' +
+-         '<span style="color:#888;min-width:40px;text-align:right;font-size:9px">' + tag + '</span>' +
+-+        '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ffd700;color:#0a0a18" onclick="AISmartTrading.sendToFinal(\'' + esc(s.id) + '\')" title="Save this strategy to the Final Strategy section with its settings">Final</button>' +
+-         '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px" onclick="AISmartTrading.openChart(\'' + esc(s.id) + '\')">Open Chart</button>' +
+-         '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ef5350;color:#fff" onclick="AISmartTrading.' + removeFn + '(\'' + esc(s.id) + '\')">Remove</button>' +
+-         '</div>';
+-@@ -5166,6 +5172,56 @@ window.createAISmartTrading = function (suffix) {
+-     render();
+-   }
+- 
+-+  /* Save an AST-engine strategy (saved / imported / manual / AI-pick) into the
+-+     Final Strategy section. Captures the strategy definition + a raw snapshot of
+-+     the engine settings currently applied, so it can be re-run later with its
+-+     original SL / trail SL / TP / timeframes / run-in settings - the same way
+-+     the AE engine hands a strategy to AST. */
+-+  function sendToFinal(id) {
+-+    if (!window.FinalStrategy || typeof FinalStrategy.saveStrategy !== 'function') {
+-+      log('Final Strategy module not ready', 'warn');
+-+      return null;
+-+    }
+-+    let s = null;
+-+    const saved = loadSaved().find(x => String(x.id) === String(id));
+-+    const imported = (state.imported || []).find(x => String(x.id) === String(id));
+-+    const manual = (state.manual || []).find(x => String(x.id) === String(id));
+-+    const aiPick = (state.aiPicks || []).find(x => String(x.id) === String(id));
+-+    s = saved || imported || manual || aiPick;
+-+    if (!s) { log('Strategy not found: ' + id, 'warn'); return null; }
+-+    setSettingsFor(id);
+-+    const snapshot = state.settingsSnapshots ? state.settingsSnapshots[id] : null;
+-+    const closed = (state.closed || []).filter(t => t && t.strategyId != null && String(t.strategyId) === String(id));
+-+    let wins = 0, losses = 0, net = 0;
+-+    closed.forEach(t => {
+-+      const p = (t.netPnl != null) ? Number(t.netPnl) : Number(t.pnl || 0);
+-+      net += p;
+-+      if (p > 0) wins++; else if (p < 0) losses++;
+-+    });
+-+    const entry = FinalStrategy.saveStrategy({
+-+      key: 'ast:' + id,
+-+      name: (s.name || 'Strategy').replace(/^AE:\s*/, ''),
+-+      cat: s.cat === 'bearish' ? 'bearish' : 'bullish',
+-+      method: s.method || '',
+-+      tf: s.tf || '',
+-+      symbol: (s.symbol && s.symbol.name) || null,
+-+      stats: {
+-+        trades: closed.length, wins: wins, losses: losses,
+-+        winRate: closed.length ? Math.round((wins / closed.length) * 1000) / 10 : 0,
+-+        totalNet: Math.round(net * 100) / 100,
+-+        avgPerTrade: closed.length ? Math.round((net / closed.length) * 100) / 100 : 0,
+-+        daysTraded: 0, lastDay: null,
+-+        profitFactor: null
+-+      },
+-+      settings: null,
+-+      snapshot: snapshot ? JSON.parse(JSON.stringify(snapshot)) : null,
+-+      strategy: JSON.parse(JSON.stringify(s || {})),
+-+      source: 'ast'
+-+    });
+-+    if (entry) log('"' + entry.name + '" saved to Final Strategy', 'ok');
+-+    return entry;
+-+  }
+-+
+-   /* Remove strategies from the saved strategy library (localStorage), either all
+-      of one category or only the ticked ones. Also drops them from the selected
+-      lists, untracks them from state.selected and squares off any open position
+-@@ -5497,6 +5553,11 @@ window.createAISmartTrading = function (suffix) {
+-     /* Engine-settings snapshot captured while a strategy was running
+-        (strategyId -> { capturedAt, settings }), for the Final Strategy panel. */
+-     getSettingsSnapshot(id) { return (state.settingsSnapshots && id != null) ? state.settingsSnapshots[id] : null; },
+-+    /* Re-apply a captured engine-settings snapshot (SL / trail SL / TP /
+-+       timeframes / run-in) so a saved Final Strategy runs with its original
+-+       settings - the same restore path the saved templates use. */
+-+    applySnapshot(snap) { try { applyEngineSettings(snap); return true; } catch (e) { return false; } },
+-+    sendToFinal(id) { return sendToFinal(id); },
+-     experimentSymbols() { return experimentSymbols(); },
+-     chainRateLimited(s) { return chainRateLimited(s); },
+-     /* Resolve the tradeable instruments for a list of template symbols, exactly
+-diff --git a/static/autoexperiment.v13.js b/static/autoexperiment.v13.js
+-index 9cff5b4..119e237 100644
+---- a/static/autoexperiment.v13.js
+-+++ b/static/autoexperiment.v13.js
+-@@ -2340,11 +2340,14 @@ window.createAutoExperiment = function (suffix) {
+-       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
+-       // premium chart) or 'both' (spot + premium). Indices default to 'both',
+-       // F&O stocks default to 'spot'. Commodities default to the futures
+--      // contract ('spot') but honour their own dropdown.
+-+      // contract ('spot') but honour their own dropdown. Commodities also
+-+      // accept 'futures' (explicit futures-contract chart, same underlying
+-+      // near-month FUTCOM chart as 'spot').
+-       const OK = ['spot', 'premium', 'both'];
+-+      const COMM_OK = ['spot', 'premium', 'both', 'futures'];
+-       if (OK.indexOf(s.runIn.index) < 0) s.runIn.index = 'both';
+-       if (OK.indexOf(s.runIn.fno) < 0) s.runIn.fno = 'spot';
+--      if (OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
+-+      if (COMM_OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
+-       if (typeof s.runIn.default !== 'boolean') s.runIn.default = false;
+-     } else if (s) {
+-       s.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false };
+-@@ -3718,7 +3721,14 @@ window.createAutoExperiment = function (suffix) {
+-     // execution chart to the option premium chart for every instrument type.
+-     if (state.premiumOnly) return 'premium';
+-     const ri = state.runIn || {};
+--    if (isCommodity(symbol)) return (ri && ri.comm) || 'spot';
+-+    if (isCommodity(symbol)) {
+-+      const m = (ri && ri.comm) || 'spot';
+-+      // Commodities have no separate index/equity spot - both "Spot chart" and
+-+      // "Futures contract" run on the near-month FUTCOM underlying chart, so
+-+      // 'futures' behaves exactly like 'spot' (the near-month contract is the
+-+      // commodity's underlying/main chart).
+-+      return m === 'futures' ? 'spot' : m;
+-+    }
+-     if (!isIndex(symbol)) return ri.fno || 'spot';
+-     return ri.index || 'both';
+-   }
+-@@ -4948,14 +4958,6 @@ window.createAutoExperiment = function (suffix) {
+-     return d.getUTCFullYear() + '-' + (d.getUTCMonth() + 1) + '-' + d.getUTCDate();
+-   }
+- 
+--  function isMarketOpenNow() {
+--    try {
+--      const now = Math.floor(Date.now() / 1000);
+--      if (typeof isMarketOpen === 'function') return !!isMarketOpen(now);
+--    } catch (e) {}
+--    return true;
+--  }
+--
+-   /* ---- open/close time gates ----
+-      The "start trading after" and "no trade after" selectors restrict when a
+-      strategy may open new trades. Candle timestamps are stored as IST wall-clock
+-@@ -5097,7 +5099,6 @@ window.createAutoExperiment = function (suffix) {
+-     const u = state.universal;
+-     if (!liveTimeGateOk()) return 0; // open/close time gate blocks new entries
+-     if (u && u.aiTrades) {
+--      if (!isMarketOpenNow()) return 0; // market open time condition
+-       aiTradesDecisionFor(candles, liveOICtx(r));
+-       return null;
+-     }
+-@@ -5901,7 +5902,9 @@ window.createAutoExperiment = function (suffix) {
+-   }
+- 
+-   function modeLabel(m) {
+--    return m === 'spot' ? 'spot chart' : (m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart');
+-+    if (m === 'spot') return 'spot chart';
+-+    if (m === 'futures') return 'futures contract';
+-+    return m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart';
+-   }
+- 
+-   /* Premium-only mode: a single master toggle that locks the strategy run
+-@@ -6984,7 +6987,6 @@ window.createAutoExperiment = function (suffix) {
+-       optionInst,
+-       allowedTradesFor,
+-       liveTimeGateOk,
+--      isMarketOpenNow,
+-       aiTrailEngineFor,
+-       dropAiTrailEngine,
+-       applyFilters,
+-diff --git a/static/final_strategy.js b/static/final_strategy.js
+-index 2609059..b76cfbf 100644
+---- a/static/final_strategy.js
+-+++ b/static/final_strategy.js
+-@@ -175,6 +175,18 @@
+-     return sum;
+-   }
+- 
+-+  /* Resolve the RAW AST engine-settings snapshot captured while the strategy
+-+     was running (the exact SL / trail SL / TP / timeframes / run-in settings),
+-+     so a saved Final Strategy can be re-run with its original settings - the
+-+     same way the AE -> AST import captures the engine settings at entry time. */
+-+  function resolveSnapshotFor(st) {
+-+    const id = astIdFor(st);
+-+    if (!id) return null;
+-+    const snap = astSnapshotFor(id);
+-+    if (!snap) return null;
+-+    try { return JSON.parse(JSON.stringify(snap)); } catch (e) { return null; }
+-+  }
+-+
+-   /* ---------------- composite score ---------------- */
+-   function compositeScore(s, maxes) {
+-     const win = Math.max(0, Math.min(100, Number(s.winRate) || 0));
+-@@ -235,11 +247,15 @@
+-           profitFactor: st.profitFactor, score: c.sc
+-         };
+-         const settings = resolveSettingsFor(st);
+-+        const snapshot = resolveSnapshotFor(st);
+-+        const stratDef = JSON.parse(JSON.stringify(strat || {}));
+-         if (existing) {
+-           existing.stats = stats;
+-           existing.lastUpdated = now;
+-           if (settings) existing.settings = settings;
+-           else if (!existing.settings) existing.settings = null;
+-+          if (snapshot) existing.snapshot = snapshot;
+-+          if (stratDef && Object.keys(stratDef).length) existing.strategy = stratDef;
+-         } else {
+-           byKey.set(key, {
+-             key: key,
+-@@ -250,7 +266,10 @@
+-             symbol: (strat.symbol && strat.symbol.name) || null,
+-             addedAt: now, lastUpdated: now,
+-             stats: stats,
+--            settings: settings || null
+-+            settings: settings || null,
+-+            snapshot: snapshot || null,
+-+            strategy: (stratDef && Object.keys(stratDef).length) ? stratDef : null,
+-+            source: 'auto'
+-           });
+-         }
+-       });
+-@@ -319,6 +338,9 @@
+-     const settingsChips = set
+-       ? chip('SL', set.sl, '#ff9800') + chip('TP', set.tp, '#00d4aa') + chip('Lots', set.lots) + chip('Margin', set.margin) + chip('TF', set.tfs)
+-       : '<span style="font-size:8px;color:#666">no run settings recorded</span>';
+-+    const srcBadge = s.source && s.source !== 'auto'
+-+      ? '<span style="font-size:8px;color:#b39ddb;border:1px solid #2d2d50;border-radius:3px;padding:0 4px">' + esc(s.source === 'container' ? 'Container' : (s.source === 'pooled' ? 'Pooled' : (s.source === 'ast' ? 'AST' : 'Manual'))) + '</span>'
+-+      : '';
+-     return '<div style="background:#12122a;border:1px solid #2d2d50;border-radius:4px;padding:5px 8px;margin:2px 0;font-size:10px" data-fs-row="' + esc(s.key) + '">' +
+-       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+-         '<input type="checkbox" class="fs-sel" data-fs-key="' + esc(s.key) + '" ' + checked + 'title="Tick to select this strategy">' +
+-@@ -326,6 +348,7 @@
+-         '<span style="color:#fff;font-weight:700;flex:1;min-width:110px">' + esc(s.name) +
+-           (meta ? ' <span style="color:#666;font-weight:400;font-size:9px">· ' + esc(meta) + '</span>' : '') +
+-         '</span>' +
+-+        srcBadge +
+-         '<span style="color:#888;font-size:9px">' + st.trades + ' <span style="color:#666">(' + st.wins + '/' + st.losses + ')</span></span>' +
+-         '<span style="color:' + wrCls + ';font-weight:700;min-width:44px;text-align:right">' + fmtPct(st.winRate) + '</span>' +
+-         '<span style="color:' + netCls + ';font-weight:700;min-width:80px;text-align:right">' + fmtMoneySigned(st.totalNet) + '</span>' +
+-@@ -334,6 +357,7 @@
+-       '</div>' +
+-       '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:3px">' + settingsChips +
+-         '<button data-fs-details="' + esc(s.key) + '" style="background:none;border:1px solid #66ccff;color:#66ccff;border-radius:3px;padding:1px 6px;font-size:8px;cursor:pointer">Settings details</button>' +
+-+        '<button data-fs-run="' + esc(s.key) + '" title="Send this strategy to the AI Smart Trading engine and run it with its saved settings" style="background:#ffd700;border:none;color:#0a0a18;border-radius:3px;padding:1px 8px;font-size:8px;font-weight:700;cursor:pointer">Run</button>' +
+-         '<span style="margin-left:auto;font-size:8px;color:#666">score ' + (st.score != null ? st.score : '--') + '</span>' +
+-       '</div>' +
+-       '<div class="fs-details" data-fs-detail="' + esc(s.key) + '" style="display:none">' + detailsHTML(s) + '</div>' +
+-@@ -383,11 +407,18 @@
+-     });
+-     host.addEventListener('click', e => {
+-       const btn = e.target && e.target.closest ? e.target.closest('[data-fs-details]') : null;
+--      if (!btn) return;
+--      const key = btn.getAttribute('data-fs-details');
+--      const hostEl = btn.closest('[data-fs-row]');
+--      const detail = hostEl ? hostEl.querySelector('.fs-details') : null;
+--      if (detail) detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+-+      if (btn) {
+-+        const key = btn.getAttribute('data-fs-details');
+-+        const hostEl = btn.closest('[data-fs-row]');
+-+        const detail = hostEl ? hostEl.querySelector('.fs-details') : null;
+-+        if (detail) detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+-+        return;
+-+      }
+-+      const runBtn = e.target && e.target.closest ? e.target.closest('[data-fs-run]') : null;
+-+      if (runBtn) {
+-+        const key = runBtn.getAttribute('data-fs-run');
+-+        runStrategy(key);
+-+      }
+-     });
+-   }
+- 
+-@@ -424,6 +455,128 @@
+-     render();
+-   }
+- 
+-+  /* ---------------- manual save (Send to Final Strategy) ---------------- */
+-+  /* Save an explicitly chosen strategy (from the Strategy Container, Pooled
+-+     Strategy Runner or AST engine) into the Final Strategy section. The entry
+-+     carries the strategy definition + its raw engine-settings snapshot so it can
+-+     be re-run later with its ORIGINAL settings (SL / trail SL / TP / timeframes
+-+     / run-in) - exactly the AE -> AST pattern. */
+-+  function saveStrategy(payload) {
+-+    if (!payload || !payload.key) return null;
+-+    const now = Date.now();
+-+    const strat = payload.strategy || {};
+-+    const byKey = new Map(store.strategies.map(x => [x.key, x]));
+-+    const existing = byKey.get(payload.key);
+-+    const stats = payload.stats || (existing ? existing.stats : {});
+-+    let settings = payload.settings || null;
+-+    let snapshot = payload.snapshot || null;
+-+    if (!settings && snapshot) settings = summarizeSettings(snapshot);
+-+    const entry = existing || {};
+-+    entry.key = payload.key;
+-+    entry.name = payload.name || (strat.name || 'Strategy').replace(/^AE:\s*/, '');
+-+    entry.cat = (payload.cat || strat.cat || 'bullish') === 'bearish' ? 'bearish' : 'bullish';
+-+    entry.method = payload.method || strat.method || '';
+-+    entry.tf = payload.tf || strat.tf || '';
+-+    entry.symbol = payload.symbol || (strat.symbol && strat.symbol.name) || null;
+-+    entry.addedAt = entry.addedAt || now;
+-+    entry.lastUpdated = now;
+-+    entry.stats = stats;
+-+    if (settings) entry.settings = settings;
+-+    if (snapshot) entry.snapshot = snapshot;
+-+    if (strat && Object.keys(strat).length) entry.strategy = JSON.parse(JSON.stringify(strat));
+-+    entry.source = payload.source || 'manual';
+-+    delete store.excluded[payload.key];
+-+    byKey.set(payload.key, entry);
+-+    store.strategies = Array.from(byKey.values());
+-+    store.strategies.sort((a, b) => (b.stats.score - a.stats.score) || (b.stats.winRate - a.stats.winRate));
+-+    store.updatedAt = now;
+-+    save();
+-+    render();
+-+    return entry;
+-+  }
+-+
+-+  /* Run a saved Final Strategy in the AI Smart Trading engine with its ORIGINAL
+-+     settings: apply the captured engine-settings snapshot, then import the
+-+     strategy definition the same way the AE engine hands a strategy to AST
+-+     (importFromPaperTrade), which enables + ticks it. */
+-+  function runStrategy(key) {
+-+    const entry = store.strategies.find(x => x.key === key);
+-+    if (!entry) return false;
+-+    const AST = window.AISmartTrading;
+-+    if (!AST || typeof AST.importFromPaperTrade !== 'function') {
+-+      alert('AI Smart Trading engine not ready yet.');
+-+      return false;
+-+    }
+-+    const strat = entry.strategy || {};
+-+    if (entry.snapshot && typeof AST.applySnapshot === 'function') {
+-+      try { AST.applySnapshot(JSON.parse(JSON.stringify(entry.snapshot))); } catch (e) {}
+-+    }
+-+    const payload = [{
+-+      key: strat.key || strat.aeKey || ('fs:' + key),
+-+      name: entry.name || strat.name || 'Final Strategy',
+-+      cat: entry.cat || strat.cat || 'bullish',
+-+      method: strat.method || entry.method || '',
+-+      tf: strat.tf || entry.tf || '5min',
+-+      score: strat.score || 0,
+-+      verdict: strat.verdict || 'Moderate',
+-+      entry: strat.entry || null,
+-+      exit: strat.exit || null,
+-+      entryExtra: strat.entryExtra || null,
+-+      exitExtra: strat.exitExtra || null,
+-+      entryThreshold: strat.entryThreshold != null ? strat.entryThreshold : null,
+-+      candlestick: strat.candlestick || { enabled: false, entry: [], exit: [] },
+-+      refSlPct: (strat.refSlPct != null) ? strat.refSlPct : (strat.autoSlPct != null ? strat.autoSlPct : null),
+-+      refTrailSlPct: (strat.refTrailSlPct != null) ? strat.refTrailSlPct : null
+-+    }];
+-+    let n = 0;
+-+    try { n = AST.importFromPaperTrade(payload); } catch (e) {}
+-+    if (n > 0) {
+-+      if (typeof switchTab === 'function') {
+-+        try { switchTab('papertrade', document.querySelector('[data-tab="papertrade"]')); } catch (e) {}
+-+      }
+-+    } else {
+-+      alert('Strategy could not be imported into the AI Smart Trading engine (it may already be running).');
+-+    }
+-+    return n > 0;
+-+  }
+-+
+-+  /* Save a strategy from the Strategy Container (by its identity key) into the
+-+     Final Strategy section. Resolves the container's aggregated stats + the AST
+-+     settings snapshot captured while it ran. */
+-+  function saveFromContainer(key) {
+-+    if (!key) return null;
+-+    if (!window.StrategyContainer || typeof StrategyContainer.computeStats !== 'function') {
+-+      alert('Strategy Container not ready yet.');
+-+      return null;
+-+    }
+-+    let st = null;
+-+    try { st = StrategyContainer.computeStats().find(x => x.key === key) || null; } catch (e) { st = null; }
+-+    if (!st) return null;
+-+    const strat = st.strat || {};
+-+    const snapshot = resolveSnapshotFor(st);
+-+    const settings = resolveSettingsFor(st);
+-+    return saveStrategy({
+-+      key: key,
+-+      name: (strat.name || 'Strategy').replace(/^AE:\s*/, ''),
+-+      cat: strat.cat === 'bearish' ? 'bearish' : 'bullish',
+-+      method: strat.method || '',
+-+      tf: strat.tf || '',
+-+      symbol: (strat.symbol && strat.symbol.name) || null,
+-+      stats: {
+-+        trades: st.trades, wins: st.wins, losses: st.losses,
+-+        winRate: Math.round(st.winRate * 10) / 10,
+-+        totalNet: Math.round((st.totalNet || 0) * 100) / 100,
+-+        avgPerTrade: Math.round((st.avgPerTrade || 0) * 100) / 100,
+-+        daysTraded: st.daysTraded, lastDay: st.lastDay || null,
+-+        profitFactor: st.profitFactor
+-+      },
+-+      settings: settings || null,
+-+      snapshot: snapshot || null,
+-+      strategy: JSON.parse(JSON.stringify(strat || {})),
+-+      source: 'container'
+-+    });
+-+  }
+-+
+-   /* ---------------- public API ---------------- */
+-   const api = {
+-     scan: scan,
+-@@ -431,6 +584,9 @@
+-     toggleSelectAll: toggleSelectAll,
+-     removeSelected: removeSelected,
+-     removeAll: removeAll,
+-+    saveStrategy: saveStrategy,
+-+    runStrategy: runStrategy,
+-+    saveFromContainer: saveFromContainer,
+-     getState: function () { return store; }
+-   };
+-   window.FinalStrategy = api;
+-diff --git a/static/hft_runner.js b/static/hft_runner.js
+-index 091acc1..2d66c3e 100644
+---- a/static/hft_runner.js
+-+++ b/static/hft_runner.js
+-@@ -257,6 +257,13 @@
+-     };
+-     wrap.appendChild(det);
+- 
+-+    var fin = document.createElement('button');
+-+    fin.textContent = 'Final';
+-+    fin.title = 'Save this pooled strategy to the Final Strategy section (with its win rate, avg/trade, SL / trail SL, timeframe and running settings)';
+-+    fin.style.cssText = 'background:#ffd700;color:#0a0a18;border:none;border-radius:3px;cursor:pointer;padding:2px 6px;font-size:9px;font-weight:700';
+-+    fin.onclick = function () { sendToFinal(tab, row); };
+-+    wrap.appendChild(fin);
+-+
+-     var close = document.createElement('button');
+-     close.textContent = 'close';
+-     close.title = 'Square off this row\'s open positions';
+-@@ -645,6 +652,72 @@
+-     renderList(tab);
+-   }
+- 
+-+  /* Save a pooled-runner row into the Final Strategy section. Captures the
+-+     row's own trade settings (lots / margin / TP / SL / trail SL / timeframes /
+-+     instruments) as a raw engine-settings snapshot so the saved strategy can be
+-+     re-run with the exact settings it used on this row. */
+-+  function sendToFinal(tab, row) {
+-+    if (!window.FinalStrategy || typeof FinalStrategy.saveStrategy !== 'function') {
+-+      alert('Final Strategy module not ready yet.');
+-+      return null;
+-+    }
+-+    if (!row) return null;
+-+    var rmap = resultsMap();
+-+    var r = resolveStrategy(row, rmap);
+-+    if (!r && !row.strategy) {
+-+      alert('Strategy definition not found for this row.');
+-+      return null;
+-+    }
+-+    var stats = rowStats(tab, row);
+-+    var tf = row.tf || (r && r.tf) || '5min';
+-+    var tfs = {};
+-+    tfs[tf] = true;
+-+    var symbols = resolveSymbols(row, r);
+-+    var snapshot = {
+-+      universal: {
+-+        lots: row.lots || 1,
+-+        margin: row.margin || 0,
+-+        manualSL: true,
+-+        manualSLPct: Number(row.slPct) || 0,
+-+        manualTrailSL: true,
+-+        manualTrailSLPct: Number(row.slTrailPct) || 0,
+-+        manualTP: Number(row.tpPct) > 0,
+-+        manualTPPct: Number(row.tpPct) || 0,
+-+        tfs: tfs,
+-+        fnoLimit: row.fnoLimit !== false
+-+      },
+-+      strike: {},
+-+      runIn: {},
+-+      tradeIn: {},
+-+      premiumOnly: false,
+-+      filters: {},
+-+      capturedAt: Date.now()
+-+    };
+-+    var strat = row.strategy || r || {};
+-+    var entry = FinalStrategy.saveStrategy({
+-+      key: rowKeyFor(tab, row) + (strat.aeKey ? ':' + strat.aeKey : ''),
+-+      name: (strat.name || 'Pooled Strategy').replace(/^AE:\s*/, ''),
+-+      cat: (strat.cat === 'bearish') ? 'bearish' : 'bullish',
+-+      method: strat.method || '',
+-+      tf: tf,
+-+      symbol: (symbols && symbols[0] && symbols[0].name) || (strat.symbol && strat.symbol.name) || null,
+-+      stats: {
+-+        trades: stats.trades, wins: stats.wins, losses: stats.losses,
+-+        winRate: stats.winRate == null ? 0 : Math.round(stats.winRate * 10) / 10,
+-+        totalNet: Math.round((stats.realized || 0) * 100) / 100,
+-+        avgPerTrade: stats.trades ? Math.round(((stats.realized || 0) / stats.trades) * 100) / 100 : 0,
+-+        daysTraded: 0, lastDay: null,
+-+        profitFactor: null
+-+      },
+-+      settings: null,
+-+      snapshot: snapshot,
+-+      strategy: JSON.parse(JSON.stringify(strat || {})),
+-+      source: 'pooled'
+-+    });
+-+    if (entry) alert('"' + entry.name + '" saved to Final Strategy.');
+-+    return entry;
+-+  }
+-+
+-   function closePosition(btnEl) {
+-     var rowEl = btnEl.closest('.hft-row');
+-     if (!rowEl) return;
+-@@ -706,6 +779,7 @@
+-     bulkAddStrategies: bulkAddStrategies,
+-     removeStrategy: removeStrategy,
+-     closePosition: closePosition,
+-+    sendToFinal: sendToFinal,
+-     refreshSelects: refreshSelects,
+-     init: init,
+-     jobs: jobs,
+-diff --git a/static/smart_ntrader.js b/static/smart_ntrader.js
+-index 954839f..050f38a 100644
+---- a/static/smart_ntrader.js
+-+++ b/static/smart_ntrader.js
+-@@ -55,7 +55,7 @@
+- 
+-   var NIFTY = { name: 'NIFTY 50', id: 13, exch: 'IDX_I', inst: 'INDEX' };
+-   var POLL_MS = 800;
+--  var TREND_REFRESH_MS = 30 * 1000;
+-+  var TREND_REFRESH_MS = 60 * 1000;
+-   var OPT_TTL_MS = 120 * 1000;
+-   var REV_REARM_MS = 90 * 1000;
+-   var IND_CACHE = new WeakMap();
+-@@ -74,6 +74,7 @@
+-     lotSize: null,   // override (null = auto from /api/lot_sizes)
+-     lots: 1,         // number of lots (quantity = lots x lot size)
+-     strike: { mode: 'both_atm', count: 3, positiveOnly: true },   // option-strike pick (AST dropdown) + only-+green-premium filter
+-+    premiumChart: true,   // place trades on the option premium chart (CE/PE); OFF = trade the underlying spot/futures directly
+-     limitOrder: { enabled: false },  // auto BUY F&O limit above price (~100% fill)
+-     slMode: 'manual',  // 'auto' = auto stoploss (ATR candle-derived base + hunt guard) / 'manual' = user SL % / 'trail' = ATR base + trailing SL ratchet
+-     guardBuf: 5,
+-@@ -176,6 +177,7 @@
+-         state.strike.count = (Number(j.strike.count) > 0) ? Math.round(Number(j.strike.count)) : 3;
+-         state.strike.positiveOnly = j.strike.positiveOnly !== false;
+-       }
+-+      if (j.premiumChart != null) state.premiumChart = !!j.premiumChart;
+-       if (j.limitOrder && typeof j.limitOrder === 'object') {
+-         state.limitOrder.enabled = !!j.limitOrder.enabled;
+-       }
+-@@ -197,6 +199,7 @@
+-         slPct: state.slPct, tpPct: state.tpPct, fixedTp: state.fixedTp,
+-         margin: state.margin, niftyTf: state.niftyTf, stockTf: state.stockTf,
+-         lotSize: state.lotSize, lots: state.lots, strike: state.strike,
+-+        premiumChart: state.premiumChart,
+-         limitOrder: state.limitOrder,
+-         enabledStocks: state.stocks.filter(function (s) { return s.enabled; }).map(function (s) { return s.sym.name; })
+-       }));
+-@@ -698,6 +701,14 @@
+-       enterCommodity(stock);
+-       return;
+-     }
+-+    /* Premium chart OFF: trade the underlying equity spot directly instead of
+-+       resolving an option contract. Side 'CE'/'PE' maps to a plain underlying
+-+       BUY on the spot (a bullish stock is bought outright; a bearish stock's
+-+       spot is still bought as a directional long on the underlying). */
+-+    if (!state.premiumChart) {
+-+      enterUnderlying(stock, '');
+-+      return;
+-+    }
+-     if (!window.AISmartTrading || typeof AISmartTrading.resolveStockOption !== 'function') return;
+-     var optKey = stock.sym.name + ':' + side;
+-     if (state.optInFlight[optKey]) return;
+-@@ -740,6 +751,16 @@
+-      quote, sized by the curated MCX lot. Mirrors enterWithOption but the
+-      executed instrument is the futures spot symbol (no option leg). */
+-   function enterCommodity(stock) {
+-+    enterUnderlying(stock, 'FUT');
+-+  }
+-+
+-+  /* Underlying (spot/futures) entry used when "Place trade in option premium
+-+     chart" is OFF: instead of resolving an option contract and buying the
+-+     premium, the engine BUYs the underlying itself (equity spot for NSE stocks,
+-+     the futures contract for commodities). Same sizing / SL / trail as the
+-+     option path, keyed under the same ntd: position so positions are unique per
+-+     stock. */
+-+  function enterUnderlying(stock, label) {
+-     var sym = stock.sym;
+-     if (!sym) return;
+-     var q = quoteForSym(sym);
+-@@ -771,7 +792,7 @@
+-       var lp = ntPaper().fnoLimitPrice('BUY', q, fillRef);
+-       if (lp > 0) fillTxt = lp.toFixed(2);
+-     }
+--    stock.status = ok ? ('BUY ' + sym.name + ' FUT @ ' + fillTxt + (state.limitOrder.enabled ? ' LIMIT' : '')) : ('entry: ' + (ntPaper().lastAutoSkip || 'rejected'));
+-+    stock.status = ok ? ('BUY ' + sym.name + (label ? ' ' + label : '') + ' @ ' + fillTxt + (state.limitOrder.enabled ? ' LIMIT' : '')) : ('entry: ' + (ntPaper().lastAutoSkip || 'rejected'));
+-     if (ok) {
+-       stock._trd = {
+-         side: 'LONG',
+-@@ -889,13 +910,17 @@
+-   function computeActive() {
+-     var g = sideGroups();
+-     /* Manual selection only: enabled bull/bear rows (capped per side) plus
+--       enabled neutral rows that pass the NIFTY condition gate. */
+-+       enabled neutral rows that pass the NIFTY condition gate. Every side is
+-+       ALSO gated on the NIFTY trend-following threshold (tfOk): while the
+-+       trend filter is ON, a stock below the set daily-change% is dropped from
+-+       the active set immediately - never traded - exactly like the AST/AE
+-+       trend-following picker (per-tick prune below the set percentage). */
+-     for (var j = 0; j < state.stocks.length; j++) state.stocks[j].active = false;
+-     var bullCap = state.bullCount > 0 ? state.bullCount : Infinity;
+-     var bearCap = state.bearCount > 0 ? state.bearCount : Infinity;
+-     var bIdx = 0, rIdx = 0;
+--    for (j = 0; j < g.bulls.length; j++) { var b = g.bulls[j]; if (b.enabled && bIdx < bullCap) { b.active = true; bIdx++; } }
+--    for (j = 0; j < g.bears.length; j++) { var r = g.bears[j]; if (r.enabled && rIdx < bearCap) { r.active = true; rIdx++; } }
+-+    for (j = 0; j < g.bulls.length; j++) { var b = g.bulls[j]; if (b.enabled && b.tfOk !== false && bIdx < bullCap) { b.active = true; bIdx++; } }
+-+    for (j = 0; j < g.bears.length; j++) { var r = g.bears[j]; if (r.enabled && r.tfOk !== false && rIdx < bearCap) { r.active = true; rIdx++; } }
+-     for (j = 0; j < g.neus.length; j++) { var nn = g.neus[j]; if (nn.enabled && nn.tfOk !== false && condFor(state.nifty.current)) nn.active = true; }
+-   }
+- 
+-@@ -1057,6 +1082,7 @@
+-     var alertAt = {};
+-     var tradeAt = {};
+-     var alertSeq = 0;
+-+    var _alertInputVal = '';
+- 
+-     var TF_SECS = { '1min': 60, '2min': 120, '3min': 180, '4min': 240, '5min': 300, '10min': 600, '15min': 900, '30min': 1800, '1hour': 3600, '4hour': 14400 };
+-     var ALERT_COLORS = ['#ff5252', '#26a69a', '#7ad7ff', '#ff9800', '#b39ddb', '#ff6b6b', '#ffb300', '#66ccff'];
+-@@ -1281,10 +1307,10 @@
+-       if (remaining < targets.length) targets = targets.slice(0, remaining);
+-       for (var i = 0; i < targets.length; i++) {
+-         var st = targets[i];
+--        st.status = 'BB%b alert ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY bullish' : 'SELL bearish');
+-+        st.status = 'BB%b alert ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish');
+-         try { resolveAndEnter(st, side, null); } catch (e) {}
+-       }
+--      toast('BB%b trade alert @ ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY bullish picks' : 'SELL bearish picks') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
+-+      toast('BB%b trade alert @ ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY CE bullish picks' : 'BUY PE bearish picks') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
+-     }
+-     /* "+" button popover: list the pane's alert lines (with remove) + add input. */
+-     function toggleAlertBox() {
+-@@ -1345,7 +1371,7 @@
+-           var opts = [
+-             ['auto', 'Auto - per NIFTY trend'],
+-             ['bull', 'Bullish stocks (BUY)'],
+--            ['bear', 'Bearish stocks (SELL)']
+-+            ['bear', 'Bearish stocks (BUY PE)']
+-           ];
+-           var curMode = (ln.trade && ln.trade.mode) || 'auto';
+-           for (var oi = 0; oi < opts.length; oi++) {
+-@@ -1366,14 +1392,41 @@
+-         })(alertLines[i]);
+-       }
+-       box.appendChild(list);
+-+      var quickRow = document.createElement('div');
+-+      quickRow.style.cssText = 'display:flex;gap:4px;margin-bottom:6px';
+-+      var last = (window.IndChart && IndChart.computeLastTwo) ? IndChart.computeLastTwo('bbpct', settings, 'v0', candles) : null;
+-+      var lastVal = (last && last.last != null && !isNaN(last.last)) ? fmtV(last.last) : '0.5';
+-+      /* Quick-add buttons: add a bullish (BUY CE) alert and a bearish (BUY PE)
+-+         alert side-by-side, so both conditions can be armed together. Each
+-+         quick alert pre-arms trade execution on its own side. All trades are
+-+         BUY-side only (buy the CE contract for bullish, buy the PE contract
+-+         for bearish) - no SELL/short orders exist in this engine. */
+-+      var quickBtn = function (label, mode, color) {
+-+        var b = document.createElement('button');
+-+        b.textContent = label;
+-+        b.title = 'Add a BB%b alert for the ' + (mode === 'bull' ? 'BULLISH' : 'BEARISH') + ' side (executes trades on this side when crossed)';
+-+        b.style.cssText = 'flex:1;background:#12122a;border:1px solid ' + color + ';color:' + color + ';border-radius:3px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer';
+-+        b.onmouseover = function () { b.style.background = color; b.style.color = '#0b0b1a'; };
+-+        b.onmouseout = function () { b.style.background = '#12122a'; b.style.color = color; };
+-+        b.onclick = function () {
+-+          var v = parseFloat(_alertInputVal || inp.value);
+-+          if (isNaN(v)) v = parseFloat(lastVal);
+-+          if (isNaN(v)) { inp.focus(); return; }
+-+          addAlertLine(v, mode);
+-+        };
+-+        return b;
+-+      };
+-+      quickRow.appendChild(quickBtn('+ BULLISH alert (BUY CE)', 'bull', '#00d4aa'));
+-+      quickRow.appendChild(quickBtn('+ BEARISH alert (BUY PE)', 'bear', '#ff4d6a'));
+-+      box.appendChild(quickRow);
+-       var addRow = document.createElement('div');
+-       addRow.style.cssText = 'display:flex;gap:4px';
+-       var inp = document.createElement('input');
+-       inp.type = 'number'; inp.step = '0.05';
+-       inp.style.cssText = 'flex:1;min-width:0;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px';
+--      var last = (window.IndChart && IndChart.computeLastTwo) ? IndChart.computeLastTwo('bbpct', settings, 'v0', candles) : null;
+--      inp.value = (last && last.last != null && !isNaN(last.last)) ? fmtV(last.last) : '0.5';
+-+      inp.value = (_alertInputVal !== '') ? _alertInputVal : lastVal;
+-       inp.placeholder = 'Value (e.g. 0.5, 1.0)';
+-+      inp.addEventListener('input', function () { _alertInputVal = inp.value; });
+-       var btn = document.createElement('button');
+-       btn.textContent = '+ Add';
+-       btn.style.cssText = 'background:#00d4aa;color:#0b0b1a;border:none;border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer';
+-@@ -1386,9 +1439,17 @@
+-       addRow.appendChild(inp); addRow.appendChild(btn);
+-       box.appendChild(addRow);
+-     }
+--    function addAlertLine(price) {
+--      if (alertLines.some(function (l) { return Math.abs(Number(l.price) - price) < 1e-9; })) return;
+--      alertLines.push({ id: 'al' + (alertSeq++), price: price, color: ALERT_COLORS[alertLines.length % ALERT_COLORS.length], trade: { enabled: false, mode: 'auto' } });
+-+    function addAlertLine(price, mode) {
+-+      mode = (mode === 'bull' || mode === 'bear') ? mode : (mode || 'auto');
+-+      /* Multiple alerts at the SAME price are allowed (e.g. one bullish and one
+-+         bearish draw-line on the same value) - each line is a separate alert
+-+         with its own trade side, so no duplicate-price rejection. */
+-+      alertLines.push({
+-+        id: 'al' + (alertSeq++),
+-+        price: price,
+-+        color: ALERT_COLORS[alertLines.length % ALERT_COLORS.length],
+-+        trade: mode === 'auto' ? { enabled: false, mode: 'auto' } : { enabled: true, mode: mode }
+-+      });
+-       applyAlertLines();
+-       renderAlertBox();
+-     }
+-@@ -1913,13 +1974,43 @@
+-     /* Daily % change up-to-date + re-sort of the F&O list so any stock that
+-        moved up into the top / flipped sign shows at its new rank. */
+-     state._sortDirty = true;
+--    var line = '30s refresh @ ' + timeStr() + ' · NIFTY ' + state.nifty.current + ' · chg ' + chgTxt +
+-+    var line = '60s refresh @ ' + timeStr() + ' · NIFTY ' + state.nifty.current + ' · chg ' + chgTxt +
+-       ' · ' + fmtNum(performance.now() - t0, 1) + 'ms';
+-     state.trendRefresh = line;
+-     setText('ntrTrendRefresh', line);
+-     console.log('[SmartNTrader]', line);
+-   }
+- 
+-+  /* Stopped-state status pulse (AST/AE poll-timer port): while the engine is
+-+     NOT running the NIFTY direction is still computed from the server candle
+-+     series (available even with the market closed, like AST's niftyBias) so
+-+     the NIFTY Trend Following fetched-stock list, NIFTY cards and F&O table
+-+     stay live and visible. tick() already does all of this while running, so
+-+     this only acts when state.running is false. */
+-+  function statusPulse() {
+-+    if (!state.visible || state.running) return;
+-+    var nk = symKey(NIFTY);
+-+    if (!state.series[nk] || (Date.now() - (state.seriesAt[nk] || 0)) > TREND_REFRESH_MS) {
+-+      ensureCandles(NIFTY, state.niftyTf, nk, TREND_REFRESH_MS);
+-+    }
+-+    var niftyInd = indicators(state.series[nk]);
+-+    var niftyTrend = detectNifty(niftyInd);
+-+    if (niftyTrend && niftyTrend.current !== '...') {
+-+      state.nifty.overall = niftyTrend.overall;
+-+      state.nifty.current = niftyTrend.current;
+-+      state.nifty.reversal = niftyTrend.reversal;
+-+      state.nifty.bbPct = niftyTrend.bbPct;
+-+      state.nifty.bb = niftyTrend.bb;
+-+    }
+-+    var nq = quoteForSym(NIFTY);
+-+    if (nq && nq.ltp) {
+-+      state.nifty.ltp = Number(nq.ltp);
+-+      state.nifty.chg = nq.change !== undefined ? Number(nq.change) : 0;
+-+      state.nifty.chgPct = nq.change_pct !== undefined ? Number(nq.change_pct) : 0;
+-+    }
+-+    render();
+-+  }
+-+
+-   /* ---------------- position reads ---------------- */
+- 
+-   function posAt(posKey) {
+-@@ -2112,6 +2203,7 @@
+-     if (tpi) { tpi.disabled = !state.trend.enabled; tpi.style.opacity = state.trend.enabled ? '1' : '0.5'; }
+- 
+-     renderStockRows();
+-+    renderFetched();
+-     renderPicked();
+-     renderPositions();
+-     renderSummary();
+-@@ -2123,12 +2215,75 @@
+-      values (LTP, %Chg, score) still update in place every tick, so the table
+-      stays live without reordering the DOM constantly. */
+- 
+-+  /* Fetched-stocks display (AST renderNiftyTrendList port). Shows exactly the
+-+     stocks the engine currently fetches by whichever method is active:
+-+       - NIFTY Trend Following ON -> F&O stocks on the live NIFTY trend side
+-+         whose daily change% is at/above the set threshold (pct for bullish,
+-+         -pct for bearish), biggest movers first. Green border = currently
+-+         active (enabled + qualifies + cap slot), dim = qualifies but not
+-+         enabled so not traded yet.
+-+       - Trend following OFF -> the manually enabled rows.
+-+     The list re-renders every tick from the live client quote cache, so a
+-+     stock that drops below the threshold disappears from the fetched set the
+-+     same second its quote falls. */
+-+  var _fetchedHtml = '';
+-+  function renderFetched() {
+-+    var box = el('ntrFetched');
+-+    if (!box) return;
+-+    var nc = state.nifty.current;
+-+    var out = '';
+-+    if (trendFilterActive()) {
+-+      var thresh = trendPct();
+-+      var rows = [];
+-+      for (var i = 0; i < state.stocks.length; i++) {
+-+        var s = state.stocks[i];
+-+        if (isCommodity(s.sym)) continue;
+-+        var chg = dailyChangePct(s);
+-+        if (isNaN(chg)) continue;
+-+        var ok = (nc === 'BULL' && chg >= thresh) || (nc === 'BEAR' && chg <= -thresh);
+-+        if (!ok) continue;
+-+        rows.push({ s: s, chg: chg });
+-+      }
+-+      rows.sort(function (a, b) { return nc === 'BULL' ? b.chg - a.chg : a.chg - b.chg; });
+-+      if (rows.length) {
+-+        out = '<div style="font-size:9px;color:' + (nc === 'BULL' ? '#00d4aa' : '#ff4d6a') + ';margin-bottom:2px">NIFTY ' + nc +
+-+          ' &middot; fetched ' + rows.length + ' F&amp;O stock' + (rows.length === 1 ? '' : 's') + ' with daily change% ' + (nc === 'BULL' ? '&ge; +' : '&le; -') + thresh + '%</div>';
+-+        for (var r = 0; r < rows.length; r++) {
+-+          var f = rows[r];
+-+          var s2 = f.s;
+-+          var border = s2.active ? '#00d4aa' : '#2d2d50';
+-+          var col = s2.active ? '#d0d0d0' : '#777';
+-+          out += '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;background:#12122a;border:1px solid ' + border + ';border-radius:3px;padding:2px 6px;color:' + col + '" title="' + s2.sym.name + ' ' + (f.chg >= 0 ? '+' : '') + f.chg.toFixed(2) + '% daily' + (s2.active ? ' · ACTIVE (traded)' : ' · qualifies, not enabled') + '">' + s2.sym.name +
+-+            ' <b style="color:' + (f.chg >= 0 ? '#00d4aa' : '#ff4d6a') + '">' + (f.chg >= 0 ? '+' : '') + f.chg.toFixed(2) + '%</b></span>';
+-+        }
+-+      } else {
+-+        out = '<span style="font-size:10px;color:#555">No F&amp;O stocks currently qualify at ' + thresh + '% on NIFTY ' + (nc === 'BULL' || nc === 'BEAR' ? nc.toLowerCase() : 'trend unknown') + ' - lower the threshold or wait for stronger daily moves.</span>';
+-+      }
+-+    } else {
+-+      var list = state.stocks.filter(function (s) { return !!s.enabled; });
+-+      if (list.length) {
+-+        out = '<div style="font-size:9px;color:#888;margin-bottom:2px">Trend following OFF - fetching the ' + list.length + ' manually enabled row' + (list.length === 1 ? '' : 's') + ':</div>';
+-+        for (var m = 0; m < list.length; m++) {
+-+          var ms = list[m];
+-+          var mc = dailyChangePct(ms);
+-+          var border2 = ms.active ? '#00d4aa' : '#2d2d50';
+-+          var col2 = ms.active ? '#d0d0d0' : '#777';
+-+          out += '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;background:#12122a;border:1px solid ' + border2 + ';border-radius:3px;padding:2px 6px;color:' + col2 + '">' + ms.sym.name +
+-+            ' <b style="color:' + (mc >= 0 ? '#00d4aa' : '#ff4d6a') + '">' + (isNaN(mc) ? '--' : (mc >= 0 ? '+' : '') + mc.toFixed(2) + '%') + '</b></span>';
+-+        }
+-+      } else {
+-+        out = '<span style="font-size:10px;color:#555">No stocks fetched yet - check rows in the F&amp;O table or enable NIFTY Trend Following.</span>';
+-+      }
+-+    }
+-+    if (out !== _fetchedHtml) { _fetchedHtml = out; box.innerHTML = out; }
+-+  }
+-+
+-   /* One section for every manually enabled F&O stock + its picked strike.
+-      Blue chip = open position on that strike, amber = strike resolved but not
+-      yet in position, gray = still resolving the chain. */
+-   var _pickedHtml = '';
+-   function renderPicked() {
+--    var box = el('ntrPicked');
+-+    var box = el('ntrPicked');    var box = el('ntrPicked');
+-     if (!box) return;
+-     var list = state.stocks.filter(function (s) { return !!s.enabled; });
+-     var out = '';
+-@@ -2480,6 +2635,15 @@
+-     state.strike.positiveOnly = !!el('ntrGreenOnly').checked;
+-     saveSettings();
+-   }
+-+  function onPremiumChartChange() {
+-+    state.premiumChart = !!el('ntrPremiumChart').checked;
+-+    saveSettings();
+-+    syncPremiumChartUI();
+-+  }
+-+  function syncPremiumChartUI() {
+-+    var pc = el('ntrPremiumChart');
+-+    if (pc) pc.checked = !!state.premiumChart;
+-+  }
+-   function syncGreenUI() {
+-     var g = el('ntrGreenOnly');
+-     if (g) g.checked = !!state.strike.positiveOnly;
+-@@ -2606,6 +2770,7 @@
+-     state._sortDirty = true;
+-     setInterval(tick, POLL_MS);
+-     setInterval(refreshTrendData, TREND_REFRESH_MS);
+-+    setInterval(statusPulse, POLL_MS);
+-     NiftyChart.init();
+-     StrikeChart.init();
+-     state.visible = true;
+-@@ -2662,6 +2827,9 @@
+-     var gr = el('ntrGreenOnly');
+-     if (gr) { gr.checked = !!state.strike.positiveOnly; gr.addEventListener('change', onGreenOnlyChange); }
+-     syncGreenUI();
+-+    var pc = el('ntrPremiumChart');
+-+    if (pc) { pc.checked = !!state.premiumChart; pc.addEventListener('change', onPremiumChartChange); }
+-+    syncPremiumChartUI();
+-     var lo = el('ntrLimitOrder');
+-     if (lo) { lo.checked = !!state.limitOrder.enabled; lo.addEventListener('change', onLimitOrderChange); }
+-     syncLimitUI();
+-diff --git a/static/strategy_container.js b/static/strategy_container.js
+-index 878765d..64d444e 100644
+---- a/static/strategy_container.js
+-+++ b/static/strategy_container.js
+-@@ -739,6 +739,7 @@ window.createStrategyContainer = function () {
+-       : '<span style="color:#00d4aa;font-size:8px;border:1px solid #00d4aa;border-radius:2px;padding:1px 4px;font-weight:700">BULLISH</span>';
+-     return '<tr>' +
+-       '<td style="text-align:center"><input type="checkbox" class="sc-sel" data-rid="' + esc(strategyIdentity(s)) + '" onchange="StrategyContainer.selRow(this)" title="Select for pooled paper trading"></td>' +
+-+      '<td style="text-align:center"><button class="btn-action" style="width:auto;padding:1px 6px;margin:0;font-size:8px;background:#ffd700;color:#0a0a18" onclick="if(window.FinalStrategy)FinalStrategy.saveFromContainer(\'' + esc(strategyIdentity(s)) + '\')" title="Save this strategy to the Final Strategy section (with its win rate, avg/trade, SL / trail SL, timeframe and running settings)">Final</button></td>' +
+-       '<td style="max-width:190px"><div style="font-weight:700;color:#d0d0d0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(name) + '">' + esc(name) + '</div>' +
+-         '<div style="font-size:8px;color:#777;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(meta) + refTxt + '</div></td>' +
+-       '<td>' + badge + '</td>' +
+-@@ -760,7 +761,7 @@ window.createStrategyContainer = function () {
+-     }
+-     return '<div style="margin-top:6px"><div style="font-size:10px;font-weight:700;color:' + color + ';margin:4px 0 2px">' + title + ' Strategies <span style="color:#666;font-weight:400">(' + list.length + ')</span></div>' +
+-       '<table class="account-table" style="font-size:9px"><thead><tr>' +
+--      '<th style="text-align:center" title="Select for pooled paper trading">Sel</th><th>Strategy</th><th>Type</th><th>Trades (W/L)</th><th>Win Rate</th><th>Total P&L</th><th>Avg/Trade</th><th>Days</th><th>Last Day</th><th>Last Day P&L</th><th>Best Day</th><th>PF</th>' +
+-+      '<th style="text-align:center" title="Select for pooled paper trading">Sel</th><th style="text-align:center" title="Save to Final Strategy section">Final</th><th>Strategy</th><th>Type</th><th>Trades (W/L)</th><th>Win Rate</th><th>Total P&L</th><th>Avg/Trade</th><th>Days</th><th>Last Day</th><th>Last Day P&L</th><th>Best Day</th><th>PF</th>' +
+-       '</tr></thead><tbody>' + list.map(rowHTML).join('') + '</tbody></table></div>';
+-   }
+- 
+-diff --git a/templates/index.html b/templates/index.html
+-index 28ea300..b52f530 100644
+---- a/templates/index.html
+-+++ b/templates/index.html
+-@@ -985,6 +985,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+-             <span id="astPerfInfo" style="font-size:9px;color:#888"></span>
+-             <span style="font-size:9px;color:#666">Tick saved strategies to trade them live with the settings below (no backtest)</span>
+-           </div>
+-+          <div id="astSummary" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
+-           <div class="monitor-toolbar" style="border:1px solid #1e1e40;border-radius:4px;margin:4px 0">
+-             <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
+-               <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#b39ddb">Template:</b></div>
+-@@ -1167,7 +1168,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+-             </label>
+-             <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
+-               <select id="astRunInComm" onchange="AISmartTrading.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
+--                <option value="spot" selected>Futures contract</option>
+-+                <option value="spot" selected>Spot chart</option>
+-+                <option value="futures">Futures contract</option>
+-                 <option value="premium">Option premium chart</option>
+-               </select>
+-             </label>
+-@@ -1381,7 +1383,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+-           <div class="account-section" id="fsSection" style="flex:1.4;overflow-y:auto;border-top:1px solid #ffd700;margin-top:8px;padding-top:6px">
+-             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0">
+-               <h3 style="font-size:11px;color:#ffd700;text-transform:uppercase;margin:0">Final Strategy <span id="fsCount" style="color:#666"></span></h3>
+--              <span style="font-size:9px;color:#888">Best performing strategies auto-saved from Paper Trade / Strategy Container / Pooled Strategy Runner</span>
+-+              <span style="font-size:9px;color:#888">Best performing strategies auto-saved from Paper Trade / Strategy Container / Pooled Strategy Runner — or saved manually via the gold <b>Final</b> button on any running strategy. Use <b>Run</b> on a row to re-run it in the AI Smart Trading engine with its original settings.</span>
+-             </div>
+-             <div class="monitor-toolbar" style="border:1px solid #4a3a0a;border-radius:4px;margin:4px 0">
+-               <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
+-@@ -1402,7 +1404,6 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+-           <div id="astRunningList"></div>
+-           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Closed AI Smart Trades</h3>
+-           <div id="astClosedList"></div>
+--          <div id="astSummary" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
+-           <div id="astLog" style="max-height:140px;overflow-y:auto;font-size:9px;color:#888;line-height:1.5;border-top:1px solid #1e1e40;margin-top:6px;padding:6px 8px"></div>
+-         </div>
+-       </div>
+-@@ -1614,7 +1615,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+-             </label>
+-             <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
+-               <select id="aeRunInComm" onchange="AutoExperiment.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
+--                <option value="spot" selected>Futures contract</option>
+-+                <option value="spot" selected>Spot chart</option>
+-+                <option value="futures">Futures contract</option>
+-                 <option value="premium">Option premium chart</option>
+-               </select>
+-             </label>
+-@@ -1817,7 +1819,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+-           <button class="btn-action" id="ntrToggle" style="width:auto;padding:4px 12px;margin:0;font-size:10px">Start</button>
+-           <span style="font-size:9px;color:#888" id="ntrStatus">STOPPED</span>
+-           <span style="flex:1"></span>
+--          <span id="ntrTrendRefresh" style="font-size:9px;color:#66ccff">30s refresh --</span>
+-+          <span id="ntrTrendRefresh" style="font-size:9px;color:#66ccff">60s refresh --</span>
+-           <span id="ntrTick" style="font-size:9px;color:#666">tick --ms</span>
+-         </div>
+-         <div style="display:flex;align-items:center;gap:10px;padding:5px 8px;border-bottom:1px solid #1e1e40;flex-wrap:wrap">
+-@@ -1865,6 +1867,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+-           </label>
+-           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">Number of Strikes <input type="number" id="ntrStrikeCount" value="3" min="0" step="1" title="How many strikes on each side (ATM mode always resolves the single ATM strike)" style="width:44px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"></label>
+-           <label style="font-size:10px;color:#00d4aa;display:flex;align-items:center;gap:4px" title="Only pick strikes whose premium (LTP) and LTP change are both positive and rising. A strike with minus/zero LTP or a falling/minus LTP change is skipped and the next positive rising strike is chosen instead. OFF = accept any strike including red (minus) premiums."><input type="checkbox" id="ntrGreenOnly" checked> Only +green premium strikes (skip minus LTP / LTP change)</label>
+-+          <label style="font-size:10px;color:#ffd700;display:flex;align-items:center;gap:4px" title="Place trades on the option premium chart (CE for bullish / PE for bearish). OFF = trade the underlying spot/futures directly instead of an option premium."><input type="checkbox" id="ntrPremiumChart" checked> Place trade in option premium chart</label>
+-           <label style="font-size:10px;color:#00d4aa;display:flex;align-items:center;gap:4px;border-left:1px solid #2d2d50;padding-left:10px" title="Place every BUY F&O entry as an automatic LIMIT order. The system computes the best marketable limit price - crossing the best ask plus a safety buffer - so the order is fulfilled ~100% of the time and is always ABOVE the current price. OFF = market order at the live price."><input type="checkbox" id="ntrLimitOrder"> BUY F&amp;O Limit Order (auto)</label>
+-           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">NIFTY TF <select id="ntrNiftyTf" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"><option value="1min">1min</option><option value="5min" selected>5min</option><option value="15min">15min</option></select></label>
+-           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">Stock TF <select id="ntrStockTf" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"><option value="1min">1min</option><option value="5min" selected>5min</option><option value="15min">15min</option></select></label>
+-@@ -1977,6 +1980,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+-               <tbody id="ntrBody"></tbody>
+-             </table>
+-           </div>
+-+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Fetched Stocks <span style="text-transform:none;color:#666;font-weight:normal">(NIFTY trend following / active method)</span></h3>
+-+          <div id="ntrFetched" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Stocks the engine currently fetches: when NIFTY Trend Following is ON these are the F&O stocks whose live daily change% is at/above the set threshold on the NIFTY trend side; when OFF it is the manually enabled rows. Green border = active (tradable), dim = fetched but not enabled."></div>
+-           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Picked Stocks &amp; Strikes <span style="text-transform:none;color:#666;font-weight:normal">(manual selection)</span></h3>
+-           <div id="ntrPicked" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Every manually enabled F&O stock and its picked strike. Blue = open position, amber = strike resolved, gray = still resolving."></div>
+-           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
+-@@ -5518,17 +5523,17 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
+- <script src="/static/aitrades.js?v=1"></script>
+- <script src="/static/strategies.js?v=64"></script>
+- <script src="/static/papertrade.js?v=28"></script>
+--<script src="/static/strategy_container.js?v=14"></script>
+--<script src="/static/autoexperiment.v13.js?v=122"></script>
+-+<script src="/static/strategy_container.js?v=15"></script>
+-+<script src="/static/autoexperiment.v13.js?v=124"></script>
+- <script src="/static/indextrend.js?v=2"></script>
+- <script src="/static/simulator.js?v=2"></script>
+--<script src="/static/aismart.js?v=93"></script>
+-+<script src="/static/aismart.js?v=96"></script>
+- <script src="/static/paperrun.js?v=16"></script>
+- <script src="/static/paperstrategies.js?v=4"></script>
+- <script src="/static/hft_pool.js?v=2"></script>
+--<script src="/static/hft_runner.js?v=6"></script>
+--<script src="/static/final_strategy.js?v=1"></script>
+--<script src="/static/smart_ntrader.js?v=40"></script>
+-+<script src="/static/hft_runner.js?v=7"></script>
+-+<script src="/static/final_strategy.js?v=2"></script>
+-+<script src="/static/smart_ntrader.js?v=46"></script>
+- <script src="/static/backup.js?v=1"></script>
+- <script>
+- /* Engine instantiation for the base tabs and every duplicated tab. The cloned
 diff --git a/static/aismart.js b/static/aismart.js
-index 04849b5..4488425 100644
+index 4856d3f..e89df6d 100644
 --- a/static/aismart.js
 +++ b/static/aismart.js
-@@ -936,11 +936,14 @@ window.createAISmartTrading = function (suffix) {
-       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
-       // premium chart) or 'both' (spot + premium). Indices default to 'both',
-       // F&O stocks default to 'spot'. Commodities default to the futures
--      // contract ('spot') but honour their own dropdown.
-+      // contract ('spot') but honour their own dropdown. Commodities also
-+      // accept 'futures' (explicit futures-contract chart, same underlying
-+      // near-month FUTCOM chart as 'spot').
-       const OK = ['spot', 'premium', 'both'];
-+      const COMM_OK = ['spot', 'premium', 'both', 'futures'];
-       if (OK.indexOf(s.runIn.index) < 0) s.runIn.index = 'both';
-       if (OK.indexOf(s.runIn.fno) < 0) s.runIn.fno = 'spot';
--      if (OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
-+      if (COMM_OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
-       if (typeof s.runIn.default !== 'boolean') s.runIn.default = false;
-     } else if (s) {
-       s.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false };
-@@ -1188,7 +1191,14 @@ window.createAISmartTrading = function (suffix) {
-     // execution chart to the option premium chart for every instrument type.
-     if (state.premiumOnly) return 'premium';
-     const ri = state.runIn || {};
--    if (isCommodity(symbol)) return (ri && ri.comm) || 'spot';
-+    if (isCommodity(symbol)) {
-+      const m = (ri && ri.comm) || 'spot';
-+      // Commodities have no separate index/equity spot - both "Spot chart" and
-+      // "Futures contract" run on the near-month FUTCOM underlying chart, so
-+      // 'futures' behaves exactly like 'spot' (the near-month contract is the
-+      // commodity's underlying/main chart).
-+      return m === 'futures' ? 'spot' : m;
-+    }
-     if (!isIndex(symbol)) return ri.fno || 'spot';
-     return ri.index || 'both';
-   }
-@@ -2845,13 +2855,6 @@ window.createAISmartTrading = function (suffix) {
-     if (minute >= t) { _autoSquareOffDoneDay = day; return true; }
-     return false;
-   }
--  function isMarketOpenNow() {
--    try {
--      const now = Math.floor(Date.now() / 1000);
--      if (typeof isMarketOpen === 'function') return !!isMarketOpen(now);
--    } catch (e) {}
--    return true;
--  }
-   function resetTradeCountsIfNewDay() {
-     const day = istDay();
-     if (day !== state.tradeCountDay) {
-@@ -2901,7 +2904,6 @@ window.createAISmartTrading = function (suffix) {
-     const u = state.universal;
-     if (!liveTimeGateOk()) return 0;
-     if (u && u.aiTrades) {
--      if (!isMarketOpenNow()) return 0;
-       const r = { key: s.id, optionSid: instr.kind === 'option' ? instr.sid : null, symbol: instr.symbol };
-       aiTradesDecisionFor(candles, liveOICtx(r));
-       return null;
-@@ -3028,7 +3030,7 @@ window.createAISmartTrading = function (suffix) {
-     const ptState = pt.getState ? pt.getState() : null;
-     const autoPositions = (ptState && ptState.autoPositions) || {};
-     if (!(u && u.hft)) return;
--      if (!liveTimeGateOk() || !isMarketOpenNow()) return;
-+      if (!liveTimeGateOk()) return;
-       const strategies = activeStrategies();
-       if (!strategies.length) return;
-       const instruments = hftInstruments();
-@@ -3852,7 +3854,9 @@ window.createAISmartTrading = function (suffix) {
-   }
- 
-   function modeLabel(m) {
--    return m === 'spot' ? 'spot chart' : (m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart');
-+    if (m === 'spot') return 'spot chart';
-+    if (m === 'futures') return 'futures contract';
-+    return m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart';
-   }
- 
-   /* Premium-only mode: a single master toggle that locks the strategy run
-@@ -4622,6 +4626,7 @@ window.createAISmartTrading = function (suffix) {
-       '<span style="color:#fff;flex:1">' + esc(s.name) + (s.tf ? ' <span style="color:#666">· ' + esc(s.tf) + '</span>' : '') + '</span>' +
-       '<span style="color:#888;min-width:46px;text-align:right">' + esc(gLabel) + '</span>' +
-       '<span style="color:' + (isActive ? '#00d4aa' : '#555') + ';min-width:52px;text-align:right;font-weight:700">' + (isActive ? 'ACTIVE' : 'IDLE') + '</span>' +
-+      '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ffd700;color:#0a0a18" onclick="AISmartTrading.sendToFinal(\'' + esc(s.id) + '\')" title="Save this strategy to the Final Strategy section with its settings">Final</button>' +
-       '</div>';
-   }
- 
-@@ -4737,6 +4742,7 @@ window.createAISmartTrading = function (suffix) {
-         '<span style="color:#fff;flex:1">' + esc(s.name) + (s.tf ? ' <span style="color:#666">· ' + esc(s.tf) + '</span>' : '') + '</span>' +
-         '<span style="color:' + vCol + ';min-width:36px;text-align:right">' + (s.score || 0) + '</span>' +
-         '<span style="color:#888;min-width:40px;text-align:right;font-size:9px">' + tag + '</span>' +
-+        '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ffd700;color:#0a0a18" onclick="AISmartTrading.sendToFinal(\'' + esc(s.id) + '\')" title="Save this strategy to the Final Strategy section with its settings">Final</button>' +
-         '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px" onclick="AISmartTrading.openChart(\'' + esc(s.id) + '\')">Open Chart</button>' +
-         '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ef5350;color:#fff" onclick="AISmartTrading.' + removeFn + '(\'' + esc(s.id) + '\')">Remove</button>' +
-         '</div>';
-@@ -5166,6 +5172,56 @@ window.createAISmartTrading = function (suffix) {
-     render();
-   }
- 
-+  /* Save an AST-engine strategy (saved / imported / manual / AI-pick) into the
-+     Final Strategy section. Captures the strategy definition + a raw snapshot of
-+     the engine settings currently applied, so it can be re-run later with its
-+     original SL / trail SL / TP / timeframes / run-in settings - the same way
-+     the AE engine hands a strategy to AST. */
-+  function sendToFinal(id) {
-+    if (!window.FinalStrategy || typeof FinalStrategy.saveStrategy !== 'function') {
-+      log('Final Strategy module not ready', 'warn');
-+      return null;
-+    }
-+    let s = null;
-+    const saved = loadSaved().find(x => String(x.id) === String(id));
-+    const imported = (state.imported || []).find(x => String(x.id) === String(id));
-+    const manual = (state.manual || []).find(x => String(x.id) === String(id));
-+    const aiPick = (state.aiPicks || []).find(x => String(x.id) === String(id));
-+    s = saved || imported || manual || aiPick;
-+    if (!s) { log('Strategy not found: ' + id, 'warn'); return null; }
-+    setSettingsFor(id);
-+    const snapshot = state.settingsSnapshots ? state.settingsSnapshots[id] : null;
-+    const closed = (state.closed || []).filter(t => t && t.strategyId != null && String(t.strategyId) === String(id));
-+    let wins = 0, losses = 0, net = 0;
-+    closed.forEach(t => {
-+      const p = (t.netPnl != null) ? Number(t.netPnl) : Number(t.pnl || 0);
-+      net += p;
-+      if (p > 0) wins++; else if (p < 0) losses++;
-+    });
-+    const entry = FinalStrategy.saveStrategy({
-+      key: 'ast:' + id,
-+      name: (s.name || 'Strategy').replace(/^AE:\s*/, ''),
-+      cat: s.cat === 'bearish' ? 'bearish' : 'bullish',
-+      method: s.method || '',
-+      tf: s.tf || '',
-+      symbol: (s.symbol && s.symbol.name) || null,
-+      stats: {
-+        trades: closed.length, wins: wins, losses: losses,
-+        winRate: closed.length ? Math.round((wins / closed.length) * 1000) / 10 : 0,
-+        totalNet: Math.round(net * 100) / 100,
-+        avgPerTrade: closed.length ? Math.round((net / closed.length) * 100) / 100 : 0,
-+        daysTraded: 0, lastDay: null,
-+        profitFactor: null
-+      },
-+      settings: null,
-+      snapshot: snapshot ? JSON.parse(JSON.stringify(snapshot)) : null,
-+      strategy: JSON.parse(JSON.stringify(s || {})),
-+      source: 'ast'
-+    });
-+    if (entry) log('"' + entry.name + '" saved to Final Strategy', 'ok');
-+    return entry;
-+  }
-+
-   /* Remove strategies from the saved strategy library (localStorage), either all
-      of one category or only the ticked ones. Also drops them from the selected
-      lists, untracks them from state.selected and squares off any open position
-@@ -5497,6 +5553,11 @@ window.createAISmartTrading = function (suffix) {
-     /* Engine-settings snapshot captured while a strategy was running
-        (strategyId -> { capturedAt, settings }), for the Final Strategy panel. */
-     getSettingsSnapshot(id) { return (state.settingsSnapshots && id != null) ? state.settingsSnapshots[id] : null; },
-+    /* Re-apply a captured engine-settings snapshot (SL / trail SL / TP /
-+       timeframes / run-in) so a saved Final Strategy runs with its original
-+       settings - the same restore path the saved templates use. */
-+    applySnapshot(snap) { try { applyEngineSettings(snap); return true; } catch (e) { return false; } },
-+    sendToFinal(id) { return sendToFinal(id); },
-     experimentSymbols() { return experimentSymbols(); },
-     chainRateLimited(s) { return chainRateLimited(s); },
-     /* Resolve the tradeable instruments for a list of template symbols, exactly
-diff --git a/static/autoexperiment.v13.js b/static/autoexperiment.v13.js
-index 9cff5b4..119e237 100644
---- a/static/autoexperiment.v13.js
-+++ b/static/autoexperiment.v13.js
-@@ -2340,11 +2340,14 @@ window.createAutoExperiment = function (suffix) {
-       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
-       // premium chart) or 'both' (spot + premium). Indices default to 'both',
-       // F&O stocks default to 'spot'. Commodities default to the futures
--      // contract ('spot') but honour their own dropdown.
-+      // contract ('spot') but honour their own dropdown. Commodities also
-+      // accept 'futures' (explicit futures-contract chart, same underlying
-+      // near-month FUTCOM chart as 'spot').
-       const OK = ['spot', 'premium', 'both'];
-+      const COMM_OK = ['spot', 'premium', 'both', 'futures'];
-       if (OK.indexOf(s.runIn.index) < 0) s.runIn.index = 'both';
-       if (OK.indexOf(s.runIn.fno) < 0) s.runIn.fno = 'spot';
--      if (OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
-+      if (COMM_OK.indexOf(s.runIn.comm) < 0) s.runIn.comm = 'spot';
-       if (typeof s.runIn.default !== 'boolean') s.runIn.default = false;
-     } else if (s) {
-       s.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false };
-@@ -3718,7 +3721,14 @@ window.createAutoExperiment = function (suffix) {
-     // execution chart to the option premium chart for every instrument type.
-     if (state.premiumOnly) return 'premium';
-     const ri = state.runIn || {};
--    if (isCommodity(symbol)) return (ri && ri.comm) || 'spot';
-+    if (isCommodity(symbol)) {
-+      const m = (ri && ri.comm) || 'spot';
-+      // Commodities have no separate index/equity spot - both "Spot chart" and
-+      // "Futures contract" run on the near-month FUTCOM underlying chart, so
-+      // 'futures' behaves exactly like 'spot' (the near-month contract is the
-+      // commodity's underlying/main chart).
-+      return m === 'futures' ? 'spot' : m;
-+    }
-     if (!isIndex(symbol)) return ri.fno || 'spot';
-     return ri.index || 'both';
-   }
-@@ -4948,14 +4958,6 @@ window.createAutoExperiment = function (suffix) {
-     return d.getUTCFullYear() + '-' + (d.getUTCMonth() + 1) + '-' + d.getUTCDate();
-   }
- 
--  function isMarketOpenNow() {
--    try {
--      const now = Math.floor(Date.now() / 1000);
--      if (typeof isMarketOpen === 'function') return !!isMarketOpen(now);
--    } catch (e) {}
--    return true;
--  }
--
-   /* ---- open/close time gates ----
-      The "start trading after" and "no trade after" selectors restrict when a
-      strategy may open new trades. Candle timestamps are stored as IST wall-clock
-@@ -5097,7 +5099,6 @@ window.createAutoExperiment = function (suffix) {
-     const u = state.universal;
-     if (!liveTimeGateOk()) return 0; // open/close time gate blocks new entries
-     if (u && u.aiTrades) {
--      if (!isMarketOpenNow()) return 0; // market open time condition
-       aiTradesDecisionFor(candles, liveOICtx(r));
-       return null;
+@@ -2610,20 +2610,25 @@ window.createAISmartTrading = function (suffix) {
+     const st = (so && typeof so === 'object') ? Object.assign({}, state.strike, so) : state.strike;
+     let ot = st.optionType || 'both';
+     const onlyPos = st.positiveOnly !== false;
++    /* NIFTY trend-following direction: when the NIFTY trend engine is enabled
++       the CE/PE side is pinned to the LIVE NIFTY direction for every symbol it
++       picked - bearish -> PE puts only, bullish -> CE calls only (matches the
++       "bearish/bullish stocks picked" set). This is the auto side-selection the
++       engine is supposed to apply on top of the mover / stock trend logic. */
++    const ntSide = ((state.niftyTrend && state.niftyTrend.enabled) && (_lastNiftyDir === 'bullish' || _lastNiftyDir === 'bearish')) ? _lastNiftyDir : null;
+     /* Direction-aware leg pick for the "Only +green premium strikes" filter:
+-       the selected bullish/bearish indicator filter decides the side first -
+-       bullish filter -> only CE calls (bought), bearish filter -> only PE puts
+-       (bought). When no directional filter is active the underlying's own
+-       trend decides, and if that too is unclassifiable the user's option-type
+-       selector decides the legs (the green filter still applies). An explicit
+-       optionType in the per-call override (Smart NTrader pins its decided
+-       CE/PE side) wins - the green filter still applies to that side's
+-       strikes, but the caller's side is never overridden. */
+-    if ((onlyPos || moverDirectionFor(symbol) != null) && (!so || !so.optionType)) {
+-      /* Movers mode pins the leg to the stock's own move first (top gainer ->
+-         CE only, top loser -> PE only), then the selected bullish/bearish
+-         indicator filter, then the underlying's own trend. */
+-       const dir = strategyDirectionFor() || moverDirectionFor(symbol) || activeFilterDirection() || await trendDirectionFor(symbol);
++       the NIFTY trend side (when NIFTY trend-following is on) and the mover's
++       own daily move decide the side first - bullish -> only CE calls (bought),
++       bearish -> only PE puts (bought). When neither market signal is available
++       the selected bullish/bearish indicator filter decides, then the running
++       strategies' shared category, then the underlying's own trend, and only if
++       every source is unclassifiable does the user's option-type selector
++       decide the legs (the green filter still applies). An explicit optionType
++       in the per-call override (Smart NTrader pins its decided CE/PE side) wins
++       - the green filter still applies to that side's strikes, but the caller's
++       side is never overridden. */
++    if ((onlyPos || moverDirectionFor(symbol) != null || ntSide) && (!so || !so.optionType)) {
++      const dir = ntSide || moverDirectionFor(symbol) || activeFilterDirection() || strategyDirectionFor() || await trendDirectionFor(symbol);
+       if (dir === 'bullish') ot = 'CE';
+       else if (dir === 'bearish') ot = 'PE';
      }
-@@ -5901,7 +5902,9 @@ window.createAutoExperiment = function (suffix) {
+@@ -3014,11 +3019,11 @@ window.createAISmartTrading = function (suffix) {
+   /* Secondary confirmation series for a "both" run-in instrument: the first
+      selected-strike option premium chart. Null when no contract or no option
+      candles are available. */
+-  async function confirmCandlesFor(instr, tf) {
++  async function confirmCandlesFor(instr, tf, ci) {
+     if (instr.kind !== 'both') return null;
+     const SE = window.StratEngine;
+     if (!SE || !SE.fetchCandlesFor) return null;
+-    const c0 = (instr.contracts && instr.contracts.length) ? instr.contracts[0] : null;
++    const c0 = (instr.contracts && instr.contracts.length) ? instr.contracts[ci || 0] : null;
+     if (!c0) return null;
+     const optSym = { id: Number(c0.sid), exch: optionExch(instr.symbol), inst: optionInst(instr.symbol), name: (instr.symbol.name || '') };
+     try {
+@@ -5126,6 +5131,28 @@ window.createAISmartTrading = function (suffix) {
+     const n = Number(v);
+     return (isFinite(n)) ? n.toFixed(2) : '--';
    }
- 
-   function modeLabel(m) {
--    return m === 'spot' ? 'spot chart' : (m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart');
-+    if (m === 'spot') return 'spot chart';
-+    if (m === 'futures') return 'futures contract';
-+    return m === 'both' ? 'both spot + option premium charts (dual confirmation)' : 'option premium chart';
-   }
- 
-   /* Premium-only mode: a single master toggle that locks the strategy run
-@@ -6984,7 +6987,6 @@ window.createAutoExperiment = function (suffix) {
-       optionInst,
-       allowedTradesFor,
-       liveTimeGateOk,
--      isMarketOpenNow,
-       aiTrailEngineFor,
-       dropAiTrailEngine,
-       applyFilters,
-diff --git a/static/final_strategy.js b/static/final_strategy.js
-index 2609059..b76cfbf 100644
---- a/static/final_strategy.js
-+++ b/static/final_strategy.js
-@@ -175,6 +175,18 @@
-     return sum;
-   }
- 
-+  /* Resolve the RAW AST engine-settings snapshot captured while the strategy
-+     was running (the exact SL / trail SL / TP / timeframes / run-in settings),
-+     so a saved Final Strategy can be re-run with its original settings - the
-+     same way the AE -> AST import captures the engine settings at entry time. */
-+  function resolveSnapshotFor(st) {
-+    const id = astIdFor(st);
-+    if (!id) return null;
-+    const snap = astSnapshotFor(id);
-+    if (!snap) return null;
-+    try { return JSON.parse(JSON.stringify(snap)); } catch (e) { return null; }
++  /* Volume for a pool readout: prefer the forming candle's own volume; when
++     that is 0 (option premium candles often carry no volume) fall back to the
++     live quote's volume for the same instrument/strike so the pool never shows
++     an empty volume column for a strike that actually has volume. */
++  function poolVolume(instr, contract, bar) {
++    const bv = Number(bar && bar.volume);
++    if (bv > 0) return bv;
++    try {
++      const qm = quoteCache();
++      let q = null;
++      if (contract && contract.sid != null) {
++        q = qm[String(contract.sid)] || null;
++      } else if (instr.kind === 'option' && instr.sid != null) {
++        q = qm[String(instr.sid)] || null;
++      } else if (instr.symbol) {
++        const sym = instr.symbol;
++        q = qm[sym.exch === 'IDX_I' ? 'IDX_I:' + sym.id : String(sym.id)] || null;
++      }
++      const qv = (q && q.volume != null) ? Number(q.volume) : 0;
++      return (isFinite(qv) && qv > 0) ? qv : bv;
++    } catch (e) { return bv; }
 +  }
-+
-   /* ---------------- composite score ---------------- */
-   function compositeScore(s, maxes) {
-     const win = Math.max(0, Math.min(100, Number(s.winRate) || 0));
-@@ -235,11 +247,15 @@
-           profitFactor: st.profitFactor, score: c.sc
-         };
-         const settings = resolveSettingsFor(st);
-+        const snapshot = resolveSnapshotFor(st);
-+        const stratDef = JSON.parse(JSON.stringify(strat || {}));
-         if (existing) {
-           existing.stats = stats;
-           existing.lastUpdated = now;
-           if (settings) existing.settings = settings;
-           else if (!existing.settings) existing.settings = null;
-+          if (snapshot) existing.snapshot = snapshot;
-+          if (stratDef && Object.keys(stratDef).length) existing.strategy = stratDef;
-         } else {
-           byKey.set(key, {
-             key: key,
-@@ -250,7 +266,10 @@
-             symbol: (strat.symbol && strat.symbol.name) || null,
-             addedAt: now, lastUpdated: now,
-             stats: stats,
--            settings: settings || null
-+            settings: settings || null,
-+            snapshot: snapshot || null,
-+            strategy: (stratDef && Object.keys(stratDef).length) ? stratDef : null,
-+            source: 'auto'
-           });
+   function poolTF() {
+     const acts = activeStrategies();
+     for (const s of acts) { const t = pickTimeframe(s); if (t) return t; }
+@@ -5133,6 +5160,7 @@ window.createAISmartTrading = function (suffix) {
+   }
+   let _poolBusy = false;
+   let _poolResolveAt = 0;
++  let _poolForceResolve = false;
+   async function poolScan() {
+     if (state.dataPool !== true) return;
+     if (_poolBusy) return;
+@@ -5142,12 +5170,13 @@ window.createAISmartTrading = function (suffix) {
+       const tf = poolTF();
+       const acts = activeStrategies();
+       const rows = [];
+-      if (!_lastInstruments.length) {
++      if (!_lastInstruments.length || _poolForceResolve) {
+         /* Engine idle (auto OFF): resolve the selected universe once per 15s so
+            the pool still shows live data without hammering the chain surface. */
+         const now = Date.now();
+-        if (now - _poolResolveAt > 15000) {
++        if (_poolForceResolve || now - _poolResolveAt > 15000) {
+           _poolResolveAt = now;
++          _poolForceResolve = false;
+           try { _lastInstruments = await resolveInstruments(); } catch (e) { _lastInstruments = []; }
          }
-       });
-@@ -319,6 +338,9 @@
-     const settingsChips = set
-       ? chip('SL', set.sl, '#ff9800') + chip('TP', set.tp, '#00d4aa') + chip('Lots', set.lots) + chip('Margin', set.margin) + chip('TF', set.tfs)
-       : '<span style="font-size:8px;color:#666">no run settings recorded</span>';
-+    const srcBadge = s.source && s.source !== 'auto'
-+      ? '<span style="font-size:8px;color:#b39ddb;border:1px solid #2d2d50;border-radius:3px;padding:0 4px">' + esc(s.source === 'container' ? 'Container' : (s.source === 'pooled' ? 'Pooled' : (s.source === 'ast' ? 'AST' : 'Manual'))) + '</span>'
-+      : '';
-     return '<div style="background:#12122a;border:1px solid #2d2d50;border-radius:4px;padding:5px 8px;margin:2px 0;font-size:10px" data-fs-row="' + esc(s.key) + '">' +
-       '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
-         '<input type="checkbox" class="fs-sel" data-fs-key="' + esc(s.key) + '" ' + checked + 'title="Tick to select this strategy">' +
-@@ -326,6 +348,7 @@
-         '<span style="color:#fff;font-weight:700;flex:1;min-width:110px">' + esc(s.name) +
-           (meta ? ' <span style="color:#666;font-weight:400;font-size:9px">· ' + esc(meta) + '</span>' : '') +
-         '</span>' +
-+        srcBadge +
-         '<span style="color:#888;font-size:9px">' + st.trades + ' <span style="color:#666">(' + st.wins + '/' + st.losses + ')</span></span>' +
-         '<span style="color:' + wrCls + ';font-weight:700;min-width:44px;text-align:right">' + fmtPct(st.winRate) + '</span>' +
-         '<span style="color:' + netCls + ';font-weight:700;min-width:80px;text-align:right">' + fmtMoneySigned(st.totalNet) + '</span>' +
-@@ -334,6 +357,7 @@
-       '</div>' +
-       '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:3px">' + settingsChips +
-         '<button data-fs-details="' + esc(s.key) + '" style="background:none;border:1px solid #66ccff;color:#66ccff;border-radius:3px;padding:1px 6px;font-size:8px;cursor:pointer">Settings details</button>' +
-+        '<button data-fs-run="' + esc(s.key) + '" title="Send this strategy to the AI Smart Trading engine and run it with its saved settings" style="background:#ffd700;border:none;color:#0a0a18;border-radius:3px;padding:1px 8px;font-size:8px;font-weight:700;cursor:pointer">Run</button>' +
-         '<span style="margin-left:auto;font-size:8px;color:#666">score ' + (st.score != null ? st.score : '--') + '</span>' +
-       '</div>' +
-       '<div class="fs-details" data-fs-detail="' + esc(s.key) + '" style="display:none">' + detailsHTML(s) + '</div>' +
-@@ -383,11 +407,18 @@
-     });
-     host.addEventListener('click', e => {
-       const btn = e.target && e.target.closest ? e.target.closest('[data-fs-details]') : null;
--      if (!btn) return;
--      const key = btn.getAttribute('data-fs-details');
--      const hostEl = btn.closest('[data-fs-row]');
--      const detail = hostEl ? hostEl.querySelector('.fs-details') : null;
--      if (detail) detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
-+      if (btn) {
-+        const key = btn.getAttribute('data-fs-details');
-+        const hostEl = btn.closest('[data-fs-row]');
-+        const detail = hostEl ? hostEl.querySelector('.fs-details') : null;
-+        if (detail) detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
-+        return;
-+      }
-+      const runBtn = e.target && e.target.closest ? e.target.closest('[data-fs-run]') : null;
-+      if (runBtn) {
-+        const key = runBtn.getAttribute('data-fs-run');
-+        runStrategy(key);
-+      }
-     });
-   }
- 
-@@ -424,6 +455,128 @@
-     render();
-   }
- 
-+  /* ---------------- manual save (Send to Final Strategy) ---------------- */
-+  /* Save an explicitly chosen strategy (from the Strategy Container, Pooled
-+     Strategy Runner or AST engine) into the Final Strategy section. The entry
-+     carries the strategy definition + its raw engine-settings snapshot so it can
-+     be re-run later with its ORIGINAL settings (SL / trail SL / TP / timeframes
-+     / run-in) - exactly the AE -> AST pattern. */
-+  function saveStrategy(payload) {
-+    if (!payload || !payload.key) return null;
-+    const now = Date.now();
-+    const strat = payload.strategy || {};
-+    const byKey = new Map(store.strategies.map(x => [x.key, x]));
-+    const existing = byKey.get(payload.key);
-+    const stats = payload.stats || (existing ? existing.stats : {});
-+    let settings = payload.settings || null;
-+    let snapshot = payload.snapshot || null;
-+    if (!settings && snapshot) settings = summarizeSettings(snapshot);
-+    const entry = existing || {};
-+    entry.key = payload.key;
-+    entry.name = payload.name || (strat.name || 'Strategy').replace(/^AE:\s*/, '');
-+    entry.cat = (payload.cat || strat.cat || 'bullish') === 'bearish' ? 'bearish' : 'bullish';
-+    entry.method = payload.method || strat.method || '';
-+    entry.tf = payload.tf || strat.tf || '';
-+    entry.symbol = payload.symbol || (strat.symbol && strat.symbol.name) || null;
-+    entry.addedAt = entry.addedAt || now;
-+    entry.lastUpdated = now;
-+    entry.stats = stats;
-+    if (settings) entry.settings = settings;
-+    if (snapshot) entry.snapshot = snapshot;
-+    if (strat && Object.keys(strat).length) entry.strategy = JSON.parse(JSON.stringify(strat));
-+    entry.source = payload.source || 'manual';
-+    delete store.excluded[payload.key];
-+    byKey.set(payload.key, entry);
-+    store.strategies = Array.from(byKey.values());
-+    store.strategies.sort((a, b) => (b.stats.score - a.stats.score) || (b.stats.winRate - a.stats.winRate));
-+    store.updatedAt = now;
-+    save();
-+    render();
-+    return entry;
-+  }
-+
-+  /* Run a saved Final Strategy in the AI Smart Trading engine with its ORIGINAL
-+     settings: apply the captured engine-settings snapshot, then import the
-+     strategy definition the same way the AE engine hands a strategy to AST
-+     (importFromPaperTrade), which enables + ticks it. */
-+  function runStrategy(key) {
-+    const entry = store.strategies.find(x => x.key === key);
-+    if (!entry) return false;
-+    const AST = window.AISmartTrading;
-+    if (!AST || typeof AST.importFromPaperTrade !== 'function') {
-+      alert('AI Smart Trading engine not ready yet.');
-+      return false;
-+    }
-+    const strat = entry.strategy || {};
-+    if (entry.snapshot && typeof AST.applySnapshot === 'function') {
-+      try { AST.applySnapshot(JSON.parse(JSON.stringify(entry.snapshot))); } catch (e) {}
-+    }
-+    const payload = [{
-+      key: strat.key || strat.aeKey || ('fs:' + key),
-+      name: entry.name || strat.name || 'Final Strategy',
-+      cat: entry.cat || strat.cat || 'bullish',
-+      method: strat.method || entry.method || '',
-+      tf: strat.tf || entry.tf || '5min',
-+      score: strat.score || 0,
-+      verdict: strat.verdict || 'Moderate',
-+      entry: strat.entry || null,
-+      exit: strat.exit || null,
-+      entryExtra: strat.entryExtra || null,
-+      exitExtra: strat.exitExtra || null,
-+      entryThreshold: strat.entryThreshold != null ? strat.entryThreshold : null,
-+      candlestick: strat.candlestick || { enabled: false, entry: [], exit: [] },
-+      refSlPct: (strat.refSlPct != null) ? strat.refSlPct : (strat.autoSlPct != null ? strat.autoSlPct : null),
-+      refTrailSlPct: (strat.refTrailSlPct != null) ? strat.refTrailSlPct : null
-+    }];
-+    let n = 0;
-+    try { n = AST.importFromPaperTrade(payload); } catch (e) {}
-+    if (n > 0) {
-+      if (typeof switchTab === 'function') {
-+        try { switchTab('papertrade', document.querySelector('[data-tab="papertrade"]')); } catch (e) {}
-+      }
-+    } else {
-+      alert('Strategy could not be imported into the AI Smart Trading engine (it may already be running).');
-+    }
-+    return n > 0;
-+  }
-+
-+  /* Save a strategy from the Strategy Container (by its identity key) into the
-+     Final Strategy section. Resolves the container's aggregated stats + the AST
-+     settings snapshot captured while it ran. */
-+  function saveFromContainer(key) {
-+    if (!key) return null;
-+    if (!window.StrategyContainer || typeof StrategyContainer.computeStats !== 'function') {
-+      alert('Strategy Container not ready yet.');
-+      return null;
-+    }
-+    let st = null;
-+    try { st = StrategyContainer.computeStats().find(x => x.key === key) || null; } catch (e) { st = null; }
-+    if (!st) return null;
-+    const strat = st.strat || {};
-+    const snapshot = resolveSnapshotFor(st);
-+    const settings = resolveSettingsFor(st);
-+    return saveStrategy({
-+      key: key,
-+      name: (strat.name || 'Strategy').replace(/^AE:\s*/, ''),
-+      cat: strat.cat === 'bearish' ? 'bearish' : 'bullish',
-+      method: strat.method || '',
-+      tf: strat.tf || '',
-+      symbol: (strat.symbol && strat.symbol.name) || null,
-+      stats: {
-+        trades: st.trades, wins: st.wins, losses: st.losses,
-+        winRate: Math.round(st.winRate * 10) / 10,
-+        totalNet: Math.round((st.totalNet || 0) * 100) / 100,
-+        avgPerTrade: Math.round((st.avgPerTrade || 0) * 100) / 100,
-+        daysTraded: st.daysTraded, lastDay: st.lastDay || null,
-+        profitFactor: st.profitFactor
-+      },
-+      settings: settings || null,
-+      snapshot: snapshot || null,
-+      strategy: JSON.parse(JSON.stringify(strat || {})),
-+      source: 'container'
-+    });
-+  }
-+
-   /* ---------------- public API ---------------- */
-   const api = {
-     scan: scan,
-@@ -431,6 +584,9 @@
-     toggleSelectAll: toggleSelectAll,
-     removeSelected: removeSelected,
-     removeAll: removeAll,
-+    saveStrategy: saveStrategy,
-+    runStrategy: runStrategy,
-+    saveFromContainer: saveFromContainer,
-     getState: function () { return store; }
-   };
-   window.FinalStrategy = api;
-diff --git a/static/hft_runner.js b/static/hft_runner.js
-index 091acc1..2d66c3e 100644
---- a/static/hft_runner.js
-+++ b/static/hft_runner.js
-@@ -257,6 +257,13 @@
-     };
-     wrap.appendChild(det);
- 
-+    var fin = document.createElement('button');
-+    fin.textContent = 'Final';
-+    fin.title = 'Save this pooled strategy to the Final Strategy section (with its win rate, avg/trade, SL / trail SL, timeframe and running settings)';
-+    fin.style.cssText = 'background:#ffd700;color:#0a0a18;border:none;border-radius:3px;cursor:pointer;padding:2px 6px;font-size:9px;font-weight:700';
-+    fin.onclick = function () { sendToFinal(tab, row); };
-+    wrap.appendChild(fin);
-+
-     var close = document.createElement('button');
-     close.textContent = 'close';
-     close.title = 'Square off this row\'s open positions';
-@@ -645,6 +652,72 @@
-     renderList(tab);
-   }
- 
-+  /* Save a pooled-runner row into the Final Strategy section. Captures the
-+     row's own trade settings (lots / margin / TP / SL / trail SL / timeframes /
-+     instruments) as a raw engine-settings snapshot so the saved strategy can be
-+     re-run with the exact settings it used on this row. */
-+  function sendToFinal(tab, row) {
-+    if (!window.FinalStrategy || typeof FinalStrategy.saveStrategy !== 'function') {
-+      alert('Final Strategy module not ready yet.');
-+      return null;
-+    }
-+    if (!row) return null;
-+    var rmap = resultsMap();
-+    var r = resolveStrategy(row, rmap);
-+    if (!r && !row.strategy) {
-+      alert('Strategy definition not found for this row.');
-+      return null;
-+    }
-+    var stats = rowStats(tab, row);
-+    var tf = row.tf || (r && r.tf) || '5min';
-+    var tfs = {};
-+    tfs[tf] = true;
-+    var symbols = resolveSymbols(row, r);
-+    var snapshot = {
-+      universal: {
-+        lots: row.lots || 1,
-+        margin: row.margin || 0,
-+        manualSL: true,
-+        manualSLPct: Number(row.slPct) || 0,
-+        manualTrailSL: true,
-+        manualTrailSLPct: Number(row.slTrailPct) || 0,
-+        manualTP: Number(row.tpPct) > 0,
-+        manualTPPct: Number(row.tpPct) || 0,
-+        tfs: tfs,
-+        fnoLimit: row.fnoLimit !== false
-+      },
-+      strike: {},
-+      runIn: {},
-+      tradeIn: {},
-+      premiumOnly: false,
-+      filters: {},
-+      capturedAt: Date.now()
-+    };
-+    var strat = row.strategy || r || {};
-+    var entry = FinalStrategy.saveStrategy({
-+      key: rowKeyFor(tab, row) + (strat.aeKey ? ':' + strat.aeKey : ''),
-+      name: (strat.name || 'Pooled Strategy').replace(/^AE:\s*/, ''),
-+      cat: (strat.cat === 'bearish') ? 'bearish' : 'bullish',
-+      method: strat.method || '',
-+      tf: tf,
-+      symbol: (symbols && symbols[0] && symbols[0].name) || (strat.symbol && strat.symbol.name) || null,
-+      stats: {
-+        trades: stats.trades, wins: stats.wins, losses: stats.losses,
-+        winRate: stats.winRate == null ? 0 : Math.round(stats.winRate * 10) / 10,
-+        totalNet: Math.round((stats.realized || 0) * 100) / 100,
-+        avgPerTrade: stats.trades ? Math.round(((stats.realized || 0) / stats.trades) * 100) / 100 : 0,
-+        daysTraded: 0, lastDay: null,
-+        profitFactor: null
-+      },
-+      settings: null,
-+      snapshot: snapshot,
-+      strategy: JSON.parse(JSON.stringify(strat || {})),
-+      source: 'pooled'
-+    });
-+    if (entry) alert('"' + entry.name + '" saved to Final Strategy.');
-+    return entry;
-+  }
-+
-   function closePosition(btnEl) {
-     var rowEl = btnEl.closest('.hft-row');
-     if (!rowEl) return;
-@@ -706,6 +779,7 @@
-     bulkAddStrategies: bulkAddStrategies,
-     removeStrategy: removeStrategy,
-     closePosition: closePosition,
-+    sendToFinal: sendToFinal,
-     refreshSelects: refreshSelects,
-     init: init,
-     jobs: jobs,
-diff --git a/static/smart_ntrader.js b/static/smart_ntrader.js
-index 954839f..050f38a 100644
---- a/static/smart_ntrader.js
-+++ b/static/smart_ntrader.js
-@@ -55,7 +55,7 @@
- 
-   var NIFTY = { name: 'NIFTY 50', id: 13, exch: 'IDX_I', inst: 'INDEX' };
-   var POLL_MS = 800;
--  var TREND_REFRESH_MS = 30 * 1000;
-+  var TREND_REFRESH_MS = 60 * 1000;
-   var OPT_TTL_MS = 120 * 1000;
-   var REV_REARM_MS = 90 * 1000;
-   var IND_CACHE = new WeakMap();
-@@ -74,6 +74,7 @@
-     lotSize: null,   // override (null = auto from /api/lot_sizes)
-     lots: 1,         // number of lots (quantity = lots x lot size)
-     strike: { mode: 'both_atm', count: 3, positiveOnly: true },   // option-strike pick (AST dropdown) + only-+green-premium filter
-+    premiumChart: true,   // place trades on the option premium chart (CE/PE); OFF = trade the underlying spot/futures directly
-     limitOrder: { enabled: false },  // auto BUY F&O limit above price (~100% fill)
-     slMode: 'manual',  // 'auto' = auto stoploss (ATR candle-derived base + hunt guard) / 'manual' = user SL % / 'trail' = ATR base + trailing SL ratchet
-     guardBuf: 5,
-@@ -176,6 +177,7 @@
-         state.strike.count = (Number(j.strike.count) > 0) ? Math.round(Number(j.strike.count)) : 3;
-         state.strike.positiveOnly = j.strike.positiveOnly !== false;
        }
-+      if (j.premiumChart != null) state.premiumChart = !!j.premiumChart;
-       if (j.limitOrder && typeof j.limitOrder === 'object') {
-         state.limitOrder.enabled = !!j.limitOrder.enabled;
-       }
-@@ -197,6 +199,7 @@
-         slPct: state.slPct, tpPct: state.tpPct, fixedTp: state.fixedTp,
-         margin: state.margin, niftyTf: state.niftyTf, stockTf: state.stockTf,
-         lotSize: state.lotSize, lots: state.lots, strike: state.strike,
-+        premiumChart: state.premiumChart,
-         limitOrder: state.limitOrder,
-         enabledStocks: state.stocks.filter(function (s) { return s.enabled; }).map(function (s) { return s.sym.name; })
-       }));
-@@ -698,6 +701,14 @@
-       enterCommodity(stock);
-       return;
-     }
-+    /* Premium chart OFF: trade the underlying equity spot directly instead of
-+       resolving an option contract. Side 'CE'/'PE' maps to a plain underlying
-+       BUY on the spot (a bullish stock is bought outright; a bearish stock's
-+       spot is still bought as a directional long on the underlying). */
-+    if (!state.premiumChart) {
-+      enterUnderlying(stock, '');
-+      return;
-+    }
-     if (!window.AISmartTrading || typeof AISmartTrading.resolveStockOption !== 'function') return;
-     var optKey = stock.sym.name + ':' + side;
-     if (state.optInFlight[optKey]) return;
-@@ -740,6 +751,16 @@
-      quote, sized by the curated MCX lot. Mirrors enterWithOption but the
-      executed instrument is the futures spot symbol (no option leg). */
-   function enterCommodity(stock) {
-+    enterUnderlying(stock, 'FUT');
-+  }
-+
-+  /* Underlying (spot/futures) entry used when "Place trade in option premium
-+     chart" is OFF: instead of resolving an option contract and buying the
-+     premium, the engine BUYs the underlying itself (equity spot for NSE stocks,
-+     the futures contract for commodities). Same sizing / SL / trail as the
-+     option path, keyed under the same ntd: position so positions are unique per
-+     stock. */
-+  function enterUnderlying(stock, label) {
-     var sym = stock.sym;
-     if (!sym) return;
-     var q = quoteForSym(sym);
-@@ -771,7 +792,7 @@
-       var lp = ntPaper().fnoLimitPrice('BUY', q, fillRef);
-       if (lp > 0) fillTxt = lp.toFixed(2);
-     }
--    stock.status = ok ? ('BUY ' + sym.name + ' FUT @ ' + fillTxt + (state.limitOrder.enabled ? ' LIMIT' : '')) : ('entry: ' + (ntPaper().lastAutoSkip || 'rejected'));
-+    stock.status = ok ? ('BUY ' + sym.name + (label ? ' ' + label : '') + ' @ ' + fillTxt + (state.limitOrder.enabled ? ' LIMIT' : '')) : ('entry: ' + (ntPaper().lastAutoSkip || 'rejected'));
-     if (ok) {
-       stock._trd = {
-         side: 'LONG',
-@@ -889,13 +910,17 @@
-   function computeActive() {
-     var g = sideGroups();
-     /* Manual selection only: enabled bull/bear rows (capped per side) plus
--       enabled neutral rows that pass the NIFTY condition gate. */
-+       enabled neutral rows that pass the NIFTY condition gate. Every side is
-+       ALSO gated on the NIFTY trend-following threshold (tfOk): while the
-+       trend filter is ON, a stock below the set daily-change% is dropped from
-+       the active set immediately - never traded - exactly like the AST/AE
-+       trend-following picker (per-tick prune below the set percentage). */
-     for (var j = 0; j < state.stocks.length; j++) state.stocks[j].active = false;
-     var bullCap = state.bullCount > 0 ? state.bullCount : Infinity;
-     var bearCap = state.bearCount > 0 ? state.bearCount : Infinity;
-     var bIdx = 0, rIdx = 0;
--    for (j = 0; j < g.bulls.length; j++) { var b = g.bulls[j]; if (b.enabled && bIdx < bullCap) { b.active = true; bIdx++; } }
--    for (j = 0; j < g.bears.length; j++) { var r = g.bears[j]; if (r.enabled && rIdx < bearCap) { r.active = true; rIdx++; } }
-+    for (j = 0; j < g.bulls.length; j++) { var b = g.bulls[j]; if (b.enabled && b.tfOk !== false && bIdx < bullCap) { b.active = true; bIdx++; } }
-+    for (j = 0; j < g.bears.length; j++) { var r = g.bears[j]; if (r.enabled && r.tfOk !== false && rIdx < bearCap) { r.active = true; rIdx++; } }
-     for (j = 0; j < g.neus.length; j++) { var nn = g.neus[j]; if (nn.enabled && nn.tfOk !== false && condFor(state.nifty.current)) nn.active = true; }
+@@ -5164,16 +5193,22 @@ window.createAISmartTrading = function (suffix) {
+           }
+         } catch (e) {}
+         if (instr.kind === 'both') {
+-          try {
+-            const pc = await confirmCandlesFor(instr, tf);
+-            if (pc && pc.length >= 10) sources.push({ chart: 'premium', candles: pc });
+-          } catch (e) {}
++          const contracts = (instr.contracts || []);
++          for (let ci = 0; ci < contracts.length; ci++) {
++            try {
++              const pc = await confirmCandlesFor(instr, tf, ci);
++              if (pc && pc.length >= 10) sources.push({ chart: 'premium', contract: contracts[ci], candles: pc });
++            } catch (e) {}
++          }
+         }
+         for (const src of sources) {
+           const candles = src.candles;
+           const i = candles.length - 1;
+           const bar = candles[i];
+           if (!bar) continue;
++          const contract = src.contract || ((instr.kind === 'option' && instr.strike != null) ? instr : null);
++          const label = contract ? displayName(instr.symbol) + ' ' + contract.strike + ' ' + contract.optionType : displayName(instr.symbol);
++          const type = (src.contract) ? 'option' : (instr.kind || '');
+           const ema9 = poolIndValue('ema', { length: 9, source: 'close' }, i, candles);
+           const ema21 = poolIndValue('ema', { length: 21, source: 'close' }, i, candles);
+           const ema35 = poolIndValue('ema', { length: 35, source: 'close' }, i, candles);
+@@ -5183,8 +5218,9 @@ window.createAISmartTrading = function (suffix) {
+           for (const s of acts) {
+             try { if (entryFireAt(s, candles, i)) { cond = 'PASS'; break; } } catch (e) {}
+           }
+-          rows.push('<tr><td>' + displayName(instr.symbol) + '</td><td>' + (instr.kind || '') + '</td><td>' + src.chart + '</td><td>' + tf + '</td>' +
+-            '<td>' + poolNum(bar.open) + '</td><td>' + poolNum(bar.high) + '</td><td>' + poolNum(bar.low) + '</td><td>' + poolNum(bar.close) + '</td><td>' + Number(bar.volume || 0) + '</td>' +
++          const vol = poolVolume(instr, contract, bar);
++          rows.push('<tr><td>' + label + '</td><td>' + type + '</td><td>' + src.chart + '</td><td>' + tf + '</td>' +
++            '<td>' + poolNum(bar.open) + '</td><td>' + poolNum(bar.high) + '</td><td>' + poolNum(bar.low) + '</td><td>' + poolNum(bar.close) + '</td><td>' + vol + '</td>' +
+             '<td>' + poolNum(ema9) + '</td><td>' + poolNum(ema21) + '</td><td>' + poolNum(ema35) + '</td><td>' + poolNum(st) + '</td><td>' + poolNum(vwap) + '</td>' +
+             '<td style="color:' + (cond === 'PASS' ? '#00d4aa' : '#888') + ';font-weight:700">' + cond + '</td></tr>');
+         }
+@@ -5207,6 +5243,18 @@ window.createAISmartTrading = function (suffix) {
+     if (info) info.textContent = state.dataPool ? 'scanning...' : 'OFF - shared pool feeds strategies only';
+     if (state.dataPool) poolScan();
    }
- 
-@@ -1057,6 +1082,7 @@
-     var alertAt = {};
-     var tradeAt = {};
-     var alertSeq = 0;
-+    var _alertInputVal = '';
- 
-     var TF_SECS = { '1min': 60, '2min': 120, '3min': 180, '4min': 240, '5min': 300, '10min': 600, '15min': 900, '30min': 1800, '1hour': 3600, '4hour': 14400 };
-     var ALERT_COLORS = ['#ff5252', '#26a69a', '#7ad7ff', '#ff9800', '#b39ddb', '#ff6b6b', '#ffb300', '#66ccff'];
-@@ -1281,10 +1307,10 @@
-       if (remaining < targets.length) targets = targets.slice(0, remaining);
-       for (var i = 0; i < targets.length; i++) {
-         var st = targets[i];
--        st.status = 'BB%b alert ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY bullish' : 'SELL bearish');
-+        st.status = 'BB%b alert ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish');
-         try { resolveAndEnter(st, side, null); } catch (e) {}
-       }
--      toast('BB%b trade alert @ ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY bullish picks' : 'SELL bearish picks') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
-+      toast('BB%b trade alert @ ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY CE bullish picks' : 'BUY PE bearish picks') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
-     }
-     /* "+" button popover: list the pane's alert lines (with remove) + add input. */
-     function toggleAlertBox() {
-@@ -1345,7 +1371,7 @@
-           var opts = [
-             ['auto', 'Auto - per NIFTY trend'],
-             ['bull', 'Bullish stocks (BUY)'],
--            ['bear', 'Bearish stocks (SELL)']
-+            ['bear', 'Bearish stocks (BUY PE)']
-           ];
-           var curMode = (ln.trade && ln.trade.mode) || 'auto';
-           for (var oi = 0; oi < opts.length; oi++) {
-@@ -1366,14 +1392,41 @@
-         })(alertLines[i]);
-       }
-       box.appendChild(list);
-+      var quickRow = document.createElement('div');
-+      quickRow.style.cssText = 'display:flex;gap:4px;margin-bottom:6px';
-+      var last = (window.IndChart && IndChart.computeLastTwo) ? IndChart.computeLastTwo('bbpct', settings, 'v0', candles) : null;
-+      var lastVal = (last && last.last != null && !isNaN(last.last)) ? fmtV(last.last) : '0.5';
-+      /* Quick-add buttons: add a bullish (BUY CE) alert and a bearish (BUY PE)
-+         alert side-by-side, so both conditions can be armed together. Each
-+         quick alert pre-arms trade execution on its own side. All trades are
-+         BUY-side only (buy the CE contract for bullish, buy the PE contract
-+         for bearish) - no SELL/short orders exist in this engine. */
-+      var quickBtn = function (label, mode, color) {
-+        var b = document.createElement('button');
-+        b.textContent = label;
-+        b.title = 'Add a BB%b alert for the ' + (mode === 'bull' ? 'BULLISH' : 'BEARISH') + ' side (executes trades on this side when crossed)';
-+        b.style.cssText = 'flex:1;background:#12122a;border:1px solid ' + color + ';color:' + color + ';border-radius:3px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer';
-+        b.onmouseover = function () { b.style.background = color; b.style.color = '#0b0b1a'; };
-+        b.onmouseout = function () { b.style.background = '#12122a'; b.style.color = color; };
-+        b.onclick = function () {
-+          var v = parseFloat(_alertInputVal || inp.value);
-+          if (isNaN(v)) v = parseFloat(lastVal);
-+          if (isNaN(v)) { inp.focus(); return; }
-+          addAlertLine(v, mode);
-+        };
-+        return b;
-+      };
-+      quickRow.appendChild(quickBtn('+ BULLISH alert (BUY CE)', 'bull', '#00d4aa'));
-+      quickRow.appendChild(quickBtn('+ BEARISH alert (BUY PE)', 'bear', '#ff4d6a'));
-+      box.appendChild(quickRow);
-       var addRow = document.createElement('div');
-       addRow.style.cssText = 'display:flex;gap:4px';
-       var inp = document.createElement('input');
-       inp.type = 'number'; inp.step = '0.05';
-       inp.style.cssText = 'flex:1;min-width:0;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px';
--      var last = (window.IndChart && IndChart.computeLastTwo) ? IndChart.computeLastTwo('bbpct', settings, 'v0', candles) : null;
--      inp.value = (last && last.last != null && !isNaN(last.last)) ? fmtV(last.last) : '0.5';
-+      inp.value = (_alertInputVal !== '') ? _alertInputVal : lastVal;
-       inp.placeholder = 'Value (e.g. 0.5, 1.0)';
-+      inp.addEventListener('input', function () { _alertInputVal = inp.value; });
-       var btn = document.createElement('button');
-       btn.textContent = '+ Add';
-       btn.style.cssText = 'background:#00d4aa;color:#0b0b1a;border:none;border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer';
-@@ -1386,9 +1439,17 @@
-       addRow.appendChild(inp); addRow.appendChild(btn);
-       box.appendChild(addRow);
-     }
--    function addAlertLine(price) {
--      if (alertLines.some(function (l) { return Math.abs(Number(l.price) - price) < 1e-9; })) return;
--      alertLines.push({ id: 'al' + (alertSeq++), price: price, color: ALERT_COLORS[alertLines.length % ALERT_COLORS.length], trade: { enabled: false, mode: 'auto' } });
-+    function addAlertLine(price, mode) {
-+      mode = (mode === 'bull' || mode === 'bear') ? mode : (mode || 'auto');
-+      /* Multiple alerts at the SAME price are allowed (e.g. one bullish and one
-+         bearish draw-line on the same value) - each line is a separate alert
-+         with its own trade side, so no duplicate-price rejection. */
-+      alertLines.push({
-+        id: 'al' + (alertSeq++),
-+        price: price,
-+        color: ALERT_COLORS[alertLines.length % ALERT_COLORS.length],
-+        trade: mode === 'auto' ? { enabled: false, mode: 'auto' } : { enabled: true, mode: mode }
-+      });
-       applyAlertLines();
-       renderAlertBox();
-     }
-@@ -1913,13 +1974,43 @@
-     /* Daily % change up-to-date + re-sort of the F&O list so any stock that
-        moved up into the top / flipped sign shows at its new rank. */
-     state._sortDirty = true;
--    var line = '30s refresh @ ' + timeStr() + ' · NIFTY ' + state.nifty.current + ' · chg ' + chgTxt +
-+    var line = '60s refresh @ ' + timeStr() + ' · NIFTY ' + state.nifty.current + ' · chg ' + chgTxt +
-       ' · ' + fmtNum(performance.now() - t0, 1) + 'ms';
-     state.trendRefresh = line;
-     setText('ntrTrendRefresh', line);
-     console.log('[SmartNTrader]', line);
-   }
- 
-+  /* Stopped-state status pulse (AST/AE poll-timer port): while the engine is
-+     NOT running the NIFTY direction is still computed from the server candle
-+     series (available even with the market closed, like AST's niftyBias) so
-+     the NIFTY Trend Following fetched-stock list, NIFTY cards and F&O table
-+     stay live and visible. tick() already does all of this while running, so
-+     this only acts when state.running is false. */
-+  function statusPulse() {
-+    if (!state.visible || state.running) return;
-+    var nk = symKey(NIFTY);
-+    if (!state.series[nk] || (Date.now() - (state.seriesAt[nk] || 0)) > TREND_REFRESH_MS) {
-+      ensureCandles(NIFTY, state.niftyTf, nk, TREND_REFRESH_MS);
-+    }
-+    var niftyInd = indicators(state.series[nk]);
-+    var niftyTrend = detectNifty(niftyInd);
-+    if (niftyTrend && niftyTrend.current !== '...') {
-+      state.nifty.overall = niftyTrend.overall;
-+      state.nifty.current = niftyTrend.current;
-+      state.nifty.reversal = niftyTrend.reversal;
-+      state.nifty.bbPct = niftyTrend.bbPct;
-+      state.nifty.bb = niftyTrend.bb;
-+    }
-+    var nq = quoteForSym(NIFTY);
-+    if (nq && nq.ltp) {
-+      state.nifty.ltp = Number(nq.ltp);
-+      state.nifty.chg = nq.change !== undefined ? Number(nq.change) : 0;
-+      state.nifty.chgPct = nq.change_pct !== undefined ? Number(nq.change_pct) : 0;
-+    }
-+    render();
++  /* Manual Data Pool refresh: force the pool to re-resolve the selected
++     universe right now (ignoring the 15s idle throttle) so newly added premium
++     charts / symbols / strikes and changed indicator or data values show up
++     immediately, then re-render the readout table. */
++  async function poolRefresh() {
++    if (state.dataPool !== true) return;
++    _poolForceResolve = true;
++    const info = $id('astDataPoolInfo');
++    if (info) info.textContent = 'refreshing...';
++    await poolScan();
++    if (info) info.textContent = info.textContent.replace('refreshing...', 'refreshed');
 +  }
-+
-   /* ---------------- position reads ---------------- */
  
-   function posAt(posKey) {
-@@ -2112,6 +2203,7 @@
-     if (tpi) { tpi.disabled = !state.trend.enabled; tpi.style.opacity = state.trend.enabled ? '1' : '0.5'; }
- 
-     renderStockRows();
-+    renderFetched();
-     renderPicked();
-     renderPositions();
-     renderSummary();
-@@ -2123,12 +2215,75 @@
-      values (LTP, %Chg, score) still update in place every tick, so the table
-      stays live without reordering the DOM constantly. */
- 
-+  /* Fetched-stocks display (AST renderNiftyTrendList port). Shows exactly the
-+     stocks the engine currently fetches by whichever method is active:
-+       - NIFTY Trend Following ON -> F&O stocks on the live NIFTY trend side
-+         whose daily change% is at/above the set threshold (pct for bullish,
-+         -pct for bearish), biggest movers first. Green border = currently
-+         active (enabled + qualifies + cap slot), dim = qualifies but not
-+         enabled so not traded yet.
-+       - Trend following OFF -> the manually enabled rows.
-+     The list re-renders every tick from the live client quote cache, so a
-+     stock that drops below the threshold disappears from the fetched set the
-+     same second its quote falls. */
-+  var _fetchedHtml = '';
-+  function renderFetched() {
-+    var box = el('ntrFetched');
-+    if (!box) return;
-+    var nc = state.nifty.current;
-+    var out = '';
-+    if (trendFilterActive()) {
-+      var thresh = trendPct();
-+      var rows = [];
-+      for (var i = 0; i < state.stocks.length; i++) {
-+        var s = state.stocks[i];
-+        if (isCommodity(s.sym)) continue;
-+        var chg = dailyChangePct(s);
-+        if (isNaN(chg)) continue;
-+        var ok = (nc === 'BULL' && chg >= thresh) || (nc === 'BEAR' && chg <= -thresh);
-+        if (!ok) continue;
-+        rows.push({ s: s, chg: chg });
-+      }
-+      rows.sort(function (a, b) { return nc === 'BULL' ? b.chg - a.chg : a.chg - b.chg; });
-+      if (rows.length) {
-+        out = '<div style="font-size:9px;color:' + (nc === 'BULL' ? '#00d4aa' : '#ff4d6a') + ';margin-bottom:2px">NIFTY ' + nc +
-+          ' &middot; fetched ' + rows.length + ' F&amp;O stock' + (rows.length === 1 ? '' : 's') + ' with daily change% ' + (nc === 'BULL' ? '&ge; +' : '&le; -') + thresh + '%</div>';
-+        for (var r = 0; r < rows.length; r++) {
-+          var f = rows[r];
-+          var s2 = f.s;
-+          var border = s2.active ? '#00d4aa' : '#2d2d50';
-+          var col = s2.active ? '#d0d0d0' : '#777';
-+          out += '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;background:#12122a;border:1px solid ' + border + ';border-radius:3px;padding:2px 6px;color:' + col + '" title="' + s2.sym.name + ' ' + (f.chg >= 0 ? '+' : '') + f.chg.toFixed(2) + '% daily' + (s2.active ? ' · ACTIVE (traded)' : ' · qualifies, not enabled') + '">' + s2.sym.name +
-+            ' <b style="color:' + (f.chg >= 0 ? '#00d4aa' : '#ff4d6a') + '">' + (f.chg >= 0 ? '+' : '') + f.chg.toFixed(2) + '%</b></span>';
-+        }
-+      } else {
-+        out = '<span style="font-size:10px;color:#555">No F&amp;O stocks currently qualify at ' + thresh + '% on NIFTY ' + (nc === 'BULL' || nc === 'BEAR' ? nc.toLowerCase() : 'trend unknown') + ' - lower the threshold or wait for stronger daily moves.</span>';
-+      }
-+    } else {
-+      var list = state.stocks.filter(function (s) { return !!s.enabled; });
-+      if (list.length) {
-+        out = '<div style="font-size:9px;color:#888;margin-bottom:2px">Trend following OFF - fetching the ' + list.length + ' manually enabled row' + (list.length === 1 ? '' : 's') + ':</div>';
-+        for (var m = 0; m < list.length; m++) {
-+          var ms = list[m];
-+          var mc = dailyChangePct(ms);
-+          var border2 = ms.active ? '#00d4aa' : '#2d2d50';
-+          var col2 = ms.active ? '#d0d0d0' : '#777';
-+          out += '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;background:#12122a;border:1px solid ' + border2 + ';border-radius:3px;padding:2px 6px;color:' + col2 + '">' + ms.sym.name +
-+            ' <b style="color:' + (mc >= 0 ? '#00d4aa' : '#ff4d6a') + '">' + (isNaN(mc) ? '--' : (mc >= 0 ? '+' : '') + mc.toFixed(2) + '%') + '</b></span>';
-+        }
-+      } else {
-+        out = '<span style="font-size:10px;color:#555">No stocks fetched yet - check rows in the F&amp;O table or enable NIFTY Trend Following.</span>';
-+      }
-+    }
-+    if (out !== _fetchedHtml) { _fetchedHtml = out; box.innerHTML = out; }
-+  }
-+
-   /* One section for every manually enabled F&O stock + its picked strike.
-      Blue chip = open position on that strike, amber = strike resolved but not
-      yet in position, gray = still resolving the chain. */
-   var _pickedHtml = '';
-   function renderPicked() {
--    var box = el('ntrPicked');
-+    var box = el('ntrPicked');    var box = el('ntrPicked');
-     if (!box) return;
-     var list = state.stocks.filter(function (s) { return !!s.enabled; });
-     var out = '';
-@@ -2480,6 +2635,15 @@
-     state.strike.positiveOnly = !!el('ntrGreenOnly').checked;
-     saveSettings();
-   }
-+  function onPremiumChartChange() {
-+    state.premiumChart = !!el('ntrPremiumChart').checked;
-+    saveSettings();
-+    syncPremiumChartUI();
-+  }
-+  function syncPremiumChartUI() {
-+    var pc = el('ntrPremiumChart');
-+    if (pc) pc.checked = !!state.premiumChart;
-+  }
-   function syncGreenUI() {
-     var g = el('ntrGreenOnly');
-     if (g) g.checked = !!state.strike.positiveOnly;
-@@ -2606,6 +2770,7 @@
-     state._sortDirty = true;
-     setInterval(tick, POLL_MS);
-     setInterval(refreshTrendData, TREND_REFRESH_MS);
-+    setInterval(statusPulse, POLL_MS);
-     NiftyChart.init();
-     StrikeChart.init();
-     state.visible = true;
-@@ -2662,6 +2827,9 @@
-     var gr = el('ntrGreenOnly');
-     if (gr) { gr.checked = !!state.strike.positiveOnly; gr.addEventListener('change', onGreenOnlyChange); }
-     syncGreenUI();
-+    var pc = el('ntrPremiumChart');
-+    if (pc) { pc.checked = !!state.premiumChart; pc.addEventListener('change', onPremiumChartChange); }
-+    syncPremiumChartUI();
-     var lo = el('ntrLimitOrder');
-     if (lo) { lo.checked = !!state.limitOrder.enabled; lo.addEventListener('change', onLimitOrderChange); }
-     syncLimitUI();
-diff --git a/static/strategy_container.js b/static/strategy_container.js
-index 878765d..64d444e 100644
---- a/static/strategy_container.js
-+++ b/static/strategy_container.js
-@@ -739,6 +739,7 @@ window.createStrategyContainer = function () {
-       : '<span style="color:#00d4aa;font-size:8px;border:1px solid #00d4aa;border-radius:2px;padding:1px 4px;font-weight:700">BULLISH</span>';
-     return '<tr>' +
-       '<td style="text-align:center"><input type="checkbox" class="sc-sel" data-rid="' + esc(strategyIdentity(s)) + '" onchange="StrategyContainer.selRow(this)" title="Select for pooled paper trading"></td>' +
-+      '<td style="text-align:center"><button class="btn-action" style="width:auto;padding:1px 6px;margin:0;font-size:8px;background:#ffd700;color:#0a0a18" onclick="if(window.FinalStrategy)FinalStrategy.saveFromContainer(\'' + esc(strategyIdentity(s)) + '\')" title="Save this strategy to the Final Strategy section (with its win rate, avg/trade, SL / trail SL, timeframe and running settings)">Final</button></td>' +
-       '<td style="max-width:190px"><div style="font-weight:700;color:#d0d0d0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="' + esc(name) + '">' + esc(name) + '</div>' +
-         '<div style="font-size:8px;color:#777;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(meta) + refTxt + '</div></td>' +
-       '<td>' + badge + '</td>' +
-@@ -760,7 +761,7 @@ window.createStrategyContainer = function () {
-     }
-     return '<div style="margin-top:6px"><div style="font-size:10px;font-weight:700;color:' + color + ';margin:4px 0 2px">' + title + ' Strategies <span style="color:#666;font-weight:400">(' + list.length + ')</span></div>' +
-       '<table class="account-table" style="font-size:9px"><thead><tr>' +
--      '<th style="text-align:center" title="Select for pooled paper trading">Sel</th><th>Strategy</th><th>Type</th><th>Trades (W/L)</th><th>Win Rate</th><th>Total P&L</th><th>Avg/Trade</th><th>Days</th><th>Last Day</th><th>Last Day P&L</th><th>Best Day</th><th>PF</th>' +
-+      '<th style="text-align:center" title="Select for pooled paper trading">Sel</th><th style="text-align:center" title="Save to Final Strategy section">Final</th><th>Strategy</th><th>Type</th><th>Trades (W/L)</th><th>Win Rate</th><th>Total P&L</th><th>Avg/Trade</th><th>Days</th><th>Last Day</th><th>Last Day P&L</th><th>Best Day</th><th>PF</th>' +
-       '</tr></thead><tbody>' + list.map(rowHTML).join('') + '</tbody></table></div>';
-   }
- 
+   /* The engine's own state.positions rows are a copy made at entry time.
+      PaperTrade is the source of truth for a live position: its checkAutoTargetSl
+@@ -6017,6 +6065,7 @@ window.createAISmartTrading = function (suffix) {
+     toggleAuto,
+     onUniversalInput() { readUniversal(); },
+     onDataPoolToggle() { onDataPoolToggle(); },
++    poolRefresh() { poolRefresh(); },
+     toggleAutoSl,
+     onStrikeInput() { readStrikeUI(); },
+     onRunInInput() { readRunInUI(); },
 diff --git a/templates/index.html b/templates/index.html
-index 28ea300..b52f530 100644
+index 9d3e063..22a6cb2 100644
 --- a/templates/index.html
 +++ b/templates/index.html
-@@ -985,6 +985,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
-             <span id="astPerfInfo" style="font-size:9px;color:#888"></span>
-             <span style="font-size:9px;color:#666">Tick saved strategies to trade them live with the settings below (no backtest)</span>
+@@ -951,6 +951,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
+           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;border:1px solid #1e1e40;border-radius:3px;padding:4px 8px">
+             <label style="font-size:9px;color:#00d4aa;display:flex;align-items:center;gap:3px;cursor:pointer;font-weight:700" title="Live Data Pool: shows the shared realtime candle (open/high/low/close/volume), indicator values and the entry-condition PASS/FAIL for every resolved symbol. The strategies read the exact same pool, so what you see is what they trade."><input type="checkbox" id="astDataPool" onchange="AISmartTrading.onDataPoolToggle()" style="accent-color:#00d4aa"> Data Pool (live candle + indicator + filter readout)</label>
+             <span id="astDataPoolInfo" style="font-size:9px;color:#666">OFF - shared pool feeds strategies only</span>
++            <button id="astDataPoolRefresh" onclick="AISmartTrading.poolRefresh()" style="font-size:9px;color:#fff;background:#2d2d5e;border:1px solid #3d3d7e;border-radius:3px;padding:2px 10px;cursor:pointer;font-weight:700" title="Re-resolve the selected universe and re-render the pool readout now (newly added premium charts / symbols / strikes show up immediately)">Refresh</button>
            </div>
-+          <div id="astSummary" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
-           <div class="monitor-toolbar" style="border:1px solid #1e1e40;border-radius:4px;margin:4px 0">
-             <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
-               <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#b39ddb">Template:</b></div>
-@@ -1167,7 +1168,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
-             </label>
-             <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
-               <select id="astRunInComm" onchange="AISmartTrading.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
--                <option value="spot" selected>Futures contract</option>
-+                <option value="spot" selected>Spot chart</option>
-+                <option value="futures">Futures contract</option>
-                 <option value="premium">Option premium chart</option>
-               </select>
-             </label>
-@@ -1381,7 +1383,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
-           <div class="account-section" id="fsSection" style="flex:1.4;overflow-y:auto;border-top:1px solid #ffd700;margin-top:8px;padding-top:6px">
-             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0">
-               <h3 style="font-size:11px;color:#ffd700;text-transform:uppercase;margin:0">Final Strategy <span id="fsCount" style="color:#666"></span></h3>
--              <span style="font-size:9px;color:#888">Best performing strategies auto-saved from Paper Trade / Strategy Container / Pooled Strategy Runner</span>
-+              <span style="font-size:9px;color:#888">Best performing strategies auto-saved from Paper Trade / Strategy Container / Pooled Strategy Runner — or saved manually via the gold <b>Final</b> button on any running strategy. Use <b>Run</b> on a row to re-run it in the AI Smart Trading engine with its original settings.</span>
-             </div>
-             <div class="monitor-toolbar" style="border:1px solid #4a3a0a;border-radius:4px;margin:4px 0">
-               <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
-@@ -1402,7 +1404,6 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
-           <div id="astRunningList"></div>
-           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Closed AI Smart Trades</h3>
-           <div id="astClosedList"></div>
--          <div id="astSummary" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
-           <div id="astLog" style="max-height:140px;overflow-y:auto;font-size:9px;color:#888;line-height:1.5;border-top:1px solid #1e1e40;margin-top:6px;padding:6px 8px"></div>
-         </div>
-       </div>
-@@ -1614,7 +1615,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
-             </label>
-             <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
-               <select id="aeRunInComm" onchange="AutoExperiment.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
--                <option value="spot" selected>Futures contract</option>
-+                <option value="spot" selected>Spot chart</option>
-+                <option value="futures">Futures contract</option>
-                 <option value="premium">Option premium chart</option>
-               </select>
-             </label>
-@@ -1817,7 +1819,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
-           <button class="btn-action" id="ntrToggle" style="width:auto;padding:4px 12px;margin:0;font-size:10px">Start</button>
-           <span style="font-size:9px;color:#888" id="ntrStatus">STOPPED</span>
-           <span style="flex:1"></span>
--          <span id="ntrTrendRefresh" style="font-size:9px;color:#66ccff">30s refresh --</span>
-+          <span id="ntrTrendRefresh" style="font-size:9px;color:#66ccff">60s refresh --</span>
-           <span id="ntrTick" style="font-size:9px;color:#666">tick --ms</span>
-         </div>
-         <div style="display:flex;align-items:center;gap:10px;padding:5px 8px;border-bottom:1px solid #1e1e40;flex-wrap:wrap">
-@@ -1865,6 +1867,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
-           </label>
-           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">Number of Strikes <input type="number" id="ntrStrikeCount" value="3" min="0" step="1" title="How many strikes on each side (ATM mode always resolves the single ATM strike)" style="width:44px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"></label>
-           <label style="font-size:10px;color:#00d4aa;display:flex;align-items:center;gap:4px" title="Only pick strikes whose premium (LTP) and LTP change are both positive and rising. A strike with minus/zero LTP or a falling/minus LTP change is skipped and the next positive rising strike is chosen instead. OFF = accept any strike including red (minus) premiums."><input type="checkbox" id="ntrGreenOnly" checked> Only +green premium strikes (skip minus LTP / LTP change)</label>
-+          <label style="font-size:10px;color:#ffd700;display:flex;align-items:center;gap:4px" title="Place trades on the option premium chart (CE for bullish / PE for bearish). OFF = trade the underlying spot/futures directly instead of an option premium."><input type="checkbox" id="ntrPremiumChart" checked> Place trade in option premium chart</label>
-           <label style="font-size:10px;color:#00d4aa;display:flex;align-items:center;gap:4px;border-left:1px solid #2d2d50;padding-left:10px" title="Place every BUY F&O entry as an automatic LIMIT order. The system computes the best marketable limit price - crossing the best ask plus a safety buffer - so the order is fulfilled ~100% of the time and is always ABOVE the current price. OFF = market order at the live price."><input type="checkbox" id="ntrLimitOrder"> BUY F&amp;O Limit Order (auto)</label>
-           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">NIFTY TF <select id="ntrNiftyTf" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"><option value="1min">1min</option><option value="5min" selected>5min</option><option value="15min">15min</option></select></label>
-           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">Stock TF <select id="ntrStockTf" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"><option value="1min">1min</option><option value="5min" selected>5min</option><option value="15min">15min</option></select></label>
-@@ -1977,6 +1980,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
-               <tbody id="ntrBody"></tbody>
-             </table>
-           </div>
-+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Fetched Stocks <span style="text-transform:none;color:#666;font-weight:normal">(NIFTY trend following / active method)</span></h3>
-+          <div id="ntrFetched" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Stocks the engine currently fetches: when NIFTY Trend Following is ON these are the F&O stocks whose live daily change% is at/above the set threshold on the NIFTY trend side; when OFF it is the manually enabled rows. Green border = active (tradable), dim = fetched but not enabled."></div>
-           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Picked Stocks &amp; Strikes <span style="text-transform:none;color:#666;font-weight:normal">(manual selection)</span></h3>
-           <div id="ntrPicked" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Every manually enabled F&O stock and its picked strike. Blue = open position, amber = strike resolved, gray = still resolving."></div>
-           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
-@@ -5518,17 +5523,17 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
- <script src="/static/aitrades.js?v=1"></script>
- <script src="/static/strategies.js?v=64"></script>
- <script src="/static/papertrade.js?v=28"></script>
--<script src="/static/strategy_container.js?v=14"></script>
--<script src="/static/autoexperiment.v13.js?v=122"></script>
-+<script src="/static/strategy_container.js?v=15"></script>
-+<script src="/static/autoexperiment.v13.js?v=124"></script>
+           <div id="astDataPoolBody" style="display:none;margin-top:6px;max-height:240px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a"></div>
+           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
+@@ -5621,7 +5622,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
+ <script src="/static/autoexperiment.v13.js?v=125"></script>
  <script src="/static/indextrend.js?v=2"></script>
  <script src="/static/simulator.js?v=2"></script>
--<script src="/static/aismart.js?v=93"></script>
-+<script src="/static/aismart.js?v=96"></script>
+-<script src="/static/aismart.js?v=97"></script>
++<script src="/static/aismart.js?v=101"></script>
  <script src="/static/paperrun.js?v=16"></script>
  <script src="/static/paperstrategies.js?v=4"></script>
  <script src="/static/hft_pool.js?v=2"></script>
--<script src="/static/hft_runner.js?v=6"></script>
--<script src="/static/final_strategy.js?v=1"></script>
--<script src="/static/smart_ntrader.js?v=40"></script>
-+<script src="/static/hft_runner.js?v=7"></script>
-+<script src="/static/final_strategy.js?v=2"></script>
-+<script src="/static/smart_ntrader.js?v=46"></script>
- <script src="/static/backup.js?v=1"></script>
- <script>
- /* Engine instantiation for the base tabs and every duplicated tab. The cloned

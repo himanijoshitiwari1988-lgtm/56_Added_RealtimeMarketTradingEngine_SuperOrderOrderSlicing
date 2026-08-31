@@ -1,14 +1,14 @@
-# Backup: 29_Fixed_SmartNTrader_BulishBearishTradeAlert
+# Backup: 33_fixed_NiftyTrendFollowingLegPickerAuto
 
 Complete snapshot backup of the project (working directory
-`28_RemovedDoubleStrategyConflict_InAST`).
+`32_Added8IndicaterFilters_FixedOptionChainIssue`).
 
 ## Contents
 
 - **Complete project files** — the full working tree as it exists right now
   (committed state + all uncommitted work), including:
   - `app.py`, `main.py`, `broker.py`, `charts.py`, `data_fetcher.py`, `requirements.txt`
-  - `static/` (smart_ntrader.js, aismart.js, autoexperiment.v13.js, final_strategy.js,
+  - `static/` (aismart.js, smart_ntrader.js, autoexperiment.v13.js, final_strategy.js,
     hft_runner.js, strategy_container.js, papertrade.js, ...)
   - `templates/index.html`
   - `CHANGELOG.md`, `HANDOFF.md`, `SESSION.md`
@@ -19,24 +19,29 @@ Complete snapshot backup of the project (working directory
 ## Modified files (in CHANGES_COMPLETE.patch)
 
 ```
- app.py                       |  15 +++-
- static/aismart.js            |  87 ++++++++++++++++---
- static/autoexperiment.v13.js |  30 ++++---
- static/final_strategy.js     | 168 ++++++++++++++++++++++++++++++++++--
- static/hft_runner.js         |  74 ++++++++++++++++
- static/smart_ntrader.js      | 198 +++++++++++++++++++++++++++++++++++++++----
- static/strategy_container.js |   3 +-
- templates/index.html         |  27 +++---
- 8 files changed, 540 insertions(+), 62 deletions(-)
+ static/aismart.js    |  95 +++++++++++++++++++++++++++++++++++++++-------------
+ templates/index.html |   3 +-
+ 2 files changed, 74 insertions(+), 24 deletions(-)
 ```
 
-This backup includes the Smart NTrader fix set: NIFTY trend-following parity
-with AST/AE (60s scan + per-tick threshold prune + below-threshold force
-exit), strict buy-only semantics (bullish = BUY CE, bearish = BUY PE, no
-SELL/short anywhere), the always-on stopped-state status pulse so the Fetched
-Stocks list shows set-threshold stocks even with the market closed, and the
-AI Smart P&L / Win Rate / Realized P&L summary cards moved to the top of the
-AI Smart Trading Engine section. Also included: AST/AE commodity 'futures'
-run-in support with the commodity daily-candle backfill fix in app.py,
-AST -> Final Strategy save (sendToFinal), and the AE Trend confirmation
-checkbox.
+This backup includes the NIFTY trend-following / Top-Movers auto CE-PE leg
+picker fix plus the Live Data Pool enhancements:
+
+- **Auto CE-PE leg picker fix** (`contractsFor`): when NIFTY trend-following is
+  enabled the option side is pinned to the LIVE NIFTY direction for every picked
+  symbol (bearish -> PE puts, bullish -> CE calls); in Top Movers mode it is
+  pinned to the stock's own daily move (gainer -> CE, loser -> PE). The NIFTY
+  trend direction was previously never used, the running strategies' shared
+  category overrode the mover direction, and the auto-side block was skipped
+  when the "+green premium" filter was off.
+- **Data Pool — all selected strikes as separate premium readouts**: 'both'
+  run-in instruments now expand every resolved contract into its own premium
+  row (labelled `<Symbol> <strike> <CE/PE>`), instead of only the first strike.
+- **Data Pool — manual Refresh button**: `AISmartTrading.poolRefresh()` forces a
+  re-resolve of the selected universe (ignoring the 15s idle throttle) so newly
+  added premium charts / symbols / strikes and changed indicator/data values
+  appear immediately.
+- **Data Pool — live volume fallback**: the Vol column uses the forming candle's
+  volume, falling back to the live quote volume when the premium candle carries
+  none (option candles often have volume 0), so strikes with real volume never
+  show an empty column.

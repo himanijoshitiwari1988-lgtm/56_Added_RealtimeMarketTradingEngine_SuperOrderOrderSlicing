@@ -17,6 +17,34 @@ Token) are entered in the UI top bar and stored in localStorage.
 
 ## Current State (last session)
 
+### Changes made in THIS session — NIFTY trend-following / Top-Movers auto CE-PE leg picker fix + Data Pool enhancements (backup `33_fixed_NiftyTrendFollowingLegPickerAuto`)
+User report: the auto CE/PE side pick for NIFTY trend-following and Top
+Gainers/Top Losers stopped working — for bearish the engine should automatically
+take the PE put chart, for bullish the CE call chart, and run the strategy on
+it. Root cause in `static/aismart.js` `contractsFor`: the NIFTY trend direction
+(`_lastNiftyDir`) was never consulted (NIFTY trend mode has no mover direction,
+and `trendDirectionFor()` analysed each stock's own 5-min candles instead of the
+NIFTY index); `strategyDirectionFor()` was first in the precedence chain so a
+shared strategy category overrode the mover/trend direction; and the whole
+auto-side block was skipped when "+green premium" was unchecked.
+- `static/aismart.js` `contractsFor`: side precedence reordered to
+  NIFTY-trend-side -> mover-direction -> active filter direction -> strategy
+  category -> underlying trend; guard extended so the block runs in NIFTY trend
+  mode (bearish -> PE puts, bullish -> CE calls) and in Top Movers mode (gainer
+  -> CE, loser -> PE).
+- Data Pool (`poolScan`): 'both' run-in instruments now expand ALL resolved
+  contracts into separate premium rows (`<Symbol> <strike> <CE/PE>` label),
+  not just `contracts[0]`; `confirmCandlesFor(instr, tf, ci)` fetches a
+  specific contract's premium candles.
+- Data Pool: manual Refresh button — `AISmartTrading.poolRefresh()` forces a
+  re-resolve (new `_poolForceResolve` flag bypasses the 15s idle throttle) and
+  re-renders the readout immediately; HTML button beside the Data Pool toggle.
+- Data Pool: `poolVolume()` — Vol column prefers the forming candle's volume,
+  falls back to the live quote's volume for the same instrument/strike when the
+  premium candle carries none, so strikes with real volume never show 0.
+- Verified: `node --check` clean on `static/aismart.js`; server serves the new
+  code. Cache-buster: `aismart.js?v=101`.
+
 ### Changes made in THIS session — Live-quote / P&L / Closed-list / square-off fixes (dash `--` P&L, non-green profit, stale Closed list, mistimed entries)
 User report: running paper trades show `--` P&L/LTP instead of a price + green profit; closed
 positions don't show up in the Closed list; strategies don't enter at the right time. Root cause:

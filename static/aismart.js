@@ -2610,20 +2610,25 @@ window.createAISmartTrading = function (suffix) {
     const st = (so && typeof so === 'object') ? Object.assign({}, state.strike, so) : state.strike;
     let ot = st.optionType || 'both';
     const onlyPos = st.positiveOnly !== false;
+    /* NIFTY trend-following direction: when the NIFTY trend engine is enabled
+       the CE/PE side is pinned to the LIVE NIFTY direction for every symbol it
+       picked - bearish -> PE puts only, bullish -> CE calls only (matches the
+       "bearish/bullish stocks picked" set). This is the auto side-selection the
+       engine is supposed to apply on top of the mover / stock trend logic. */
+    const ntSide = ((state.niftyTrend && state.niftyTrend.enabled) && (_lastNiftyDir === 'bullish' || _lastNiftyDir === 'bearish')) ? _lastNiftyDir : null;
     /* Direction-aware leg pick for the "Only +green premium strikes" filter:
-       the selected bullish/bearish indicator filter decides the side first -
-       bullish filter -> only CE calls (bought), bearish filter -> only PE puts
-       (bought). When no directional filter is active the underlying's own
-       trend decides, and if that too is unclassifiable the user's option-type
-       selector decides the legs (the green filter still applies). An explicit
-       optionType in the per-call override (Smart NTrader pins its decided
-       CE/PE side) wins - the green filter still applies to that side's
-       strikes, but the caller's side is never overridden. */
-    if ((onlyPos || moverDirectionFor(symbol) != null) && (!so || !so.optionType)) {
-      /* Movers mode pins the leg to the stock's own move first (top gainer ->
-         CE only, top loser -> PE only), then the selected bullish/bearish
-         indicator filter, then the underlying's own trend. */
-       const dir = strategyDirectionFor() || moverDirectionFor(symbol) || activeFilterDirection() || await trendDirectionFor(symbol);
+       the NIFTY trend side (when NIFTY trend-following is on) and the mover's
+       own daily move decide the side first - bullish -> only CE calls (bought),
+       bearish -> only PE puts (bought). When neither market signal is available
+       the selected bullish/bearish indicator filter decides, then the running
+       strategies' shared category, then the underlying's own trend, and only if
+       every source is unclassifiable does the user's option-type selector
+       decide the legs (the green filter still applies). An explicit optionType
+       in the per-call override (Smart NTrader pins its decided CE/PE side) wins
+       - the green filter still applies to that side's strikes, but the caller's
+       side is never overridden. */
+    if ((onlyPos || moverDirectionFor(symbol) != null || ntSide) && (!so || !so.optionType)) {
+      const dir = ntSide || moverDirectionFor(symbol) || activeFilterDirection() || strategyDirectionFor() || await trendDirectionFor(symbol);
       if (dir === 'bullish') ot = 'CE';
       else if (dir === 'bearish') ot = 'PE';
     }
@@ -3014,11 +3019,11 @@ window.createAISmartTrading = function (suffix) {
   /* Secondary confirmation series for a "both" run-in instrument: the first
      selected-strike option premium chart. Null when no contract or no option
      candles are available. */
-  async function confirmCandlesFor(instr, tf) {
+  async function confirmCandlesFor(instr, tf, ci) {
     if (instr.kind !== 'both') return null;
     const SE = window.StratEngine;
     if (!SE || !SE.fetchCandlesFor) return null;
-    const c0 = (instr.contracts && instr.contracts.length) ? instr.contracts[0] : null;
+    const c0 = (instr.contracts && instr.contracts.length) ? instr.contracts[ci || 0] : null;
     if (!c0) return null;
     const optSym = { id: Number(c0.sid), exch: optionExch(instr.symbol), inst: optionInst(instr.symbol), name: (instr.symbol.name || '') };
     try {
@@ -5126,6 +5131,28 @@ window.createAISmartTrading = function (suffix) {
     const n = Number(v);
     return (isFinite(n)) ? n.toFixed(2) : '--';
   }
+  /* Volume for a pool readout: prefer the forming candle's own volume; when
+     that is 0 (option premium candles often carry no volume) fall back to the
+     live quote's volume for the same instrument/strike so the pool never shows
+     an empty volume column for a strike that actually has volume. */
+  function poolVolume(instr, contract, bar) {
+    const bv = Number(bar && bar.volume);
+    if (bv > 0) return bv;
+    try {
+      const qm = quoteCache();
+      let q = null;
+      if (contract && contract.sid != null) {
+        q = qm[String(contract.sid)] || null;
+      } else if (instr.kind === 'option' && instr.sid != null) {
+        q = qm[String(instr.sid)] || null;
+      } else if (instr.symbol) {
+        const sym = instr.symbol;
+        q = qm[sym.exch === 'IDX_I' ? 'IDX_I:' + sym.id : String(sym.id)] || null;
+      }
+      const qv = (q && q.volume != null) ? Number(q.volume) : 0;
+      return (isFinite(qv) && qv > 0) ? qv : bv;
+    } catch (e) { return bv; }
+  }
   function poolTF() {
     const acts = activeStrategies();
     for (const s of acts) { const t = pickTimeframe(s); if (t) return t; }
@@ -5133,6 +5160,7 @@ window.createAISmartTrading = function (suffix) {
   }
   let _poolBusy = false;
   let _poolResolveAt = 0;
+  let _poolForceResolve = false;
   async function poolScan() {
     if (state.dataPool !== true) return;
     if (_poolBusy) return;
@@ -5142,12 +5170,13 @@ window.createAISmartTrading = function (suffix) {
       const tf = poolTF();
       const acts = activeStrategies();
       const rows = [];
-      if (!_lastInstruments.length) {
+      if (!_lastInstruments.length || _poolForceResolve) {
         /* Engine idle (auto OFF): resolve the selected universe once per 15s so
            the pool still shows live data without hammering the chain surface. */
         const now = Date.now();
-        if (now - _poolResolveAt > 15000) {
+        if (_poolForceResolve || now - _poolResolveAt > 15000) {
           _poolResolveAt = now;
+          _poolForceResolve = false;
           try { _lastInstruments = await resolveInstruments(); } catch (e) { _lastInstruments = []; }
         }
       }
@@ -5164,16 +5193,22 @@ window.createAISmartTrading = function (suffix) {
           }
         } catch (e) {}
         if (instr.kind === 'both') {
-          try {
-            const pc = await confirmCandlesFor(instr, tf);
-            if (pc && pc.length >= 10) sources.push({ chart: 'premium', candles: pc });
-          } catch (e) {}
+          const contracts = (instr.contracts || []);
+          for (let ci = 0; ci < contracts.length; ci++) {
+            try {
+              const pc = await confirmCandlesFor(instr, tf, ci);
+              if (pc && pc.length >= 10) sources.push({ chart: 'premium', contract: contracts[ci], candles: pc });
+            } catch (e) {}
+          }
         }
         for (const src of sources) {
           const candles = src.candles;
           const i = candles.length - 1;
           const bar = candles[i];
           if (!bar) continue;
+          const contract = src.contract || ((instr.kind === 'option' && instr.strike != null) ? instr : null);
+          const label = contract ? displayName(instr.symbol) + ' ' + contract.strike + ' ' + contract.optionType : displayName(instr.symbol);
+          const type = (src.contract) ? 'option' : (instr.kind || '');
           const ema9 = poolIndValue('ema', { length: 9, source: 'close' }, i, candles);
           const ema21 = poolIndValue('ema', { length: 21, source: 'close' }, i, candles);
           const ema35 = poolIndValue('ema', { length: 35, source: 'close' }, i, candles);
@@ -5183,8 +5218,9 @@ window.createAISmartTrading = function (suffix) {
           for (const s of acts) {
             try { if (entryFireAt(s, candles, i)) { cond = 'PASS'; break; } } catch (e) {}
           }
-          rows.push('<tr><td>' + displayName(instr.symbol) + '</td><td>' + (instr.kind || '') + '</td><td>' + src.chart + '</td><td>' + tf + '</td>' +
-            '<td>' + poolNum(bar.open) + '</td><td>' + poolNum(bar.high) + '</td><td>' + poolNum(bar.low) + '</td><td>' + poolNum(bar.close) + '</td><td>' + Number(bar.volume || 0) + '</td>' +
+          const vol = poolVolume(instr, contract, bar);
+          rows.push('<tr><td>' + label + '</td><td>' + type + '</td><td>' + src.chart + '</td><td>' + tf + '</td>' +
+            '<td>' + poolNum(bar.open) + '</td><td>' + poolNum(bar.high) + '</td><td>' + poolNum(bar.low) + '</td><td>' + poolNum(bar.close) + '</td><td>' + vol + '</td>' +
             '<td>' + poolNum(ema9) + '</td><td>' + poolNum(ema21) + '</td><td>' + poolNum(ema35) + '</td><td>' + poolNum(st) + '</td><td>' + poolNum(vwap) + '</td>' +
             '<td style="color:' + (cond === 'PASS' ? '#00d4aa' : '#888') + ';font-weight:700">' + cond + '</td></tr>');
         }
@@ -5206,6 +5242,18 @@ window.createAISmartTrading = function (suffix) {
     if (host) host.style.display = state.dataPool ? 'block' : 'none';
     if (info) info.textContent = state.dataPool ? 'scanning...' : 'OFF - shared pool feeds strategies only';
     if (state.dataPool) poolScan();
+  }
+  /* Manual Data Pool refresh: force the pool to re-resolve the selected
+     universe right now (ignoring the 15s idle throttle) so newly added premium
+     charts / symbols / strikes and changed indicator or data values show up
+     immediately, then re-render the readout table. */
+  async function poolRefresh() {
+    if (state.dataPool !== true) return;
+    _poolForceResolve = true;
+    const info = $id('astDataPoolInfo');
+    if (info) info.textContent = 'refreshing...';
+    await poolScan();
+    if (info) info.textContent = info.textContent.replace('refreshing...', 'refreshed');
   }
 
   /* The engine's own state.positions rows are a copy made at entry time.
@@ -6017,6 +6065,7 @@ window.createAISmartTrading = function (suffix) {
     toggleAuto,
     onUniversalInput() { readUniversal(); },
     onDataPoolToggle() { onDataPoolToggle(); },
+    poolRefresh() { poolRefresh(); },
     toggleAutoSl,
     onStrikeInput() { readStrikeUI(); },
     onRunInInput() { readRunInUI(); },

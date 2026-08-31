@@ -10,6 +10,47 @@
 
 ---
 
+## 0. Latest update (2026-08-31, backup `33_fixed_NiftyTrendFollowingLegPickerAuto`)
+
+Work done this session on top of `32_Added8IndicaterFilters_FixedOptionChainIssue`:
+
+1. **NIFTY trend-following / Top Movers auto CE-PE leg picker FIX**
+   (`static/aismart.js` `contractsFor`). The user's auto side-selection stopped
+   working: for bearish the engine should pick the PE put chart, for bullish the
+   CE call chart, and send it to the strategy. Three bugs:
+   - NIFTY trend direction (`_lastNiftyDir`) was never consulted in NIFTY trend
+     mode (`moverDirectionFor` only works in movers mode; `trendDirectionFor`
+     read each stock's own candles, not NIFTY).
+   - `strategyDirectionFor()` came first in precedence, so a shared strategy
+     category overrode the mover/trend direction.
+   - The auto-side block was skipped entirely when "+green premium" was off.
+   Fix: side precedence reordered to NIFTY-trend-side -> mover-direction ->
+   active-filter-direction -> strategy-category -> underlying-trend; guard
+   extended to run in NIFTY trend mode (bearish -> PE, bullish -> CE) and in
+   Top Movers mode (gainer -> CE, loser -> PE).
+2. **Data Pool — every selected strike as its own premium row** (`poolScan`):
+   'both' run-in instruments now expand ALL resolved contracts into separate
+   premium readouts (`<Symbol> <strike> <CE/PE>`), not just `contracts[0]`;
+   `confirmCandlesFor(instr, tf, ci)` added.
+3. **Data Pool — manual Refresh button**: `AISmartTrading.poolRefresh()` +
+   `_poolForceResolve` flag force a re-resolve (bypassing the 15s idle throttle)
+   so newly added premium charts/symbols/strikes and changed indicator/data
+   values appear immediately.
+4. **Data Pool — live volume fallback** (`poolVolume`): Vol column uses the
+   forming candle's volume, falling back to the live quote volume when the
+   option premium candle carries none.
+
+Verified: `node --check` clean on `static/aismart.js`; server serves the new
+code. Cache-buster: `aismart.js?v=101`.
+
+**Next steps:** browser verification on the live preview — (1) with NIFTY
+trend-following ON, confirm bearish picks PE puts / bullish picks CE calls for
+every picked symbol; (2) with Top Movers ON, gainer -> CE / loser -> PE; (3)
+Data Pool shows one premium row per selected strike with real volume, and the
+Refresh button surfaces newly added premium charts immediately.
+
+---
+
 ## 1. Task Goal (what the user asked for)
 
 1. **Duplicate Auto Experiment tabs** exactly like the existing Paper Trade tab duplication
