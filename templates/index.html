@@ -935,45 +935,6 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             </div>
           </div>
         </div>
-        <div class="account-section" style="flex:1.2;overflow-y:auto;border-top:1px solid #1e1e40;margin-top:6px" id="scSection">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0">
-            <h3 style="font-size:11px;color:#ffd700;text-transform:uppercase;margin:0">Strategy Container</h3>
-            <span style="font-size:9px;color:#888">Auto Experiment strategies saved (de-duplicated) + daily paper-trade performance</span>
-          </div>
-          <div class="monitor-toolbar" style="border:1px solid #1e1e40;border-radius:4px;margin:4px 0">
-            <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
-              <div style="font-size:9px;color:#888;margin-right:8px"><b style="color:#66ccff">Filter:</b></div>
-              <select id="scFilter" onchange="if(window.StrategyContainer)StrategyContainer.render()" style="width:auto;min-width:230px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:4px 6px;font-size:10px">
-                <option value="all">All strategies</option>
-                <option value="winrate">Highest win rate</option>
-                <option value="profit">Most profitable (highest net P&L)</option>
-                <option value="avg">Highest average profit per trade</option>
-                <option value="overall">Most overall profit giving</option>
-              </select>
-              <button class="btn-action" style="width:auto;padding:3px 10px;margin:0;font-size:10px" onclick="if(window.StrategyContainer)StrategyContainer.refresh()">Refresh</button>
-              <button class="btn-action" style="width:auto;padding:3px 10px;margin:0;font-size:10px" onclick="if(window.StrategyContainer&&StrategyContainer.diagnose)alert(StrategyContainer.diagnose())">Diagnose</button>
-              <div class="sc-view-toggle" id="scViewToggle" style="margin:0 8px">
-                <button class="sc-view-btn" data-view="all" onclick="if(window.StrategyContainer)StrategyContainer.setView('all')">All</button>
-                <button class="sc-view-btn" data-view="bullish" onclick="if(window.StrategyContainer)StrategyContainer.setView('bullish')">Bullish</button>
-                <button class="sc-view-btn" data-view="bearish" onclick="if(window.StrategyContainer)StrategyContainer.setView('bearish')">Bearish</button>
-              </div>
-              <span style="font-size:9px;color:#888;margin-left:auto">Global across all paper tabs</span>
-            </div>
-            <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center;border-top:1px solid #1e1e40;margin-top:4px;padding-top:4px">
-              <label style="font-size:10px;color:#66ccff;display:flex;align-items:center;gap:4px;margin-right:8px"><input type="checkbox" id="scSelAll" onchange="StrategyContainer.toggleSelectAll(this)"> Select All</label>
-              <span id="scSelCount" style="font-size:9px;color:#888;margin-right:10px">0 selected</span>
-              <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:3px">Template
-                <select id="scPtTemplate" style="min-width:230px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px"></select>
-              </label>
-              <button class="btn-action" style="width:auto;padding:3px 10px;margin:0 4px;font-size:10px" onclick="StrategyContainer.addTemplateToEngine(this)">Add</button>
-              <button class="btn-action" style="width:auto;padding:3px 12px;margin:0;font-size:10px;background:#00d4aa;color:#062" onclick="StrategyContainer.addSelectedToPaper(this)">Add selected &amp; run paper trade</button>
-              <span style="font-size:8px;color:#666;margin-left:auto">Pick a saved template, press Add to load it into this tab's engine (symbols/lots/margin/TP/SL), then add selected strategies.</span>
-            </div>
-            <div id="scAddedTpls" style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:2px 0;border-top:1px dashed #1e1e40;margin-top:3px"></div>
-          </div>
-          <div class="account-cards" id="scSummary" style="grid-template-columns:repeat(6,1fr)"></div>
-          <div id="scBody" style="padding:0 2px;max-height:300px;overflow-y:auto"></div>
-        </div>
         <div class="account-section" style="flex:1.4;overflow-y:auto;border-top:1px solid #1e1e40;margin-top:6px">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:4px 0">
             <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:0">AI Smart Trading Engine</h3>
@@ -981,11 +942,26 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <button class="btn-action" style="width:auto;padding:5px 12px;margin:0;background:#66ccff;color:#0a0a18" onclick="AISmartTrading.runManual()">Run / Tick Now</button>
             <button class="btn-action" style="width:auto;padding:5px 12px;margin:0" onclick="AISmartTrading.refresh()">Refresh Strategies</button>
             <button class="btn-action warn" style="width:auto;padding:5px 12px;margin:0" onclick="AISmartTrading.stopAll()">Stop All</button>
+            <button class="btn-action warn" style="width:auto;padding:5px 12px;margin:0" title="Clear every closed AI Smart trade, all running positions, the realized totals and the paper-trade ledger. Starts the next trade from a clean ₹0 slate." onclick="AISmartTrading.resetPnl()">Reset P&amp;L</button>
             <button class="btn-action" id="astSelectAll" style="width:auto;padding:5px 12px;margin:0" onclick="AISmartTrading.selectAll()">Select All</button>
             <span id="astPerfInfo" style="font-size:9px;color:#888"></span>
             <span style="font-size:9px;color:#666">Tick saved strategies to trade them live with the settings below (no backtest)</span>
           </div>
           <div id="astSummary" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap"></div>
+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
+          <div style="max-height:220px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
+            <table class="account-table" id="astRunningTable">
+              <thead><tr><th>Option</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&amp;L (net of charges)</th><th>Charges</th><th>SL/Trail</th><th>Guard</th><th></th></tr></thead>
+              <tbody id="astRunningBody"></tbody>
+            </table>
+          </div>
+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Closed Trades</h3>
+          <div style="max-height:220px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
+            <table class="account-table" id="astClosedTable">
+              <thead><tr><th>Option</th><th>Qty</th><th>Entry → Exit</th><th>P&amp;L (net)</th><th>Charges (deducted)</th><th>Reason</th><th>Entry → Exit time</th></tr></thead>
+              <tbody id="astClosedBody"></tbody>
+            </table>
+          </div>
           <div class="monitor-toolbar" style="border:1px solid #1e1e40;border-radius:4px;margin:4px 0">
             <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
               <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#b39ddb">Template:</b></div>
@@ -1014,6 +990,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <label style="font-size:9px;color:#66ccff;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astTf1min" checked onchange="AISmartTrading.onUniversalInput()"> 1 min</label>
             <label style="font-size:9px;color:#66ccff;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astTf5min" checked onchange="AISmartTrading.onUniversalInput()"> 5 min</label>
             <label style="font-size:9px;color:#ff66cc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astMtf" onchange="AISmartTrading.onUniversalInput()" style="accent-color:#ff66cc"> Multi-TF confirm</label>
+            <label style="font-size:9px;color:#ffd700;margin-right:8px;display:flex;align-items:center;gap:3px" title="ON: use THIS section's timeframe checkboxes (1 min / 5 min), Overall SL and Trail SL for every strategy - the SL / trail SL / timeframe baked into an imported strategy are ignored. OFF: when a strategy carries its own SL / trail SL / timeframe (from the AutoExperiment engine), those win and this section's TF/SL controls fade out for that strategy."><input type="checkbox" id="astUseOwnSettings" onchange="AISmartTrading.onUniversalInput()" style="accent-color:#ffd700"> Use AST settings (own SL/trail/timeframe)</label>
             <span style="font-size:8px;color:#666">Trade live on 1 min and/or 5 min charts with these settings applied to every ticked saved strategy. No backtesting or AI timeframes. Multi-TF confirm: strategy signal must fire on the higher timeframe (trend) AND the lower timeframe (entry) before a trade executes.</span>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
@@ -1276,6 +1253,16 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullAsr" onchange="AISmartTrading.onFiltersInput()"> Support gap widening (price rising away from support)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullBbCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above BB middle band (upper+lower expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPcCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above price channel middle line</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 crossed above EMA 21</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 crossed above EMA 35</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma35_50" onchange="AISmartTrading.onFiltersInput()"> EMA 35 crossed above EMA 50</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma50_100" onchange="AISmartTrading.onFiltersInput()"> EMA 50 crossed above EMA 100</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma100_200" onchange="AISmartTrading.onFiltersInput()"> EMA 100 crossed above EMA 200</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 crossed above EMA 300</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) crossed above Supertrend(10,2)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt1CloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed below close (close crossed above ST)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVwapCloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above VWAP</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullCandle" onchange="AISmartTrading.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullElliott" onchange="AISmartTrading.onFiltersInput()"> Elliott Wave</label>
@@ -1307,6 +1294,16 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearAsr" onchange="AISmartTrading.onFiltersInput()"> Resistance gap widening (price falling away below resistance)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearBbCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below BB middle band (upper+lower expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPcCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below price channel middle line</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 crossed below EMA 21</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 crossed below EMA 35</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma35_50" onchange="AISmartTrading.onFiltersInput()"> EMA 35 crossed below EMA 50</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma50_100" onchange="AISmartTrading.onFiltersInput()"> EMA 50 crossed below EMA 100</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma100_200" onchange="AISmartTrading.onFiltersInput()"> EMA 100 crossed below EMA 200</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 crossed below EMA 300</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) crossed below Supertrend(10,2)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt1CloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed above close (close crossed below ST)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVwapCloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below VWAP</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearCandle" onchange="AISmartTrading.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearElliott" onchange="AISmartTrading.onFiltersInput()"> Elliott Wave</label>
@@ -1335,6 +1332,19 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <button class="btn-action" style="width:auto;padding:3px 10px;margin:0;font-size:10px;background:#b39ddb;color:#0a0a18;font-weight:700" onclick="AISmartTrading.fetchAiPick()">Fetch Strategy</button>
             <button class="btn-action" id="astClearImportedBtn" style="width:auto;padding:3px 10px;margin:0;font-size:10px;background:#ef5350;color:#fff" onclick="AISmartTrading.clearImported()">Clear All</button>
             <span style="font-size:9px;color:#666">Add saved strategies manually, or let the AI trader auto-pick the top-scoring ones from each side - tick each row's checkbox to enable / untick to disable.</span>
+          </div>
+          <div id="astRunInBar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 2px;border-bottom:1px dashed #1e1e40">
+            <label id="astRunInEnable" style="font-size:9px;color:#ffd700;display:flex;align-items:center;gap:3px;cursor:pointer" title="Enable to run every selected strategy on the option premium chart of only one side (CE or PE) for every selected symbol">
+              <input type="checkbox" id="astRunInEnabled" onchange="AISmartTrading.onGlobalRunInInput('enabled', this.checked)" style="accent-color:#ffd700"> Run Strategy In
+            </label>
+            <select id="astRunInSide" onchange="AISmartTrading.onGlobalRunInInput('side', this.value)" title="Run every selected strategy in the CE (call) or PE (put) option premium" style="width:58px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:9px">
+              <option value="CE">CE</option>
+              <option value="PE">PE</option>
+            </select>
+            <label id="astRunInAuto" style="font-size:9px;color:#66ccff;display:flex;align-items:center;gap:3px;cursor:pointer" title="Auto pick CE/PE: NIFTY trend bullish -&gt; CE / bearish -&gt; PE; top gainer -&gt; CE / top loser -&gt; PE">
+              <input type="checkbox" id="astRunInAutoCb" onchange="AISmartTrading.onGlobalRunInInput('auto', this.checked)" style="accent-color:#66ccff"> Auto Select Mode
+            </label>
+            <span id="astRunInStatus" style="font-size:8px;color:#888"></span>
           </div>
           <div id="astSelectedList" style="padding:2px 0"></div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-top:1px solid #1e1e40;margin-top:6px">
@@ -1400,11 +1410,46 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             </div>
             <div id="fsBody" style="padding:0 2px;max-height:320px;overflow-y:auto"></div>
           </div>
-          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Running AI Smart Positions</h3>
-          <div id="astRunningList"></div>
-          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Closed AI Smart Trades</h3>
-          <div id="astClosedList"></div>
           <div id="astLog" style="max-height:140px;overflow-y:auto;font-size:9px;color:#888;line-height:1.5;border-top:1px solid #1e1e40;margin-top:6px;padding:6px 8px"></div>
+        </div>
+        <div class="account-section" style="flex:1.2;overflow-y:auto;border-top:1px solid #1e1e40;margin-top:6px" id="scSection">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 0">
+            <h3 style="font-size:11px;color:#ffd700;text-transform:uppercase;margin:0">Strategy Container</h3>
+            <span style="font-size:9px;color:#888">Auto Experiment strategies saved (de-duplicated) + daily paper-trade performance</span>
+          </div>
+          <div class="monitor-toolbar" style="border:1px solid #1e1e40;border-radius:4px;margin:4px 0">
+            <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
+              <div style="font-size:9px;color:#888;margin-right:8px"><b style="color:#66ccff">Filter:</b></div>
+              <select id="scFilter" onchange="if(window.StrategyContainer)StrategyContainer.render()" style="width:auto;min-width:230px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:4px 6px;font-size:10px">
+                <option value="all">All strategies</option>
+                <option value="winrate">Highest win rate</option>
+                <option value="profit">Most profitable (highest net P&L)</option>
+                <option value="avg">Highest average profit per trade</option>
+                <option value="overall">Most overall profit giving</option>
+              </select>
+              <button class="btn-action" style="width:auto;padding:3px 10px;margin:0;font-size:10px" onclick="if(window.StrategyContainer)StrategyContainer.refresh()">Refresh</button>
+              <button class="btn-action" style="width:auto;padding:3px 10px;margin:0;font-size:10px" onclick="if(window.StrategyContainer&&StrategyContainer.diagnose)alert(StrategyContainer.diagnose())">Diagnose</button>
+              <div class="sc-view-toggle" id="scViewToggle" style="margin:0 8px">
+                <button class="sc-view-btn" data-view="all" onclick="if(window.StrategyContainer)StrategyContainer.setView('all')">All</button>
+                <button class="sc-view-btn" data-view="bullish" onclick="if(window.StrategyContainer)StrategyContainer.setView('bullish')">Bullish</button>
+                <button class="sc-view-btn" data-view="bearish" onclick="if(window.StrategyContainer)StrategyContainer.setView('bearish')">Bearish</button>
+              </div>
+              <span style="font-size:9px;color:#888;margin-left:auto">Global across all paper tabs</span>
+            </div>
+            <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center;border-top:1px solid #1e1e40;margin-top:4px;padding-top:4px">
+              <label style="font-size:10px;color:#66ccff;display:flex;align-items:center;gap:4px;margin-right:8px"><input type="checkbox" id="scSelAll" onchange="StrategyContainer.toggleSelectAll(this)"> Select All</label>
+              <span id="scSelCount" style="font-size:9px;color:#888;margin-right:10px">0 selected</span>
+              <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:3px">Template
+                <select id="scPtTemplate" style="min-width:230px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px"></select>
+              </label>
+              <button class="btn-action" style="width:auto;padding:3px 10px;margin:0 4px;font-size:10px" onclick="StrategyContainer.addTemplateToEngine(this)">Add</button>
+              <button class="btn-action" style="width:auto;padding:3px 12px;margin:0;font-size:10px;background:#00d4aa;color:#062" onclick="StrategyContainer.addSelectedToPaper(this)">Add selected &amp; run paper trade</button>
+              <span style="font-size:8px;color:#666;margin-left:auto">Pick a saved template, press Add to load it into this tab's engine (symbols/lots/margin/TP/SL), then add selected strategies.</span>
+            </div>
+            <div id="scAddedTpls" style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;padding:2px 0;border-top:1px dashed #1e1e40;margin-top:3px"></div>
+          </div>
+          <div class="account-cards" id="scSummary" style="grid-template-columns:repeat(6,1fr)"></div>
+          <div id="scBody" style="padding:0 2px;max-height:300px;overflow-y:auto"></div>
         </div>
       </div>
       <div class="tab-content" id="tab-autoexperiment">
@@ -1725,6 +1770,16 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullAsr" onchange="AutoExperiment.onFiltersInput()"> Support gap widening (price rising away from support)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullBbCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above BB middle band (upper+lower expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPcCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above price channel middle line</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 crossed above EMA 21</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 crossed above EMA 35</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma35_50" onchange="AutoExperiment.onFiltersInput()"> EMA 35 crossed above EMA 50</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma50_100" onchange="AutoExperiment.onFiltersInput()"> EMA 50 crossed above EMA 100</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma100_200" onchange="AutoExperiment.onFiltersInput()"> EMA 100 crossed above EMA 200</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma200_300" onchange="AutoExperiment.onFiltersInput()"> EMA 200 crossed above EMA 300</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt10_1_2" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,1) crossed above Supertrend(10,2)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt1CloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed below close (close crossed above ST)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullVwapCloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above VWAP</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullCandle" onchange="AutoExperiment.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullElliott" onchange="AutoExperiment.onFiltersInput()"> Elliott Wave</label>
@@ -1756,6 +1811,16 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearAsr" onchange="AutoExperiment.onFiltersInput()"> Resistance gap widening (price falling away below resistance)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearBbCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below BB middle band (upper+lower expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPcCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below price channel middle line</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 crossed below EMA 21</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 crossed below EMA 35</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma35_50" onchange="AutoExperiment.onFiltersInput()"> EMA 35 crossed below EMA 50</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma50_100" onchange="AutoExperiment.onFiltersInput()"> EMA 50 crossed below EMA 100</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma100_200" onchange="AutoExperiment.onFiltersInput()"> EMA 100 crossed below EMA 200</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma200_300" onchange="AutoExperiment.onFiltersInput()"> EMA 200 crossed below EMA 300</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt10_1_2" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,1) crossed below Supertrend(10,2)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt1CloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed above close (close crossed below ST)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearVwapCloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below VWAP</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearCandle" onchange="AutoExperiment.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearElliott" onchange="AutoExperiment.onFiltersInput()"> Elliott Wave</label>
@@ -2653,6 +2718,7 @@ let ocRecords = [];  /* cached option chain for direct SID lookup */
 let ocExpiries = [];
 let ocLoaded = false;
 let ocRetries = 0;
+let ocPartialPolls = 0;  /* consecutive partial-chain upgrade polls (bounded) */
 let ocChartInstance = null;
 let ocAllMode = false;  /* true = "All Expiries" stacked view is active */
 
@@ -4208,16 +4274,28 @@ function fetchOC(expiry, force){
       if(!d.partial){
         cacheSet("oc", ocKey, {data:d.data, spot_price:d.spot_price, count:d.count, instrument:d.instrument});
       } else {
-        /* Auto-upgrade the partial view to the full greeks chain in ~4s instead
-           of waiting for the 10s cycle - so the user never has to press Refresh
-           repeatedly to get the complete chain. Guarded by ocLoaded so a symbol
-           switch mid-flight doesn't re-fetch the wrong expiry. */
-        setTimeout(() => {
-          if(ocLoaded && !ocFastBusy){
-            const cur = document.getElementById("ocExpirySelect").value;
-            if(cur && cur === expiry) fetchOC(expiry);
-          }
-        }, 4000);
+        /* Auto-upgrade the partial view to the full greeks chain instead of
+           waiting for the next cycle - so the user never has to press Refresh
+           repeatedly to get the complete chain. Keep re-polling while the
+           chain is still partial (the server re-arms the REST refresh on every
+           partial serve, and the worker retries failed refreshes), backing off
+           so a slow /optionchain call is not hammered. Guarded by ocLoaded so a
+           symbol switch mid-flight doesn't re-fetch the wrong expiry. */
+        ocPartialPolls = (ocPartialPolls||0) + 1;
+        if(ocPartialPolls < 30){
+          const pdelay = Math.min(5000, 2500 + ocPartialPolls * 250);
+          setTimeout(() => {
+            if(ocLoaded && !ocFastBusy){
+              const cur = document.getElementById("ocExpirySelect").value;
+              if(cur && cur === expiry) fetchOC(expiry, true);
+            }
+          }, pdelay);
+        } else {
+          /* Give up the background upgrade (the REST refresh may be rate-limited
+             or the expiry genuinely empty); the 10s auto cycle / manual Refresh
+             will retry it. */
+          ocPartialPolls = 0;
+        }
       }
       ocRecords = d.data;
       renderOptionChain(d.data, d.spot_price);
@@ -4227,6 +4305,7 @@ function fetchOC(expiry, force){
       document.getElementById("ocExpirySelect").value = expiry;
       ocLoaded = true;
       ocRetries = 0;
+      if(!d.partial) ocPartialPolls = 0;
     } else {
       /* A 503 "Rate limited" (Dhan's 1-req/3s option-chain surface + the 30s
          cooldown armed on empty-body responses) must NOT force a manual

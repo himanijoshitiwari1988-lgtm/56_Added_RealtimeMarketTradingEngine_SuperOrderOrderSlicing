@@ -69,14 +69,14 @@
 
   /* ---------------- engine ---------------- */
   const engine = {
-    POLL_MS: 1500,
+    POLL_MS: 300,
     /* Candle data is fetched with force:1 so the server refetches from Dhan
-       every time. A 1.5s TTL meant every monitor tick AND every strategy tick
-       re-hit /api/candles for the same symbol, which is the main driver of the
-       DH-904 rate-limit storms seen in the logs. Candle bars only advance at
-       their timeframe boundary (1min/5min...), so a 5s TTL is still
-       effectively live while cutting the historical-surface load ~3x. */
-    CANDLE_TTL_MS: 5000,
+       every time. The TTL only throttles the /api/candles refetch surface; the
+       live 5ms quote feed is merged into the forming bar on every read via
+       liveBar(), so indicator/filter values track the live price even between
+       server refetches. A short 300ms TTL keeps closed-bar rollover fresh
+       without re-hitting the rate-limited candle surface on every tick. */
+    CANDLE_TTL_MS: 300,
     /* Index strategies resolve the option chain per symbol. The OC surface is
        server-throttled to 1 req/3s and the chain (strikes/greeks) does not
        change between ticks, so re-fetching it every 3s is pure waste. */
@@ -363,20 +363,49 @@
       }
     },
 
+    /* Merge the live feed quote into the last (forming) bar and return a FRESH
+       array every call. The new array identity forces indicator series to
+       recompute (they are memoized per candle-array), so EMA/Supertrend/VWAP,
+       filters and cross conditions read the live price instead of a stale bar
+       close. Never touches a closed bar - only the trailing forming bar. */
+    liveBar(candles, symbol) {
+      if (!candles || !candles.length || !symbol) return candles;
+      let q = null;
+      try {
+        q = (typeof clientQuotes !== 'undefined' && clientQuotes)
+          ? clientQuotes[symbol.exch === 'IDX_I' ? 'IDX_I:' + symbol.id : String(symbol.id)]
+          : null;
+      } catch (e) { q = null; }
+      const ltp = q && q.ltp != null ? Number(q.ltp) : null;
+      if (!ltp || !isFinite(ltp) || ltp <= 0) return candles;
+      const last = candles[candles.length - 1];
+      if (!last || !last.time) return candles;
+      const hi = Number(last.high) || ltp;
+      const lo = Number(last.low) || ltp;
+      const out = candles.slice();
+      out[out.length - 1] = Object.assign({}, last, {
+        close: ltp,
+        high: Math.max(hi, ltp),
+        low: Math.min(lo, ltp)
+      });
+      return out;
+    },
+
     async fetchOptionCandles(securityId, exchangeSegment, instrumentType, tf) {
       const key = securityId + ':' + tf;
+      const sym = { id: securityId, exch: exchangeSegment || 'NSE_EQ' };
       const cached = this.candleCache[key];
       const now = Date.now();
-      if (cached && now - cached.at < this.CANDLE_TTL_MS) return cached.candles;
+      if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
       const d = await fetch('/api/candles', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ security_id: securityId, exchange_segment: exchangeSegment, instrument_type: instrumentType, timeframe: tf, force: 1 })
       }).then(r => r.json());
       if (d && d.status === 'success' && d.data && d.data.length) {
         this.candleCache[key] = { at: Date.now(), candles: d.data };
-        return d.data;
+        return this.liveBar(d.data, sym);
       }
-      if (cached) return cached.candles;
+      if (cached) return this.liveBar(cached.candles, sym);
       return [];
     },
 
@@ -731,16 +760,17 @@
 
     async fetchCandles(st) {
       const key = st.symbol.id + ':' + st.tf;
+      const sym = st.symbol;
       const cached = this.candleCache[key];
       const now = Date.now();
-      if (cached && now - cached.at < this.CANDLE_TTL_MS) return cached.candles;
+      if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
       const chartCandles = (typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
         window.IndChart && st.symbol && chartTf === st.tf &&
         selectedSymbol && selectedSymbol.id === st.symbol.id && selectedSymbol.exch === st.symbol.exch)
         ? IndChart.getCandles() : null;
       if (chartCandles && chartCandles.length >= 3) {
         this.candleCache[key] = { at: Date.now(), candles: chartCandles };
-        return chartCandles;
+        return this.liveBar(chartCandles, sym);
       }
       const d = await fetch('/api/candles', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -748,9 +778,9 @@
       }).then(r => r.json());
       if (d && d.status === 'success' && d.data && d.data.length) {
         this.candleCache[key] = { at: Date.now(), candles: d.data };
-        return d.data;
+        return this.liveBar(d.data, sym);
       }
-      if (cached) return cached.candles;
+      if (cached) return this.liveBar(cached.candles, sym);
       return [];
     },
 
@@ -760,16 +790,17 @@
     async fetchCandlesFor(symbol, tf, periodDays) {
       if (!symbol || symbol.id == null) return [];
       const key = symbol.id + ':' + (symbol.exch || '') + ':' + tf + ':' + (periodDays || 0);
+      const sym = symbol;
       const cached = this.candleCache[key];
       const now = Date.now();
-      if (cached && now - cached.at < this.CANDLE_TTL_MS) return cached.candles;
+      if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
       const chartCandles = (!periodDays && typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
         window.IndChart && chartTf === tf &&
         selectedSymbol && selectedSymbol.id === symbol.id && selectedSymbol.exch === symbol.exch)
         ? IndChart.getCandles() : null;
       if (chartCandles && chartCandles.length >= 3) {
         this.candleCache[key] = { at: Date.now(), candles: chartCandles };
-        return chartCandles;
+        return this.liveBar(chartCandles, sym);
       }
       const d = await fetchWithTimeout('/api/candles', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -777,7 +808,7 @@
       }).then(r => r.json());
       if (d && d.status === 'success' && d.data && d.data.length) {
         this.candleCache[key] = { at: Date.now(), candles: d.data };
-        return d.data;
+        return this.liveBar(d.data, sym);
       }
       /* Dhan rate-limit / temporary-unavailable / queue-busy (503): the server
          parks the key for ~30s and returns 503 so clients stop hammering. A
@@ -804,12 +835,12 @@
           }).then(r => r.json());
           if (d2 && d2.status === 'success' && d2.data && d2.data.length) {
             this.candleCache[key] = { at: Date.now(), candles: d2.data };
-            return d2.data;
+            return this.liveBar(d2.data, sym);
           }
           if (d2 && d2.status !== 'error' && d2.status !== 'unavailable') break;
         }
       }
-      if (cached) return cached.candles;
+      if (cached) return this.liveBar(cached.candles, sym);
       return [];
     },
 
@@ -818,18 +849,19 @@
     async fetchIndexCandles(index, tf) {
       if (!index || !index.id) return [];
       const key = 'IDX_' + index.id + ':' + tf;
+      const sym = { id: index.id, exch: index.exch || 'IDX_I' };
       const cached = this.candleCache[key];
       const now = Date.now();
-      if (cached && now - cached.at < this.CANDLE_TTL_MS) return cached.candles;
+      if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
       const d = await fetchWithTimeout('/api/candles', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ security_id: index.id, exchange_segment: index.exch || 'IDX_I', instrument_type: index.inst || 'INDEX', timeframe: tf, force: 1 })
       }).then(r => r.json());
       if (d && d.status === 'success' && d.data && d.data.length) {
         this.candleCache[key] = { at: Date.now(), candles: d.data };
-        return d.data;
+        return this.liveBar(d.data, sym);
       }
-      if (cached) return cached.candles;
+      if (cached) return this.liveBar(cached.candles, sym);
       return [];
     },
 

@@ -1803,7 +1803,82 @@ def _fno_underlying(symbol_name):
     return name.replace(" ", "")
 
 
-def _resolve_fno_underlying(symbol_name, security_id, exchange_segment):
+def _pick_fut_row(rows, expiry=None):
+    """Pick the derivative-underlying (FUTSTK/FUTIDX) row for a requested expiry.
+
+    Dhan's /optionchain endpoint requires UnderlyingScrip to be the FUT scrip
+    whose expiry matches the requested Expiry - stocks carry one FUTSTK per
+    expiry, so picking the first row blindly (the old behaviour) sent e.g. the
+    Oct-27 FUT for a Sep-24 expiry, which Dhan rejected with an empty body
+    ("Dhan API unavailable"). Exact expiry match is preferred, then the nearest
+    future, then the first row."""
+    if not rows:
+        return None
+    if expiry:
+        exp = str(expiry)[:10]
+        for r in rows:
+            if str(r.get("expiry_date") or "")[:10] == exp:
+                return r
+        try:
+            tgt = datetime.strptime(exp, "%Y-%m-%d")
+            return min(
+                rows,
+                key=lambda r: abs((datetime.strptime(str(r.get("expiry_date") or "")[:10], "%Y-%m-%d") - tgt).days)
+                if r.get("expiry_date") else 10 ** 9,
+            )
+        except Exception:
+            pass
+    return rows[0]
+
+
+def _expiry_matches_underlying(symbol_name, original_seg, fno_seg, expiry):
+    """Cold-cache guard: confirm the scrip master carries the requested expiry
+    for the resolved derivative exchange before firing Dhan's /optionchain call.
+
+    Only enforced for F&O EQUITY requests (origin NSE_EQ/BSE_EQ): the scrip
+    master stores one FUTSTK per expiry per exchange, so a requested expiry with
+    no exact FUTSTK match on the resolved exchange is a foreign date (e.g. a
+    saved BSE-only expiry like 2026-09-24 sent for an NSE_FNO RELIANCE/BPCL
+    request). Sending it anyway makes `_resolve_fno_underlying` fall back to the
+    nearest FUT scrip and Dhan rejects the mismatched scrip+expiry pair with an
+    empty body ("Dhan API unavailable").
+
+    Indices (IDX_I / BSE_FNO) are exempt: their single underlying covers weekly
+    + far-monthly expiries that have no FUTIDX row at all. Commodities are
+    exempt too (OPTFUT coverage is partial). Returns True when unverifiable or
+    exempt, so a legitimate Dhan expiry is never blocked on incomplete local
+    data."""
+    if str(original_seg).upper() not in ("NSE_EQ", "BSE_EQ"):
+        return True
+    try:
+        _get_scrip_master()
+    except Exception:
+        return True
+    prefix = _fno_underlying(symbol_name)
+    exch = _scrip_exch_for(fno_seg)
+    exp = str(expiry)[:10]
+    if not prefix or not exch:
+        return True
+    fo_by_type = _SCRIP_CACHE.get("fo_by_type", {}) or {}
+    for instr in ("FUTSTK", "FUTIDX"):
+        rows = fo_by_type.get((prefix, instr), [])
+        if not rows:
+            continue
+        seg_rows = [r for r in rows if r["exchange_segment"] == exch]
+        if seg_rows:
+            rows = seg_rows
+        if not rows:
+            continue
+        if any(str(r.get("expiry_date") or "")[:10] == exp for r in rows):
+            return True
+        # This exchange has FUT rows for the prefix but none for this expiry;
+        # if the prefix also lists options on this exchange the expiry is almost
+        # certainly another exchange's date - reject it.
+        return not _oc_prefix_has_options(prefix, exch)
+    return True
+
+
+def _resolve_fno_underlying(symbol_name, security_id, exchange_segment, expiry=None):
     """Resolve the F&O underlying (security id + exchange segment) used by the
     option-chain / strike APIs.
 
@@ -1811,6 +1886,11 @@ def _resolve_fno_underlying(symbol_name, security_id, exchange_segment):
     option chain lives on the derivative segment (NSE_FNO/BSE_FNO) under the
     FUTSTK/FUTIDX security id. Indices already carry their derivative segment
     (IDX_I / BSE_FNO). Resolve the correct underlying via the scrip master.
+
+    `expiry` (optional) makes the FUTSTK/FUTIDX pick expiry-aware so Dhan's
+    /optionchain call never receives a FUT scrip that does not match the
+    requested expiry (the cause of stock/commodity chains returning empty
+    bodies and staying at the all-zero instant view).
     """
     seg = str(exchange_segment or "").upper()
     if seg == "IDX_I":
@@ -1825,7 +1905,8 @@ def _resolve_fno_underlying(symbol_name, security_id, exchange_segment):
             rows = _SCRIP_CACHE.get("fo_by_type", {}).get((prefix, "FUTIDX"), [])
             bse_rows = [r for r in rows if r["exchange_segment"] == "BSE"]
             if bse_rows:
-                return int(bse_rows[0]["security_id"]), "BSE_FNO"
+                row = _pick_fut_row(bse_rows, expiry)
+                return int(row["security_id"]), "BSE_FNO"
         except Exception:
             pass
         return int(security_id), seg
@@ -1845,7 +1926,7 @@ def _resolve_fno_underlying(symbol_name, security_id, exchange_segment):
                 seg_rows = [r for r in rows if r["exchange_segment"] == exch]
                 if seg_rows:
                     rows = seg_rows
-            row = rows[0]
+            row = _pick_fut_row(rows, expiry)
             fno_seg = "BSE_FNO" if exch == "BSE" else "NSE_FNO"
             return int(row["security_id"]), fno_seg
     except Exception:
@@ -2622,9 +2703,15 @@ def _oc_bucket(symbol_name, fno_seg, expiry):
     if key in oc_map:
         return oc_map[key]
     # The scrip-master exchange id and the API segment mapping can disagree
-    # (e.g. a segment resolved to the wrong exchange, or NCDEX rows stored under
-    # a different id). Fall back to any other exchange that has strikes for this
-    # prefix+expiry so a name mismatch never forces a slow REST chain fetch.
+    # (e.g. NCDEX rows stored under a different id). Fall back to any other
+    # exchange that has strikes for this prefix+expiry so a name mismatch never
+    # forces a slow REST chain fetch. BUT never borrow another exchange's bucket
+    # when the resolved exchange itself carries options for this prefix: F&O
+    # stocks are dual-listed with per-exchange expiry sets (RELIANCE has BSE
+    # 1200-1400 + NSE 680-1900), and an NSE_FNO request for a BSE-only expiry
+    # would subscribe BSE sids under the wrong segment and render all-zero rows.
+    if _oc_prefix_has_options(prefix, exch):
+        return None
     for cand in ("MCX", "NSE", "BSE", "NCDEX"):
         if cand == exch:
             continue
@@ -2648,18 +2735,25 @@ def _scrip_expiries(symbol_name, fno_seg):
     except Exception:
         return None
     oc_map = _SCRIP_CACHE.get("oc_map", {}) or {}
-    out = set()
+    primary = set()
+    cross = set()
     for (x, p, ex) in oc_map:
-        if p != prefix.upper():
+        if p != prefix.upper() or not ex:
             continue
-        if exch and x != exch:
-            # Accept a scrip exchange-id that differs from the API segment's
-            # (e.g. BSE rows for an NSE_FNO request) so a naming mismatch never
-            # forces the slow REST path.
-            if not (x in ("NSE", "BSE", "MCX", "NCDEX")):
-                continue
-        if ex:
-            out.add(str(ex)[:10])
+        d = str(ex)[:10]
+        if exch and x == exch:
+            primary.add(d)
+        # Accept a scrip exchange-id that differs from the API segment's
+        # (e.g. BSE rows for an NSE_FNO request) so a naming mismatch never
+        # forces the slow REST path - but only when the resolved exchange has
+        # NO options for this prefix at all. F&O stocks are dual-listed with
+        # per-exchange expiry sets (RELIANCE: NSE 09-29/10-27/11-23, BSE
+        # 09-24/10-29/11-26); mixing them makes the UI default to a BSE-only
+        # expiry while the REST call carries an NSE FUT underlying, which Dhan
+        # rejects with an empty body.
+        elif x in ("NSE", "BSE", "MCX", "NCDEX"):
+            cross.add(d)
+    out = primary if primary else cross
     if not out:
         # Some commodities only carry FUT rows in the scrip master; their expiry
         # dates are the ones their (OPT) strikes share, so list them too.
@@ -2780,13 +2874,19 @@ def _persist_chain_to_oc_map(fno_seg, prefix, expiry_date, records):
 
 
 def _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot=None,
-                      subscribe_window=False, feed_wait=True):
+                      subscribe_window=False, feed_wait=True, fallback_records=None):
     """Build the option-chain table instantly from the scrip master + live
     WebSocket quote cache - no Dhan /optionchain REST call, so it returns in
     milliseconds. Strikes and CE/PE security ids come from the scrip master;
     LTP / change / OI / Volume / Bid-Ask / IV all come from _QUOTE_CACHE (already
     streaming via the FULL-mode feed). Greeks (delta/theta/gamma/vega) are
     absent and filled later by the REST refresh.
+
+    `fallback_records` (an optional last-known full REST chain for this expiry)
+    is used for strikes the live feed has not delivered yet: any field whose
+    quote-cache value is 0/empty falls back to the record's value, so a cold
+    feed never renders a chain of all-zeros while the background refresh fills
+    in. Live feed values always win over fallback values.
 
     The strikes are subscribed BEFORE the cache snapshot and, on first load,
     `feed_wait` gives the feed a short window to land real volume / LTP / OI so
@@ -2808,6 +2908,17 @@ def _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot=N
     if not bucket:
         return None
 
+    # Index the last-known full chain by security id so a strike whose feed
+    # cache is still cold (Full packets not yet delivered) can reuse the REST
+    # values instead of rendering 0 across the row.
+    fallback_by_sid = {}
+    if fallback_records:
+        for fr in fallback_records:
+            for side in ("CE", "PE"):
+                sid = fr.get(f"{side} SID")
+                if sid:
+                    fallback_by_sid.setdefault(int(sid), fr)
+
     if not spot:
         spot = _get_oc_spot(security_id, exchange_segment)
     if spot and spot > 0:
@@ -2824,6 +2935,20 @@ def _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot=N
 
     with _QUOTE_CACHE_LOCK:
         qc = dict(_QUOTE_CACHE)
+
+    def _pick(quote, side, field, fallback_record, fb_field):
+        v = quote.get(field) or 0
+        if v:
+            return v
+        if fallback_record is not None:
+            fb = fallback_record.get(f"{side} {fb_field}")
+            if fb not in (None, ""):
+                try:
+                    return float(fb or 0)
+                except (TypeError, ValueError):
+                    return 0
+        return 0
+
     records = []
     for st in view:
         ent = bucket[st]
@@ -2831,25 +2956,29 @@ def _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot=N
         pe_sid = ent.get("PE")
         ce_q = qc.get(str(ce_sid)) or {}
         pe_q = qc.get(str(pe_sid)) or {}
+        ce_fb = fallback_by_sid.get(int(ce_sid)) if ce_sid else None
+        pe_fb = fallback_by_sid.get(int(pe_sid)) if pe_sid else None
         records.append({
             "Strike": st,
             "CE SID": ce_sid,
             "PE SID": pe_sid,
-            "CE LTP": ce_q.get("ltp") or 0,
-            "CE Chg": ce_q.get("change") or 0,
-            "CE Chg%": ce_q.get("change_pct") or 0,
-            "CE OI": ce_q.get("oi") or 0,
-            "CE Volume": ce_q.get("volume") or 0,
-            "CE IV": ce_q.get("iv") or 0,
-            "CE Bid": ce_q.get("bid") or 0, "CE Ask": ce_q.get("ask") or 0,
+            "CE LTP": _pick(ce_q, "CE", "ltp", ce_fb, "LTP"),
+            "CE Chg": _pick(ce_q, "CE", "change", ce_fb, "Chg"),
+            "CE Chg%": _pick(ce_q, "CE", "change_pct", ce_fb, "Chg%"),
+            "CE OI": _pick(ce_q, "CE", "oi", ce_fb, "OI"),
+            "CE Volume": _pick(ce_q, "CE", "volume", ce_fb, "Volume"),
+            "CE IV": _pick(ce_q, "CE", "iv", ce_fb, "IV"),
+            "CE Bid": _pick(ce_q, "CE", "bid", ce_fb, "Bid"),
+            "CE Ask": _pick(ce_q, "CE", "ask", ce_fb, "Ask"),
             "CE Delta": None, "CE Theta": None, "CE Gamma": None, "CE Vega": None,
-            "PE LTP": pe_q.get("ltp") or 0,
-            "PE Chg": pe_q.get("change") or 0,
-            "PE Chg%": pe_q.get("change_pct") or 0,
-            "PE OI": pe_q.get("oi") or 0,
-            "PE Volume": pe_q.get("volume") or 0,
-            "PE IV": pe_q.get("iv") or 0,
-            "PE Bid": pe_q.get("bid") or 0, "PE Ask": pe_q.get("ask") or 0,
+            "PE LTP": _pick(pe_q, "PE", "ltp", pe_fb, "LTP"),
+            "PE Chg": _pick(pe_q, "PE", "change", pe_fb, "Chg"),
+            "PE Chg%": _pick(pe_q, "PE", "change_pct", pe_fb, "Chg%"),
+            "PE OI": _pick(pe_q, "PE", "oi", pe_fb, "OI"),
+            "PE Volume": _pick(pe_q, "PE", "volume", pe_fb, "Volume"),
+            "PE IV": _pick(pe_q, "PE", "iv", pe_fb, "IV"),
+            "PE Bid": _pick(pe_q, "PE", "bid", pe_fb, "Bid"),
+            "PE Ask": _pick(pe_q, "PE", "ask", pe_fb, "Ask"),
             "PE Delta": None, "PE Theta": None, "PE Gamma": None, "PE Vega": None,
         })
     return {"records": records, "spot": spot}
@@ -2896,6 +3025,18 @@ def _seed_chain_quotes(records):
                 entry["bid"] = bid
             if ask > 0:
                 entry["ask"] = ask
+            # Never clobber a nonzero live value with a seed zero: when the
+            # chain served is a partial instant view (feed cold, no fallback),
+            # the seed's zeros would otherwise wipe out the real feed value that
+            # already landed in the cache. Merge instead: keep the incoming
+            # nonzero fields, retain the existing nonzero ones the seed lacks.
+            if not (entry.get("ltp") or entry.get("oi") or entry.get("volume")):
+                with _QUOTE_CACHE_LOCK:
+                    existing = _QUOTE_CACHE.get(str(int(sid)))
+                if existing and (existing.get("ltp") or existing.get("oi") or existing.get("volume")):
+                    for k in ("ltp", "oi", "volume"):
+                        if not entry.get(k) and existing.get(k):
+                            entry[k] = existing[k]
             _quote_write(str(int(sid)), entry, live=True)
 
 
@@ -2932,6 +3073,10 @@ def _fetch_option_chain_data(security_id, exchange_segment, expiry, prefix=None)
     return {"records": records, "spot": spot_price, "count": len(records)}
 
 
+_OC_RETRY_MAX = 6
+_OC_RETRY_BASE_DELAY = 3.0
+
+
 def _oc_refresh_worker():
     """Drain the option-chain REST refresh queue ONE job at a time.
 
@@ -2943,9 +3088,17 @@ def _oc_refresh_worker():
     cooldown) instead of popping-and-discarding the next job: jobs that arrive
     during a rate-limit storm stay queued and are retried after the window
     lifts, so a chain is never left stuck at the zero/blank instant view because
-    its one refresh happened to land inside the storm. Hard failures (invalid
-    security, no options) still discard the job and release `_DATA_INFLIGHT` so
-    a later request can retry."""
+    its one refresh happened to land inside the storm.
+
+    A refresh that fails for any other transient reason (Dhan API unavailable,
+    empty body, network blip) is RE-QUEUED with exponential backoff up to
+    `_OC_RETRY_MAX` attempts instead of being dropped forever. Dropping it
+    permanently left the chain at the zero partial view even though Dhan's REST
+    endpoint had real values (the browser only re-arms a refresh on a brand-new
+    cache-miss request). `_DATA_INFLIGHT` stays set while retrying so a retry is
+    never duplicated by a concurrent request. Hard failures (invalid security,
+    no options) exhaust the retries and then discard the job + release
+    `_DATA_INFLIGHT` so a later request can retry."""
     while True:
         # Park while any cooldown is active so queued jobs are attempted after
         # the rate-limit window lifts instead of failing fast and being dropped.
@@ -2959,15 +3112,28 @@ def _oc_refresh_worker():
         if job is None:
             time.sleep(0.5)
             continue
-        cache_key, security_id, exchange_segment, expiry, prefix = job
+        cache_key, security_id, exchange_segment, expiry, prefix, attempts = job
         try:
             payload = _fetch_option_chain_data(security_id, exchange_segment, expiry, prefix)
             _cache_set(cache_key, payload, "option_chain")
-        except Exception as e:
-            logger.warning("option chain refresh failed for %s: %s", str(cache_key), e)
-        finally:
             with _DATA_INFLIGHT_LOCK:
                 _DATA_INFLIGHT.discard(cache_key)
+        except Exception as e:
+            logger.warning("option chain refresh failed for %s (attempt %d/%d): %s",
+                           str(cache_key), attempts + 1, _OC_RETRY_MAX, e)
+            if attempts + 1 < _OC_RETRY_MAX:
+                # Keep the key in-flight so overlapping requests do not stack
+                # duplicate refreshes, and retry with exponential backoff.
+                backoff = _OC_RETRY_BASE_DELAY * (2 ** attempts)
+                time.sleep(min(backoff, 30))
+                with _OC_REFRESH_LOCK:
+                    _OC_REFRESH_QUEUE.append((cache_key, security_id, exchange_segment,
+                                              expiry, prefix, attempts + 1))
+            else:
+                # Retries exhausted: give up this key so a fresh user request
+                # can re-arm the refresh from a clean state.
+                with _DATA_INFLIGHT_LOCK:
+                    _DATA_INFLIGHT.discard(cache_key)
 
 
 def _start_rest_refresh(cache_key, security_id, exchange_segment, expiry, prefix=None):
@@ -2982,7 +3148,7 @@ def _start_rest_refresh(cache_key, security_id, exchange_segment, expiry, prefix
         _DATA_INFLIGHT.add(cache_key)
     global _OC_WORKER_STARTED
     with _OC_REFRESH_LOCK:
-        _OC_REFRESH_QUEUE.append((cache_key, security_id, exchange_segment, expiry, prefix))
+        _OC_REFRESH_QUEUE.append((cache_key, security_id, exchange_segment, expiry, prefix, 0))
         if not _OC_WORKER_STARTED:
             _OC_WORKER_STARTED = True
             threading.Thread(target=_oc_refresh_worker, daemon=True).start()
@@ -3016,11 +3182,22 @@ def api_option_chain():
     # Dhan's option-chain endpoint only returns the full chain with greeks when
     # given the derivative underlying (FUTSTK security id + NSE_FNO segment).
     # Without this, stock chains stuck at the instant partial view (greeks/IV/
-    # volume all zero) while index chains filled in.
+    # volume all zero) while index chains filled in. The expiry is threaded
+    # through so the correct FUTSTK is chosen: stocks carry one FUTSTK per
+    # expiry, and a mismatched scrip+expiry pair makes Dhan return an empty body
+    # ("Dhan API unavailable") instead of a full chain.
     try:
-        fno_sid, fno_seg = _resolve_fno_underlying(symbol_name, security_id, exchange_segment)
+        fno_sid, fno_seg = _resolve_fno_underlying(symbol_name, security_id, exchange_segment, expiry)
     except Exception:
         fno_sid, fno_seg = security_id, exchange_segment
+
+    # Cold-cache invalid-expiry guard (the known_expiries check below only fires
+    # once the expiry list is cached): a stale/foreign expiry - e.g. a saved BSE-
+    # only date sent for an NSE_FNO request - must never reach Dhan. The nearest-
+    # FUT fallback in _resolve_fno_underlying would otherwise send a mismatched
+    # scrip+expiry pair and Dhan returns an empty body instead of a chain.
+    if expiry and not _expiry_matches_underlying(symbol_name, exchange_segment, fno_seg, expiry):
+        return jsonify({"status": "error", "message": "Invalid expiry for this symbol"}), 400
 
     instrument = _oc_instrument_meta(symbol_name, security_id, exchange_segment)
 
@@ -3040,7 +3217,7 @@ def api_option_chain():
     if known_expiries is not None and expiry not in known_expiries:
         return jsonify({"status": "error",
                         "message": "Invalid expiry for this symbol"}), 400
-    cache_key = ("option_chain", security_id, exchange_segment, expiry)
+    cache_key = ("option_chain", fno_sid, fno_seg, expiry)
     cached = _cache_get(cache_key)
     if cached is not None:
         # A partial (scrip-master instant) chain has strikes but no greeks/IV/
@@ -3172,10 +3349,42 @@ def api_option_chain_all():
     chains = []
     errors = []
     for expiry in expiries:
-        cache_key = ("option_chain", fno_sid, fno_seg, expiry)
+        # Stocks carry one FUTSTK per expiry - resolve the derivative underlying
+        # for THIS expiry so the REST /optionchain call and the cache key never
+        # use a FUT scrip that does not match the expiry (Dhan returns an empty
+        # body for a mismatched pair, leaving the chain at the zero instant view).
+        exp_sid, exp_seg = fno_sid, fno_seg
         try:
-            inst = _build_oc_instant(symbol_name, fno_sid, fno_seg, expiry, spot,
-                                     subscribe_window=True, feed_wait=False)
+            exp_sid, exp_seg = _resolve_fno_underlying(symbol_name, security_id, exchange_segment, expiry)
+        except Exception:
+            pass
+        cache_key = ("option_chain", exp_sid, exp_seg, expiry)
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            # A chain is already cached. A full (non-partial) chain has greeks/
+            # IV and real values - serve it directly rather than rebuilding the
+            # instant scrip-master view (which could regress real values to 0
+            # while the feed is cold). A partial cached chain is served as the
+            # instant base and upgraded by the ongoing REST refresh.
+            _seed_chain_quotes(cached["records"])
+            if cached.get("partial"):
+                _start_rest_refresh(cache_key, exp_sid, exp_seg, expiry, prefix)
+            chains.append({
+                "expiry": expiry, "records": cached["records"],
+                "spot_price": cached["spot"], "count": cached["count"],
+                "partial": bool(cached.get("partial")), "instrument": instrument,
+            })
+            continue
+        try:
+            # Fall back to any stale (TTL-expired) cached chain so a cold feed
+            # reuses last-known real values instead of rendering an all-zero row.
+            stale_chain = None
+            raw_chain, _ = _cache_get_raw(cache_key)
+            if isinstance(raw_chain, dict) and raw_chain.get("records"):
+                stale_chain = raw_chain["records"]
+            inst = _build_oc_instant(symbol_name, exp_sid, exp_seg, expiry, spot,
+                                     subscribe_window=True, feed_wait=False,
+                                     fallback_records=stale_chain)
         except Exception as e:
             logger.warning("instant chain build failed %s %s: %s", symbol_name, expiry, e)
             inst = None
@@ -3184,7 +3393,7 @@ def api_option_chain_all():
             _cache_set(cache_key, {"records": inst["records"], "spot": inst["spot"],
                                    "count": len(inst["records"]), "partial": True},
                        "option_chain")
-            _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry, prefix)
+            _start_rest_refresh(cache_key, exp_sid, exp_seg, expiry, prefix)
             chains.append({
                 "expiry": expiry, "records": inst["records"],
                 "spot_price": inst["spot"], "count": len(inst["records"]),
@@ -3193,16 +3402,7 @@ def api_option_chain_all():
             continue
         # No scrip-master strikes: serve a cached REST chain if one exists,
         # otherwise report a transient loading state for this expiry only.
-        cached = _cache_get(cache_key)
-        if cached is not None:
-            _seed_chain_quotes(cached["records"])
-            chains.append({
-                "expiry": expiry, "records": cached["records"],
-                "spot_price": cached["spot"], "count": cached["count"],
-                "partial": bool(cached.get("partial")), "instrument": instrument,
-            })
-            continue
-        _start_rest_refresh(cache_key, fno_sid, fno_seg, expiry, prefix)
+        _start_rest_refresh(cache_key, exp_sid, exp_seg, expiry, prefix)
         errors.append(expiry)
 
     if not chains:
@@ -3263,6 +3463,16 @@ def api_auto_strikes():
     if not expiries:
         return jsonify({"status": "error", "message": "No expiries"}), 500
     expiry = expiries[0]
+
+    # Re-resolve the derivative underlying for THIS expiry: stocks carry one
+    # FUTSTK per expiry, and Dhan's /optionchain returns an empty body for a
+    # mismatched scrip+expiry pair. The REST call and cache key must use the
+    # FUT scrip whose expiry matches the one we are about to fetch.
+    try:
+        security_id, exchange_segment = _resolve_fno_underlying(
+            symbol_name, security_id, exchange_segment, expiry)
+    except Exception:
+        pass
 
     oc_cache_key = ("option_chain", security_id, exchange_segment, expiry)
     cached = _cache_get(oc_cache_key)

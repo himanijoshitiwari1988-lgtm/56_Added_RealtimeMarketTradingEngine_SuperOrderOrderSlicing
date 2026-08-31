@@ -126,6 +126,17 @@ window.createPaperStrategies = function (suffix) {
 
   /* ---------------- normalization ---------------- */
 
+  /* Strip the AE backtest suffix ("2450 CE" / "24500 PE") from a strategy
+     name before it lands in the Paper Trade lists / AST. The strike + CE/PE
+     belong to the AE backtest leg - the AST engine runs on its own universe
+     and the global "Run Strategy In" CE/PE control decides the side, so the
+     label must not leak into the imported strategy. */
+  function aeCleanName(n) {
+    const raw = String(n == null ? '' : n);
+    const s = raw.replace(/\s+\d+(?:\.\d+)?\s+(CE|PE)\s*$/i, '').trim();
+    return s || raw;
+  }
+
   /* Normalize a raw Auto Experiment result into the staged/import shape used by
      the AI Smart engine (the same field mapping the AE engine uses). FNO stock
      data (symbol/spot) is deliberately dropped - the Paper Trade lists carry
@@ -136,7 +147,7 @@ window.createPaperStrategies = function (suffix) {
     if (!r) return null;
     return {
       key: r.tplKey || r.name,
-      name: r.name,
+      name: aeCleanName(r.name),
       cat: r.cat || 'bullish',
       method: r.method || '',
       tf: r.tf || '5min',
@@ -195,7 +206,7 @@ window.createPaperStrategies = function (suffix) {
     if (!window.AISmartTrading || !AISmartTrading.importFromPaperTrade) return 0;
     const payload = (items || []).map(s => ({
       key: s.key,
-      name: s.name,
+      name: aeCleanName(s.name),
       cat: s.cat || 'bullish',
       method: s.method || '',
       tf: s.tf || '5min',

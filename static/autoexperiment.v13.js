@@ -503,7 +503,7 @@ window.createAutoExperiment = function (suffix) {
      volume trend, fake breakout / fake breakdown, reversal bars, and the
      pane-indicator gates (main line vs signal line crossover, and every line
      of every pane indicator trending the same way). */
-  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr'];
+  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow'];
 
   /* HTML element ids for the filter checkboxes are PascalCase
      ('aeFilterPaneCrossUp'), while the state keys are camelCase
@@ -1208,7 +1208,7 @@ window.createAutoExperiment = function (suffix) {
        - crossed above / crossed below the same indicator with different values */
   function buildFilterConditions(tpl) {
     const f = state.filters || {};
-    const enabled = (f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr)) || (f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr));
+    const enabled = (f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove)) || (f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow));
     if (!enabled) return [];
     const out = [];
     /* Candle-level gates (volume trend, fake breakout, reversal) apply to the
@@ -1280,6 +1280,31 @@ window.createAutoExperiment = function (suffix) {
     if (f.bullBbCrossBelow || f.bearBbCrossBelow) out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossBelow', expand: true }));
     if (f.bullPcCrossAbove || f.bearPcCrossAbove) out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossAbove' }));
     if (f.bullPcCrossBelow || f.bearPcCrossBelow) out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossBelow' }));
+    /* EMA ladder + Supertrend twin gates: a faster EMA (or a lower-factor
+       Supertrend band) must have crossed above/below a slower one. Both series
+       are computed with default settings on the strategy's candle chart, so
+       these gates apply to any strategy and do not need a primary indicator. */
+    const emaLadder = [[9, 21], [21, 35], [35, 50], [50, 100], [100, 200], [200, 300]];
+    emaLadder.forEach(function (pair) {
+      const fast = pair[0], slow = pair[1];
+      if (f.bullish && f['bullEma' + fast + '_' + slow]) out.push(cond({ indId: 'ema', indSettings: { length: fast, source: 'close' }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'indicator', cmpIndId: 'ema', cmpSettings: { length: slow, source: 'close' }, cmpValueKey: 'v0' }));
+      if (f.bearish && f['bearEma' + fast + '_' + slow]) out.push(cond({ indId: 'ema', indSettings: { length: fast, source: 'close' }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'indicator', cmpIndId: 'ema', cmpSettings: { length: slow, source: 'close' }, cmpValueKey: 'v0' }));
+    });
+    const stTwins = [[1, 2], [2, 3]];
+    stTwins.forEach(function (pair) {
+      const lo = pair[0], hi = pair[1];
+      if (f.bullish && f['bullSt10_' + lo + '_' + hi]) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: lo }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'indicator', cmpIndId: 'supertrend', cmpSettings: { atrPeriod: 10, factor: hi }, cmpValueKey: 'v0' }));
+      if (f.bearish && f['bearSt10_' + lo + '_' + hi]) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: lo }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'indicator', cmpIndId: 'supertrend', cmpSettings: { atrPeriod: 10, factor: hi }, cmpValueKey: 'v0' }));
+    });
+    /* Candle close vs price-guidance line gates: the close must have crossed
+       above/below the Supertrend(10,1) band or the VWAP line on this bar (true
+       prev->current cross, not a level hold). Bullish = close above the line,
+       bearish = close below it. */
+    if (f.bullish && f.bullSt1CloseCrossAbove) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'candle', candleKey: 'close' }));
+    if (f.bearish && f.bearSt1CloseCrossBelow) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'candle', candleKey: 'close' }));
+    const vwapDef = { anchor: 'session' };
+    if (f.bullish && f.bullVwapCloseCrossAbove) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'candle', candleKey: 'close' }));
+    if (f.bearish && f.bearVwapCloseCrossBelow) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'candle', candleKey: 'close' }));
     const entry = Array.isArray(tpl.entry) ? tpl.entry[0] : tpl.entry;
     if (!entry || !entry.indId) return out;
     const prim = { indId: entry.indId, indSettings: entry.indSettings || {}, valueKey: entry.valueKey || 'v0' };
@@ -1334,8 +1359,8 @@ window.createAutoExperiment = function (suffix) {
 
   function activeFilterDirection() {
     const f = state.filters || {};
-    const bull = f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || hasStreamFlags(f, 'bull'));
-    const bear = f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || hasStreamFlags(f, 'bear'));
+    const bull = f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || hasStreamFlags(f, 'bull'));
+    const bear = f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || hasStreamFlags(f, 'bear'));
     if (bull && !bear) return 'bullish';
     if (bear && !bull) return 'bearish';
     return null;
@@ -1393,6 +1418,15 @@ window.createAutoExperiment = function (suffix) {
         return last > cmpLast;
       case 'crossBelow':
         return last < cmpLast;
+      case 'crossUpNow':
+        /* True cross detection: the primary must be above the comparator on
+           this bar AND at/below it on the previous bar. Requires both previous
+           values so the very first bars can never fire a phantom cross. */
+        if (prev == null || cmpPrev == null) return false;
+        return last > cmpLast && prev <= cmpPrev;
+      case 'crossDownNow':
+        if (prev == null || cmpPrev == null) return false;
+        return last < cmpLast && prev >= cmpPrev;
       default: return false;
     }
   }
@@ -2309,7 +2343,7 @@ window.createAutoExperiment = function (suffix) {
       showPickedStrikes: false,
       trendConfirm: false, // when ON the bullish/bearish backtest skips symbols whose own trend does not match the selected filter side; when OFF the backtest runs on the strategy's own bullish/bearish entry signal for every symbol
       groupByStrategy: true, // group results by strategy (one card per strategy across all backtested symbols)
-      filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false }, // Bullish/Bearish section masters + trend/cross/volume/fake-breakout/reversal/pane gates + per-side research-stream scopes
+      filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullEma9_21: false, bearEma9_21: false, bullEma21_35: false, bearEma21_35: false, bullEma35_50: false, bearEma35_50: false, bullEma50_100: false, bearEma50_100: false, bullEma100_200: false, bearEma100_200: false, bullEma200_300: false, bearEma200_300: false, bullSt10_1_2: false, bearSt10_1_2: false, bullSt10_2_3: false, bearSt10_2_3: false, bullSt1CloseCrossAbove: false, bearSt1CloseCrossBelow: false, bullVwapCloseCrossAbove: false, bearVwapCloseCrossBelow: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false }, // Bullish/Bearish section masters + trend/cross/volume/fake-breakout/reversal/pane gates + per-side research-stream scopes
       niftyEntry: { enabled: false, dir: 'bullish', zone: 'above_upper' }, // trade-entry NIFTY condition (execute only when NIFTY matches)
       niftyExit: { enabled: false, dir: 'bearish', zone: 'below_lower' }, // trade-exit NIFTY condition (cut the trade when NIFTY matches)
       results: [],
@@ -6048,8 +6082,8 @@ window.createAutoExperiment = function (suffix) {
     });
     syncFilterSections({ bullish: prevMaster.bullish && !state.filters.bullish, bearish: prevMaster.bearish && !state.filters.bearish });
     save();
-    const any = (state.filters.bullish && (state.filters.incUp || state.filters.crossUp || state.filters.gapUp || state.filters.incUpAll || state.filters.gtUp || state.filters.ltUp || state.filters.bullVolUp || state.filters.bullVolDown || state.filters.bullFakeBreakout || state.filters.bullReversal || state.filters.paneCrossUp || state.filters.paneIncUpAll || state.filters.bullBbwInc || state.filters.bullBbCrossBelow || state.filters.bullBbCrossAbove || state.filters.bullPcCrossBelow || state.filters.bullPcCrossAbove || state.filters.bullSmf || state.filters.bullVl || state.filters.bullAsr || hasStreamFlags(state.filters, 'bull'))) ||
-                (state.filters.bearish && (state.filters.incDown || state.filters.crossDown || state.filters.gapDown || state.filters.incDownAll || state.filters.gtDown || state.filters.ltDown || state.filters.bearVolUp || state.filters.bearVolDown || state.filters.bearFakeBreakout || state.filters.bearReversal || state.filters.paneCrossDown || state.filters.paneIncDownAll || state.filters.bearBbwInc || state.filters.bearBbCrossBelow || state.filters.bearBbCrossAbove || state.filters.bearPcCrossBelow || state.filters.bearPcCrossAbove || state.filters.bearSmf || state.filters.bearVl || state.filters.bearAsr || hasStreamFlags(state.filters, 'bear')));
+    const any = (state.filters.bullish && (state.filters.incUp || state.filters.crossUp || state.filters.gapUp || state.filters.incUpAll || state.filters.gtUp || state.filters.ltUp || state.filters.bullVolUp || state.filters.bullVolDown || state.filters.bullFakeBreakout || state.filters.bullReversal || state.filters.paneCrossUp || state.filters.paneIncUpAll || state.filters.bullBbwInc || state.filters.bullBbCrossBelow || state.filters.bullBbCrossAbove || state.filters.bullPcCrossBelow || state.filters.bullPcCrossAbove || state.filters.bullSmf || state.filters.bullVl || state.filters.bullAsr || state.filters.bullEma9_21 || state.filters.bullEma21_35 || state.filters.bullEma35_50 || state.filters.bullEma50_100 || state.filters.bullEma100_200 || state.filters.bullEma200_300 || state.filters.bullSt10_1_2 || state.filters.bullSt10_2_3 || state.filters.bullSt1CloseCrossAbove || state.filters.bullVwapCloseCrossAbove || hasStreamFlags(state.filters, 'bull'))) ||
+                (state.filters.bearish && (state.filters.incDown || state.filters.crossDown || state.filters.gapDown || state.filters.incDownAll || state.filters.gtDown || state.filters.ltDown || state.filters.bearVolUp || state.filters.bearVolDown || state.filters.bearFakeBreakout || state.filters.bearReversal || state.filters.paneCrossDown || state.filters.paneIncDownAll || state.filters.bearBbwInc || state.filters.bearBbCrossBelow || state.filters.bearBbCrossAbove || state.filters.bearPcCrossBelow || state.filters.bearPcCrossAbove || state.filters.bearSmf || state.filters.bearVl || state.filters.bearAsr || state.filters.bearEma9_21 || state.filters.bearEma21_35 || state.filters.bearEma35_50 || state.filters.bearEma50_100 || state.filters.bearEma100_200 || state.filters.bearEma200_300 || state.filters.bearSt10_1_2 || state.filters.bearSt10_2_3 || state.filters.bearSt1CloseCrossBelow || state.filters.bearVwapCloseCrossBelow || hasStreamFlags(state.filters, 'bear')));
     log('Entry filters ' + (any ? 'enabled: ' + filterSummary() : 'disabled'), any ? 'ok' : 'warn');
   }
 
@@ -6084,8 +6118,8 @@ window.createAutoExperiment = function (suffix) {
       if (!f[sec]) return;
       if (items.length) parts.push((sec === 'bullish' ? 'Bullish' : 'Bearish') + ': ' + items.join(', '));
     };
-    add('bullish', [f.incUp ? 'Increasing upward' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Increasing upward (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Pane all lines increasing upward' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close crossed above BB middle band (upper+lower expanding)' : null, f.bullPcCrossAbove ? 'Close crossed above price channel middle line' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising + volume increasing' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null, f.bullCandle ? 'Candlestick patterns' : null, f.bullElliott ? 'Elliott Wave' : null, f.bullIndicator ? 'Indicators' : null, f.bullPane ? 'Pane indicators' : null, f.bullSymmetry ? 'Symmetry' : null, f.bullStructure ? 'Chart structure' : null, f.bullAtr ? 'ATR / Volatility' : null].filter(Boolean));
-    add('bearish', [f.incDown ? 'Increasing downward' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Increasing downward (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Pane all lines increasing downward' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close crossed below BB middle band (upper+lower expanding)' : null, f.bearPcCrossBelow ? 'Close crossed below price channel middle line' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling + volume increasing' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null, f.bearCandle ? 'Candlestick patterns' : null, f.bearElliott ? 'Elliott Wave' : null, f.bearIndicator ? 'Indicators' : null, f.bearPane ? 'Pane indicators' : null, f.bearSymmetry ? 'Symmetry' : null, f.bearStructure ? 'Chart structure' : null, f.bearAtr ? 'ATR / Volatility' : null].filter(Boolean));
+    add('bullish', [f.incUp ? 'Increasing upward' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Increasing upward (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Pane all lines increasing upward' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close crossed above BB middle band (upper+lower expanding)' : null, f.bullPcCrossAbove ? 'Close crossed above price channel middle line' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising + volume increasing' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullEma9_21 ? 'EMA 9 crossed above EMA 21' : null, f.bullEma21_35 ? 'EMA 21 crossed above EMA 35' : null, f.bullEma35_50 ? 'EMA 35 crossed above EMA 50' : null, f.bullEma50_100 ? 'EMA 50 crossed above EMA 100' : null, f.bullEma100_200 ? 'EMA 100 crossed above EMA 200' : null, f.bullEma200_300 ? 'EMA 200 crossed above EMA 300' : null, f.bullSt10_1_2 ? 'Supertrend(10,1) crossed above Supertrend(10,2)' : null, f.bullSt10_2_3 ? 'Supertrend(10,2) crossed above Supertrend(10,3)' : null, f.bullSt1CloseCrossAbove ? 'Close crossed above Supertrend(10,1) (ST crossed below close)' : null, f.bullVwapCloseCrossAbove ? 'Close crossed above VWAP' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null, f.bullCandle ? 'Candlestick patterns' : null, f.bullElliott ? 'Elliott Wave' : null, f.bullIndicator ? 'Indicators' : null, f.bullPane ? 'Pane indicators' : null, f.bullSymmetry ? 'Symmetry' : null, f.bullStructure ? 'Chart structure' : null, f.bullAtr ? 'ATR / Volatility' : null].filter(Boolean));
+    add('bearish', [f.incDown ? 'Increasing downward' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Increasing downward (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Pane all lines increasing downward' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close crossed below BB middle band (upper+lower expanding)' : null, f.bearPcCrossBelow ? 'Close crossed below price channel middle line' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling + volume increasing' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearEma9_21 ? 'EMA 9 crossed below EMA 21' : null, f.bearEma21_35 ? 'EMA 21 crossed below EMA 35' : null, f.bearEma35_50 ? 'EMA 35 crossed below EMA 50' : null, f.bearEma50_100 ? 'EMA 50 crossed below EMA 100' : null, f.bearEma100_200 ? 'EMA 100 crossed below EMA 200' : null, f.bearEma200_300 ? 'EMA 200 crossed below EMA 300' : null, f.bearSt10_1_2 ? 'Supertrend(10,1) crossed below Supertrend(10,2)' : null, f.bearSt10_2_3 ? 'Supertrend(10,2) crossed below Supertrend(10,3)' : null, f.bearSt1CloseCrossBelow ? 'Close crossed below Supertrend(10,1) (ST crossed above close)' : null, f.bearVwapCloseCrossBelow ? 'Close crossed below VWAP' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null, f.bearCandle ? 'Candlestick patterns' : null, f.bearElliott ? 'Elliott Wave' : null, f.bearIndicator ? 'Indicators' : null, f.bearPane ? 'Pane indicators' : null, f.bearSymmetry ? 'Symmetry' : null, f.bearStructure ? 'Chart structure' : null, f.bearAtr ? 'ATR / Volatility' : null].filter(Boolean));
     return parts.join(' | ');
   }
 
@@ -6828,13 +6862,25 @@ window.createAutoExperiment = function (suffix) {
   /* Map Auto Experiment result objects onto the strategy shape the AI Smart
      Trading engine's importFromPaperTrade accepts (same symbol-agnostic logic
      the removed AI Paper Trade engine carried). */
+  /* Strip the AE backtest suffix the engine appends to a result's name
+     ("2450 CE" / "24500 PE") so strategies imported into the AI Smart Trading
+     engine carry only the clean strategy name. The strike + CE/PE belong to
+     the AE backtest leg - the AST engine runs on its own universe and the
+     global "Run Strategy In" CE/PE control decides the side, so the label
+     must not leak into the imported strategy. */
+  function aeCleanName(n) {
+    const raw = String(n == null ? '' : n);
+    const s = raw.replace(/\s+\d+(?:\.\d+)?\s+(CE|PE)\s*$/i, '').trim();
+    return s || raw;
+  }
+
   function resultsToAstPayload(list) {
     const out = [];
     (Array.isArray(list) ? list : []).forEach(r => {
       if (!r) return;
       out.push({
         key: r.tplKey || r.name,
-        name: r.name,
+        name: aeCleanName(r.name),
         cat: r.cat || 'bullish',
         method: r.method || '',
         tf: r.tf || '5min',

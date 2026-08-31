@@ -513,7 +513,10 @@
     }
     const payload = [{
       key: strat.key || strat.aeKey || ('fs:' + key),
-      name: entry.name || strat.name || 'Final Strategy',
+      /* Strip the AE backtest strike + CE/PE suffix so the re-imported strategy
+         carries only the clean name (the AST engine's global Run Strategy In
+         control decides the side). */
+      name: String(entry.name || strat.name || 'Final Strategy').replace(/\s+\d+(?:\.\d+)?\s+(CE|PE)\s*$/i, '').trim(),
       cat: entry.cat || strat.cat || 'bullish',
       method: strat.method || entry.method || '',
       tf: strat.tf || entry.tf || '5min',

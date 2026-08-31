@@ -389,7 +389,7 @@ window.createPaperTrade = function (suffix) {
         position: state.position,
         autoPositions: state.autoPositions || {},
         pending: state.pending,
-        closed: state.closed.slice(-200),
+        closed: state.closed.slice(-2000),
         log: state.log.slice(-50)
       }));
     } catch (e) {}
