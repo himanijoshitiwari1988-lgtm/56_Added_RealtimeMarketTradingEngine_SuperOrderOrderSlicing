@@ -338,13 +338,23 @@ def _patch_marketfeed():
             )
         else:
             raise ValueError(f"Unsupported version: {self.version}")
+        # Reset the accumulated subscription list to the CURRENT base watchlist
+        # before subscribing. The SDK appends every subscribe_symbols() call to
+        # self.instruments and that list grows unboundedly over a long session
+        # (every option chain the UI opens), so a feed reconnect used to
+        # re-subscribe an ever-larger set -> slower subscribe -> Dhan more
+        # likely to drop the connection again. The persist set (_WS_PERSIST) is
+        # re-applied separately by _ws_on_connect so no active strike is lost.
+        base = _ws_instrument_list()
+        if base:
+            self.instruments = list(base)
         logger.info("ws feed: connecting and subscribing %d instruments", len(self.instruments))
         await self.subscribe_instruments()
         if self.on_connect:
             self.on_connect(self)
 
     async def _run_async(self):
-        backoff = 2
+        backoff = 1
         while self._running:
             try:
                 if not self.ws or self._is_ws_closed():
@@ -361,17 +371,17 @@ def _patch_marketfeed():
                     if rl_remain > 0:
                         await asyncio.sleep(min(rl_remain, 60))
                     await _connect(self)
-                    backoff = 2
+                    backoff = 1
                 data = await self.get_instrument_data()
                 if self.on_message:
                     self.on_message(self, data)
-                backoff = 2
+                backoff = 1
             except Exception as e:
                 if self.on_error:
                     self.on_error(self, e)
                 self.ws = None
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 15)
+                backoff = min(backoff * 2, 5)
 
     MarketFeed.connect = _connect
     MarketFeed._run_async = _run_async
@@ -886,7 +896,15 @@ _WS_FEED = None
 _WS_THREAD = None
 _WS_LOCK = threading.Lock()
 _WS_SUBSCRIBED = set()          # (exchange_code, sid, mode) tuples currently subscribed
-_WS_PERSIST = set()             # option-strike subscriptions that must survive feed (re)connects
+# Option-strike subscriptions that must survive feed (re)connects. Capped so a
+# long session of chain browsing never grows the reconnect re-subscribe list
+# into the thousands: Dhan's feed drops connections with oversized subscription
+# sets, which made every reconnect slower and more likely to die again (the
+# "stop-start" realtime symptom). The most-recently used strikes are kept; any
+# strike a UI re-opens gets re-added on demand via _ws_subscribe_options.
+_WS_PERSIST = set()
+_WS_PERSIST_CAP = 1200
+_WS_PERSIST_ORDER = []          # FIFO order for LRU eviction under the cap
 _WS_PREV_CLOSE = {}             # cache key -> previous-day close (from prev-close packet)
 _WS_PREV_CLOSE_LOCK = threading.Lock()
 _WS_LAST_TICK = 0.0             # timestamp of the last tick received (0 = never)
@@ -1383,7 +1401,7 @@ def _stop_feed_threads():
     cleanly stops every background loop and closes the current feed so the slots
     are released; the user waits out the cooldown, then reconnects."""
     global _WS_RUNNING, _QUOTE_RUNNING, _WS_FEED, _WS_SUBSCRIBED, _WS_PERSIST, \
-        _WS_RL_UNTIL, _QUOTE_SECURITIES, _QUOTE_CACHE, _BCAST
+        _WS_PERSIST_ORDER, _WS_RL_UNTIL, _QUOTE_SECURITIES, _QUOTE_CACHE, _BCAST
     _WS_RUNNING = False
     _QUOTE_RUNNING = False
     with _WS_LOCK:
@@ -1391,6 +1409,7 @@ def _stop_feed_threads():
         _WS_FEED = None
         _WS_SUBSCRIBED = set()
         _WS_PERSIST = set()
+        _WS_PERSIST_ORDER = []
     if feed is not None:
         try:
             feed.close_connection()
@@ -1449,6 +1468,25 @@ def _ws_drain_pending():
         except Exception:
             pass
 
+def _ws_persist_add(tup):
+    """Add a subscription to the reconnect-survive set, evicting the oldest
+    entries past the cap. FIFO (least-recently-added dropped first) keeps the
+    set small so reconnects stay fast; a re-opened chain re-adds its strikes."""
+    global _WS_PERSIST, _WS_PERSIST_ORDER
+    if tup in _WS_PERSIST:
+        # refresh recency: move to the back of the FIFO
+        try:
+            _WS_PERSIST_ORDER.remove(tup)
+        except ValueError:
+            pass
+        _WS_PERSIST_ORDER.append(tup)
+        return
+    _WS_PERSIST.add(tup)
+    _WS_PERSIST_ORDER.append(tup)
+    while len(_WS_PERSIST) > _WS_PERSIST_CAP and _WS_PERSIST_ORDER:
+        old = _WS_PERSIST_ORDER.pop(0)
+        _WS_PERSIST.discard(old)
+
 def _ws_subscribe_extra(security_id, exchange_segment):
     """Subscribe an instrument that is not in the watchlist (e.g. an option
     strike opened from the option chain) so its candle patches get live ticks.
@@ -1465,7 +1503,7 @@ def _ws_subscribe_extra(security_id, exchange_segment):
     with _WS_LOCK:
         if any(t[0] == code and t[1] == str(security_id) for t in _WS_SUBSCRIBED):
             return
-        _WS_PERSIST.add(tup)
+        _ws_persist_add(tup)
         feed = _WS_FEED
         if feed is None:
             return
@@ -1497,7 +1535,7 @@ def _ws_subscribe_options(security_ids, exchange_segment):
     tuples = [(code, str(sid), MarketFeed.Full) for sid in security_ids]
     with _WS_LOCK:
         for t in tuples:
-            _WS_PERSIST.add(t)
+            _ws_persist_add(t)
         sub_keys = {(x[0], x[1]) for x in _WS_SUBSCRIBED}
         need = [t for t in tuples if (t[0], t[1]) not in sub_keys]
         if not need:
@@ -1734,6 +1772,18 @@ def _build_scrip_lookups(df):
         merged = oc_map.setdefault(key, {})
         for strike, ent in bucket.items():
             merged.setdefault(strike, {}).update(ent)
+    # Equity security id -> F&O prefix, so a stock option-chain request that
+    # arrives without a symbol_name (legacy strategies.js) can still be resolved
+    # and its expiry validated against the scrip master instead of arming a
+    # doomed Dhan /optionchain refresh that burns rate-limit quota.
+    eq_prefix = {}
+    for row in df.itertuples():
+        if str(getattr(row, "SEM_INSTRUMENT_NAME")).strip() == "EQUITY":
+            sid = str(getattr(row, "SEM_SMST_SECURITY_ID")).strip()
+            ts = str(getattr(row, "SEM_TRADING_SYMBOL") or "")
+            if sid and ts:
+                eq_prefix.setdefault(sid, ts.split("-")[0])
+    _SCRIP_CACHE["eq_prefix"] = eq_prefix
     _SCRIP_CACHE["sid_rows"] = sid_rows
     _SCRIP_CACHE["fo_by_type"] = fo_by_type
     _SCRIP_CACHE["oc_map"] = oc_map
@@ -3136,12 +3186,78 @@ def _oc_refresh_worker():
                     _DATA_INFLIGHT.discard(cache_key)
 
 
+def _prefix_for_security(security_id, exchange_segment):
+    """Best-effort F&O prefix for a security id, for equity-spot requests that
+    arrive without a symbol_name (legacy strategies.js). Equity spots resolve
+    via their equity row's trading symbol; F&O rows resolve via the FUT/OPT
+    trading-symbol prefix. Only consulted for NSE_EQ/BSE_EQ segments - numeric
+    security ids collide across segments (NIFTY index 13 == ABB equity 13), so a
+    non-equity segment must never be mapped through the equity prefix table."""
+    seg = str(exchange_segment or "").upper()
+    if seg not in ("NSE_EQ", "BSE_EQ"):
+        return None
+    try:
+        _get_scrip_master()
+    except Exception:
+        return None
+    try:
+        sid = str(int(security_id))
+    except (TypeError, ValueError):
+        return None
+    eq = _SCRIP_CACHE.get("eq_prefix") or {}
+    if sid in eq:
+        return eq[sid]
+    for r in (_SCRIP_CACHE.get("sid_rows") or {}).get(sid, []):
+        ts = r.get("trading_symbol") or ""
+        if "-" in ts:
+            return ts.split("-")[0]
+    return None
+
+
+def _refuse_bad_expiry(prefix, exchange_segment, expiry):
+    """True when the scrip master proves the requested expiry does NOT exist for
+    this underlying on the requested exchange. Arming Dhan's /optionchain for it
+    is doomed: the empty body arms the 30s cooldown and the worker's 6-attempt
+    retry loop keeps re-arming it, freezing candles/quotes for the whole app.
+    When the scrip master has no coverage for the prefix we return False and let
+    the REST path try (legitimate commodity / brand-new expiry fallback)."""
+    if not prefix:
+        return False
+    try:
+        _get_scrip_master()
+    except Exception:
+        return False
+    exch = _scrip_exch_for(exchange_segment)
+    if not exch:
+        return False
+    oc_map = _SCRIP_CACHE.get("oc_map")
+    if not isinstance(oc_map, dict) or not oc_map:
+        return False  # scrip master unavailable/empty: let the REST path try
+    if not _oc_prefix_has_options(prefix, exch):
+        return False
+    exp = str(expiry)[:10]
+    if (exch, str(prefix).upper(), exp) in oc_map:
+        return False
+    return True
+
+
 def _start_rest_refresh(cache_key, security_id, exchange_segment, expiry, prefix=None):
     """Enqueue a background Dhan /optionchain refresh (fills greeks/IV AND
     persists the chain into the scrip master) unless one is already in flight
     for this key. Callers serve the instant partial chain right away; the worker
     drains refreshes one at a time so a burst of missing commodity expiries can
-    never trip Dhan's 1-req/3s option-chain rate limit all at once."""
+    never trip Dhan's 1-req/3s option-chain rate limit all at once.
+
+    A requested expiry that the scrip master proves invalid for the underlying
+    is refused up front: enqueuing it would make the worker retry 6 times against
+    Dhan (empty-body responses re-arm the global rate-limit cooldown) for a chain
+    that can never exist."""
+    if not prefix:
+        prefix = _prefix_for_security(security_id, exchange_segment)
+    if prefix and _refuse_bad_expiry(prefix, exchange_segment, expiry):
+        logger.warning("skipping doomed option-chain refresh for %s: expiry %s not listed for %s on %s",
+                       str(cache_key), expiry, prefix, exchange_segment)
+        return
     with _DATA_INFLIGHT_LOCK:
         if cache_key in _DATA_INFLIGHT:
             return

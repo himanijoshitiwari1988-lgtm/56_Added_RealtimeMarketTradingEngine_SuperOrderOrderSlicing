@@ -30,6 +30,26 @@ window.createAISmartTrading = function (suffix) {
   const POLL_MS = 300;
   const MAX_LOG = 60;
 
+  /* The AST engine is a single always-on engine that mirrors its positions into
+     the BASE paper-trade engine (TabEngines.papertrade.papertrade). The global
+     window.PaperTrade facade routes to the ACTIVE paper tab (_paperActiveEngine)
+     so duplicated paper tabs trade on their own state. If AST used the facade
+     directly, simply clicking a cloned paper tab would silently re-point AST's
+     entries AND its running-trade reconcile at that other engine: existing
+     base-engine buckets would vanish from the AST running list (reconcileClosed
+     deletes the mirror) and new entries would land in the wrong ledger. Every
+     AST execution / reconcile / close / reset therefore pins to the base engine. */
+  function basePaper() {
+    if (window.TabEngines && window.TabEngines.papertrade && window.TabEngines.papertrade.papertrade) {
+      return window.TabEngines.papertrade.papertrade;
+    }
+    return (window.PaperTrade && window.PaperTrade.getState) ? window.PaperTrade : null;
+  }
+  function astChargesOn() {
+    const bpt = basePaper();
+    return !!(bpt && bpt.getCharges && bpt.getCharges());
+  }
+
   const GROUPS = [
     { key: 'candlestick', label: 'Candlestick patterns' },
     { key: 'elliott', label: 'Elliott Wave' },
@@ -3290,7 +3310,7 @@ window.createAISmartTrading = function (suffix) {
     const prevExecOn = _hftExecOn;
     _hftExecOn = ['open', 'high', 'low', 'close'].indexOf(u.hftExecOn) >= 0 ? u.hftExecOn : 'close';
     try {
-    const pt = window.PaperTrade;
+    const pt = basePaper();
     const SE = window.StratEngine;
     if (!pt || !SE) return;
     resetTradeCountsIfNewDay();
@@ -3647,7 +3667,7 @@ window.createAISmartTrading = function (suffix) {
     const t0 = performance.now();
     try {
       resetTradeCountsIfNewDay();
-      const pt = window.PaperTrade;
+      const pt = basePaper();
       const SE = window.StratEngine;
       if (!pt || !SE) return;
       const ptState = pt.getState ? pt.getState() : null;
@@ -5277,7 +5297,7 @@ window.createAISmartTrading = function (suffix) {
       exit (never at the current live LTP of an already-closed trade). */
   function recordClosedPosition(p) {
     try {
-      const pt = window.PaperTrade;
+      const pt = basePaper();
       /* Locate the authoritative close record written by PaperTrade when the
          position was squared off. Matching is symbolId + side + qty based (no
          fragile time window / symbol-name match) so a close is priced at its
@@ -5365,7 +5385,7 @@ window.createAISmartTrading = function (suffix) {
 
   function reconcileClosedPositions() {
     try {
-      const pt = window.PaperTrade;
+      const pt = basePaper();
       if (!pt || !pt.getState) return;
       const autoPositions = (pt.getState().autoPositions) || null;
       if (!autoPositions) return;
@@ -5409,9 +5429,9 @@ window.createAISmartTrading = function (suffix) {
     if (!host) return;
     /* Final ownership filter (belt and suspenders on top of the reconcile
        guard): only mirror entries backed by a live AST-owned bucket render. */
-    const pt2 = (window.PaperTrade && window.PaperTrade.getState) ? window.PaperTrade.getState() : null;
+    const pt2 = basePaper();
     const openPositions = Object.keys(state.positions)
-      .filter(k => !!astOwnedLive(pt2 ? pt2.autoPositions : null, k))
+      .filter(k => !!astOwnedLive(pt2 ? pt2.getState().autoPositions : null, k))
       .map(k => state.positions[k]);
     if (!openPositions.length) {
       host.innerHTML = '<tr><td colspan="9" style="color:#666;font-size:10px;padding:6px 8px">No AI Smart positions open. Tick at least one saved strategy and toggle AI Smart Trading ON.</td></tr>';
@@ -5429,9 +5449,10 @@ window.createAISmartTrading = function (suffix) {
   function runningRowHTML(p) {
       const cur = positionCurrentPrice(p);
       const pnl = cur != null ? (p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty) : null;
-      const chargesOn = !!(window.PaperTrade && PaperTrade.getCharges && PaperTrade.getCharges());
-      const charges = (chargesOn && cur != null && window.PaperTrade && PaperTrade.chargesTotalForOpen)
-        ? PaperTrade.chargesTotalForOpen(p, cur)
+      const bpt = basePaper();
+      const chargesOn = !!(bpt && bpt.getCharges && bpt.getCharges());
+      const charges = (chargesOn && cur != null && bpt && bpt.chargesTotalForOpen)
+        ? bpt.chargesTotalForOpen(p, cur)
         : 0;
       const net = pnl != null ? pnl - charges : null;
       const pnlPct = pnl != null && p.entryPrice && p.qty ? (pnl / (p.entryPrice * p.qty)) * 100 : null;
@@ -5484,13 +5505,13 @@ window.createAISmartTrading = function (suffix) {
     /* Closed rows are immutable once recorded, so only rebuild the table when
        the history or the charges display setting actually changed (keeps the
        DOM light even after thousands of trades). */
-    const key = state.closed.length + ':' + (!!(window.PaperTrade && PaperTrade.getCharges && PaperTrade.getCharges()));
+    const key = state.closed.length + ':' + (!!astChargesOn());
     if (_lastClosedKey === key) return;
     _lastClosedKey = key;
     const rows = [];
     for (const t of state.closed) {
       try {
-        const chargesOn = !!(window.PaperTrade && PaperTrade.getCharges && PaperTrade.getCharges());
+        const chargesOn = !!astChargesOn();
         const net = (chargesOn && t.netPnl != null) ? t.netPnl : t.pnl;
         const col = net >= 0 ? '#00d4aa' : '#ef5350';
         const sideCol = t.side === 'BUY' ? '#00d4aa' : '#ef5350';
@@ -5514,7 +5535,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function renderSummary() {
-    const chargesOn = !!(window.PaperTrade && PaperTrade.getCharges && PaperTrade.getCharges());
+    const chargesOn = !!astChargesOn();
     /* Realized P&L / charges / trade counts are derived straight from the
        closed-trades history (the single source of truth) so the Smart Realized
        P&L card always equals the sum of every closed trade's P&L shown in the
@@ -5534,8 +5555,9 @@ window.createAISmartTrading = function (suffix) {
       const cur = positionCurrentPrice(p);
       if (cur != null) {
         const g = p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty;
-        unreal += (chargesOn && window.PaperTrade && PaperTrade.chargesTotalForOpen)
-          ? g - PaperTrade.chargesTotalForOpen(p, cur)
+        const bpt = basePaper();
+        unreal += (chargesOn && bpt && bpt.chargesTotalForOpen)
+          ? g - bpt.chargesTotalForOpen(p, cur)
           : g;
       }
     }
@@ -5814,7 +5836,7 @@ window.createAISmartTrading = function (suffix) {
     state.aiPicks = (state.aiPicks || []).filter(s => !removeIds.has(String(s.id)));
     state.imported = (state.imported || []).filter(s => !removeIds.has(String(s.id)));
     removeIds.forEach(id => delete state.selected[id]);
-    const pt = window.PaperTrade;
+    const pt = basePaper();
     const paper = (window.AutoExperiment && AutoExperiment.paper) ? AutoExperiment.paper : null;
     Object.keys(state.positions).forEach(k => {
       if (removeIds.has(String(state.positions[k].strategyId))) {
@@ -5850,7 +5872,7 @@ window.createAISmartTrading = function (suffix) {
   function stopPosition(strategyId) {
     const pkey = Object.keys(state.positions).find(k => state.positions[k].strategyId === strategyId);
     const p = pkey ? state.positions[pkey] : null;
-    const pt = window.PaperTrade;
+    const pt = basePaper();
     if (pt && pt.autoExit && pkey) pt.autoExit(pkey);
     const paper = (window.AutoExperiment && AutoExperiment.paper) ? AutoExperiment.paper : null;
     if (paper && pkey) { if (paper.dropTrailEngine) paper.dropTrailEngine(pkey); if (paper.dropAiTrailEngine) paper.dropAiTrailEngine(pkey); }
@@ -5863,7 +5885,7 @@ window.createAISmartTrading = function (suffix) {
   function stopAll() {
     const keys = Object.keys(state.positions);
     if (!keys.length) { log('No running AI Smart positions to stop', 'warn'); return; }
-    const pt = window.PaperTrade;
+    const pt = basePaper();
     const paper = (window.AutoExperiment && AutoExperiment.paper) ? AutoExperiment.paper : null;
     keys.forEach(k => {
       if (pt && pt.autoExit) pt.autoExit(k);
@@ -5882,7 +5904,7 @@ window.createAISmartTrading = function (suffix) {
      next trade starts from a clean ₹0 slate. */
   function resetPnl() {
     if (!window.confirm('Reset all Smart P&L?\n\nThis clears every closed AI Smart trade, all running positions and the paper-trade ledger (open positions + closed history). This cannot be undone.')) return;
-    try { if (window.PaperTrade && PaperTrade.reset) PaperTrade.reset(); } catch (e) {}
+    try { const bpt = basePaper(); if (bpt && bpt.reset) bpt.reset(); } catch (e) {}
     state.closed = [];
     state.positions = {};
     state.rpnl = { realized: 0, charges: 0, count: 0, wins: 0 };

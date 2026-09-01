@@ -70,13 +70,35 @@
   /* ---------------- engine ---------------- */
   const engine = {
     POLL_MS: 300,
-    /* Candle data is fetched with force:1 so the server refetches from Dhan
-       every time. The TTL only throttles the /api/candles refetch surface; the
-       live 5ms quote feed is merged into the forming bar on every read via
-       liveBar(), so indicator/filter values track the live price even between
-       server refetches. A short 300ms TTL keeps closed-bar rollover fresh
-       without re-hitting the rate-limited candle surface on every tick. */
-    CANDLE_TTL_MS: 300,
+    /* Candle data is fetched with force:1 so the server keeps the bars fresh.
+       The TTL throttles the /api/candles refetch surface; the live 5ms quote
+       feed is merged into the forming bar on every read via liveBar(), so
+       indicator/filter values track the live price even between server
+       refetches. The TTL must be well above the 300ms engine poll: at 300ms the
+       cache expired every tick and every strategy symbol refetched from the
+       server each poll, flooding /api/candles into Dhan's rate-limit (95% of
+       requests came back 503), which in turn starved the NIFTY bias fetch and
+       left trend-following with "NIFTY trend unknown". 2s keeps closed-bar
+       rollover fresh while cutting the refetch surface ~7x. */
+    CANDLE_TTL_MS: 2000,
+    /* Client-side single-flight + rate-limit backoff for the /api/candles
+       surface. _candleInflight shares one in-flight request between concurrent
+       callers for the same key (niftyBias, strategy runs and the trend scanner
+       all ask for the same symbols) instead of each issuing its own request.
+       _candleBackoff remembers a Dhan 503 park and skips the key until the
+       server's retry_after has passed, so a rate-limited symbol is retried
+       politely on a later tick rather than hammered by an immediate retry
+       loop. */
+    _candleInflight: {},
+    _candleBackoff: {},
+    _markCandleBackoff(key, d) {
+      if (d && (d.status === 'error' || d.status === 'unavailable') &&
+          /rate|limit|unavailable|busy|loading|retry/i.test(String(d.message || ''))) {
+        const hint = Number(d.retry_after);
+        const ms = (hint && hint > 0) ? Math.min(30000, hint * 1000) : 30000;
+        (this._candleBackoff || (this._candleBackoff = {}))[key] = Date.now() + Math.max(1500, ms);
+      }
+    },
     /* Index strategies resolve the option chain per symbol. The OC surface is
        server-throttled to 1 req/3s and the chain (strikes/greeks) does not
        change between ticks, so re-fetching it every 3s is pure waste. */
@@ -761,9 +783,10 @@
     async fetchCandles(st) {
       const key = st.symbol.id + ':' + st.tf;
       const sym = st.symbol;
-      const cached = this.candleCache[key];
       const now = Date.now();
+      const cached = this.candleCache[key];
       if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
+      if ((this._candleBackoff || {})[key] > now) return cached ? this.liveBar(cached.candles, sym) : [];
       const chartCandles = (typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
         window.IndChart && st.symbol && chartTf === st.tf &&
         selectedSymbol && selectedSymbol.id === st.symbol.id && selectedSymbol.exch === st.symbol.exch)
@@ -772,16 +795,22 @@
         this.candleCache[key] = { at: Date.now(), candles: chartCandles };
         return this.liveBar(chartCandles, sym);
       }
-      const d = await fetch('/api/candles', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ security_id: st.symbol.id, exchange_segment: st.symbol.exch, instrument_type: st.symbol.inst || 'INDEX', timeframe: st.tf, force: 1 })
-      }).then(r => r.json());
-      if (d && d.status === 'success' && d.data && d.data.length) {
-        this.candleCache[key] = { at: Date.now(), candles: d.data };
-        return this.liveBar(d.data, sym);
-      }
-      if (cached) return this.liveBar(cached.candles, sym);
-      return [];
+      const inflight = this._candleInflight || (this._candleInflight = {});
+      if (inflight[key]) return inflight[key];
+      const p = (async () => {
+        const d = await fetch('/api/candles', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ security_id: st.symbol.id, exchange_segment: st.symbol.exch, instrument_type: st.symbol.inst || 'INDEX', timeframe: st.tf, force: 1 })
+        }).then(r => r.json());
+        if (d && d.status === 'success' && d.data && d.data.length) {
+          this.candleCache[key] = { at: Date.now(), candles: d.data };
+          return this.liveBar(d.data, sym);
+        }
+        this._markCandleBackoff(key, d);
+        return cached ? this.liveBar(cached.candles, sym) : [];
+      })();
+      inflight[key] = p;
+      try { return await p; } finally { if (inflight[key] === p) delete inflight[key]; }
     },
 
     /* Fetch candles for an arbitrary symbol/timeframe (used by the multi-chart
@@ -791,9 +820,10 @@
       if (!symbol || symbol.id == null) return [];
       const key = symbol.id + ':' + (symbol.exch || '') + ':' + tf + ':' + (periodDays || 0);
       const sym = symbol;
-      const cached = this.candleCache[key];
       const now = Date.now();
+      const cached = this.candleCache[key];
       if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
+      if ((this._candleBackoff || {})[key] > now) return cached ? this.liveBar(cached.candles, sym) : [];
       const chartCandles = (!periodDays && typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
         window.IndChart && chartTf === tf &&
         selectedSymbol && selectedSymbol.id === symbol.id && selectedSymbol.exch === symbol.exch)
@@ -802,46 +832,28 @@
         this.candleCache[key] = { at: Date.now(), candles: chartCandles };
         return this.liveBar(chartCandles, sym);
       }
-      const d = await fetchWithTimeout('/api/candles', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ security_id: symbol.id, exchange_segment: symbol.exch, instrument_type: symbol.inst || 'INDEX', timeframe: tf, force: 1, period_days: periodDays || null })
-      }).then(r => r.json());
-      if (d && d.status === 'success' && d.data && d.data.length) {
-        this.candleCache[key] = { at: Date.now(), candles: d.data };
-        return this.liveBar(d.data, sym);
-      }
-      /* Dhan rate-limit / temporary-unavailable / queue-busy (503): the server
-         parks the key for ~30s and returns 503 so clients stop hammering. A
-         transient 503 is NOT "no data" - retry with a growing backoff that
-         rides out the park window, otherwise an experiment firing many
-         concurrent candle fetches skips every rate-limited / queued symbol and
-         produces no strategies. */
-      if (d && (d.status === 'error' || d.status === 'unavailable') && /rate|limit|unavailable|busy|loading|retry/i.test(String(d.message || ''))) {
-        /* The server returns a retry_after hint (seconds) for its rate-limit /
-           cooldown parks (~30s). The fixed 2s/4s/6s backoff below was shorter
-           than that window, so a symbol fetched during a cooldown storm still
-           came back empty and got skipped as "not enough candles". Ride out
-           the full park: wait retry_after when provided, otherwise grow the
-           backoff until it covers ~35s total. */
-        for (let attempt = 1; attempt <= 12; attempt++) {
-          const hint = Number(d && d.retry_after);
-          const wait = (hint && hint > 0)
-            ? Math.min(30000, hint + 1.5)
-            : Math.min(6000, 1500 * attempt);
-          await new Promise(r => setTimeout(r, Math.min(30000, Math.max(1000, wait * 1000))));
-          const d2 = await fetchWithTimeout('/api/candles', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ security_id: symbol.id, exchange_segment: symbol.exch, instrument_type: symbol.inst || 'INDEX', timeframe: tf, force: 1, period_days: periodDays || null })
-          }).then(r => r.json());
-          if (d2 && d2.status === 'success' && d2.data && d2.data.length) {
-            this.candleCache[key] = { at: Date.now(), candles: d2.data };
-            return this.liveBar(d2.data, sym);
-          }
-          if (d2 && d2.status !== 'error' && d2.status !== 'unavailable') break;
+      const inflight = this._candleInflight || (this._candleInflight = {});
+      if (inflight[key]) return inflight[key];
+      const p = (async () => {
+        const d = await fetchWithTimeout('/api/candles', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ security_id: symbol.id, exchange_segment: symbol.exch, instrument_type: symbol.inst || 'INDEX', timeframe: tf, force: 1, period_days: periodDays || null })
+        }).then(r => r.json());
+        if (d && d.status === 'success' && d.data && d.data.length) {
+          this.candleCache[key] = { at: Date.now(), candles: d.data };
+          return this.liveBar(d.data, sym);
         }
-      }
-      if (cached) return this.liveBar(cached.candles, sym);
-      return [];
+        /* Dhan rate-limit / temporary-unavailable / queue-busy (503): the server
+           parks the key and returns 503 with a retry_after hint. Remember the
+           park and skip until it passes - the next tick retries politely. The
+           old immediate retry loop multiplied one parked symbol into ~12
+           requests (and concurrent callers into far more), flooding /api/candles
+           until ~95% of calls were 503 and every NIFTY bias fetch starved. */
+        this._markCandleBackoff(key, d);
+        return cached ? this.liveBar(cached.candles, sym) : [];
+      })();
+      inflight[key] = p;
+      try { return await p; } finally { if (inflight[key] === p) delete inflight[key]; }
     },
 
     /* Fetch candles for an arbitrary index symbol (used by Index Confirmation).
@@ -853,16 +865,23 @@
       const cached = this.candleCache[key];
       const now = Date.now();
       if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
-      const d = await fetchWithTimeout('/api/candles', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ security_id: index.id, exchange_segment: index.exch || 'IDX_I', instrument_type: index.inst || 'INDEX', timeframe: tf, force: 1 })
-      }).then(r => r.json());
-      if (d && d.status === 'success' && d.data && d.data.length) {
-        this.candleCache[key] = { at: Date.now(), candles: d.data };
-        return this.liveBar(d.data, sym);
-      }
-      if (cached) return this.liveBar(cached.candles, sym);
-      return [];
+      if ((this._candleBackoff || {})[key] > now) return cached ? this.liveBar(cached.candles, sym) : [];
+      const inflight = this._candleInflight || (this._candleInflight = {});
+      if (inflight[key]) return inflight[key];
+      const p = (async () => {
+        const d = await fetchWithTimeout('/api/candles', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ security_id: index.id, exchange_segment: index.exch || 'IDX_I', instrument_type: index.inst || 'INDEX', timeframe: tf, force: 1 })
+        }).then(r => r.json());
+        if (d && d.status === 'success' && d.data && d.data.length) {
+          this.candleCache[key] = { at: Date.now(), candles: d.data };
+          return this.liveBar(d.data, sym);
+        }
+        this._markCandleBackoff(key, d);
+        return cached ? this.liveBar(cached.candles, sym) : [];
+      })();
+      inflight[key] = p;
+      try { return await p; } finally { if (inflight[key] === p) delete inflight[key]; }
     },
 
     /* Index Confirmation gate. When a strategy's indexConfirmation is enabled and
@@ -917,9 +936,10 @@
       }
       let d = null;
       try {
+        const idxName = (st.symbol && st.symbol.name && st.symbol.name !== '-') ? st.symbol.name : '';
         d = await fetch('/api/option_chain', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ security_id: st.symbol.id, exchange_segment: st.symbol.exch, expiry: expiry })
+          body: JSON.stringify({ security_id: st.symbol.id, exchange_segment: st.symbol.exch, expiry: expiry, symbol_name: idxName })
         }).then(r => r.json());
       } catch (e) { d = null; }
       if (d && d.status === 'success') {
@@ -3883,20 +3903,31 @@
     const under = strategyUnderlying(s);
     if (!under || under.id == null) return null;
     const key = under.id + '|' + under.exch;
-    /* Prefer the Option Chain tab's live selection when it matches this underlying */
-    const ocSel = document.getElementById('ocExpirySelect');
-    if (typeof selectedSymbol !== 'undefined' && selectedSymbol && ocSel &&
-        String(selectedSymbol.ocId) === String(under.id) && ocSel.value && !ocSel.value.startsWith('--')) {
-      return ocSel.value;
-    }
     const hit = strikeExpiryCache[key];
     if (hit && Date.now() - hit.at < 60000) return hit.expiry;
+    /* The server's expiry list is authoritative. The Option Chain tab's live
+       selection is only trusted when the server confirms it belongs to this
+       underlying's expiries - a stale/foreign date (e.g. a saved weekly expiry
+       from another symbol) would otherwise be sent to /api/option_chain, arm a
+       doomed Dhan refresh that burns rate-limit quota, and leave the monitor
+       stuck on "Option chain unavailable". */
     let expiry = null;
+    let expiries = null;
     try {
       const d = await fetch('/api/expiries', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ security_id: under.id, exchange_segment: under.exch }) }).then(r => r.json());
-      if (d && d.status === 'success' && d.data && d.data.length) expiry = d.data[0];
+        body: JSON.stringify({ security_id: under.id, exchange_segment: under.exch, symbol_name: under.name || '' }) }).then(r => r.json());
+      if (d && d.status === 'success' && Array.isArray(d.data) && d.data.length) {
+        expiries = d.data;
+        expiry = d.data[0];
+      }
     } catch (e) {}
+    const ocSel = document.getElementById('ocExpirySelect');
+    if (typeof selectedSymbol !== 'undefined' && selectedSymbol && ocSel &&
+        String(selectedSymbol.ocId) === String(under.id) && ocSel.value &&
+        /^\d{4}-\d{2}-\d{2}$/.test(ocSel.value) &&
+        (!expiries || expiries.indexOf(ocSel.value) !== -1)) {
+      expiry = ocSel.value;
+    }
     strikeExpiryCache[key] = { at: Date.now(), expiry };
     return expiry;
   }
@@ -3910,9 +3941,20 @@
     const hit = strikeChainCache[key];
     if (hit && Date.now() - hit.at < 15000) return hit.chain;
     let chain = null;
+    /* The server needs symbol_name to map an F&O stock's equity spot to its
+       FUTSTK derivative underlying and to validate the expiry - without it stock
+       chains fall back to the slow REST path, return 202 "loading", and the
+       monitor renders "Option chain unavailable". Send the live spot too. */
+    let spot = 0;
+    if (typeof clientQuotes !== 'undefined' && clientQuotes) {
+      const q = clientQuotes[under.exch === 'IDX_I' ? 'IDX_I:' + under.id : String(under.id)];
+      if (q && q.ltp) spot = Number(q.ltp);
+    }
+    const name = (under.name && under.name !== '-') ? under.name : '';
     try {
       const d = await fetch('/api/option_chain', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ security_id: under.id, exchange_segment: under.exch, expiry: expiry }) }).then(r => r.json());
+        body: JSON.stringify({ security_id: under.id, exchange_segment: under.exch, expiry: expiry,
+          symbol_name: name, spot: spot }) }).then(r => r.json());
       if (d && d.status === 'success') {
         chain = { expiry: expiry, spot: d.spot_price, records: d.data || [] };
         strikeChainCache[key] = { at: Date.now(), chain: chain };

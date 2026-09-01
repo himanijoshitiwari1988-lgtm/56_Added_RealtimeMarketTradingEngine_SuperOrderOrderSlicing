@@ -2308,7 +2308,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=47"></script>
+<script src="/static/indicators.js?v=48"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
 
@@ -3212,11 +3212,51 @@ function mergeClientQuotes(qm){
   const n = Object.keys(clientQuotes).length;
   if(n > 1200){
     const now = Date.now()/1000;
+    /* Quotes backing an OPEN auto position (any paper engine instance) are
+       NEVER evicted: checkAutoTargetSl / riskScan skip a position the moment
+       its quote is missing (cur === null -> continue), which freezes the
+       stop-loss / trailing-SL / take-profit line on a held trade. A traded
+       option strike is rarely in a watchlist and ticks sparsely, so without
+       this exemption it gets evicted 120s after its last tick and the trail
+       silently stops working. */
+    const keepOpen = openPositionQuoteKeys();
     for(const k in clientQuotes){
       if(QUOTE_KEEP_KEYS[k]) continue;
+      if(keepOpen[k]) continue;
       if(now - (clientQuotes[k].at || 0) > 120) delete clientQuotes[k];
     }
   }
+}
+
+/* Quote cache key for a paper position's symbol (mirrors PaperTrade.quoteFor /
+   the server _ws_cache_key): indices live under 'IDX_I:' + id, everything else
+   under String(id). */
+function quoteKeyForPosition(p){
+  if(!p) return null;
+  return p.symbolExch === 'IDX_I' ? 'IDX_I:' + p.symbolId : String(p.symbolId);
+}
+
+/* Set of quote keys that back an open auto position across every paper engine
+   instance (base 'papertrade', '_pool', '_ntrader', cloned paper tabs). These
+   keys must survive the client store eviction so tick-level exits keep firing. */
+function openPositionQuoteKeys(){
+  const keys = {};
+  const reg = window.TabEngines && window.TabEngines.papertrade;
+  if(reg){
+    for(const engKey in reg){
+      const eng = reg[engKey];
+      if(!eng || !eng.getAutoPositions) continue;
+      let ap;
+      try { ap = eng.getAutoPositions() || {}; } catch(e){ continue; }
+      for(const k in ap){
+        const p = ap[k];
+        if(!p) continue;
+        const qk = quoteKeyForPosition(p);
+        if(qk) keys[qk] = true;
+      }
+    }
+  }
+  return keys;
 }
 
 /* Ingest live quotes (cheap): calibrate the server clock and merge into the
@@ -3225,7 +3265,12 @@ function mergeClientQuotes(qm){
    thread saturates and the page freezes. */
 function ingestQuotes(incoming){
   trackServerSkew(incoming);
-  mergeClientQuotes(incoming);
+  /* The merge + risk pass must NEVER be able to block the redraw: if either
+     throws, the exception used to abort this function before scheduleRender()
+     and the whole realtime UI (watchlist, chart patch, option chain) silently
+     froze. Guard each stage so a bad batch degrades to a skipped render cycle
+     instead of a permanently frozen page. */
+  try { mergeClientQuotes(incoming); } catch (e) { console.warn('[quotes] merge', e); }
   /* Ultra-fast tick-level risk pass: scan EVERY paper engine instance's open
      auto positions against the just-updated live quotes and close any that
      touched their SL / trailing-SL / TP / trailing-TP line. DOM-free, so it
@@ -3557,12 +3602,37 @@ try {
   fetch("/api/client_time", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ browser_ms: Date.now() }) }).catch(() => {});
 } catch (e) {}
+/* Full resync after a dropped / re-established realtime link: re-poll quotes,
+   re-render, and if the option chain tab is live re-subscribe its strikes so
+   nothing is left frozen waiting for the next 10s OC auto-refresh. The chart's
+   realtime candle patch resumes on its own once live ticks flow again, so we
+   deliberately do NOT reload the chart (a heavy /api/candles call + alert on
+   failure) here - that would hammer Dhan on every reconnect. */
+let lastFullResyncAt = 0;
+function fullResync(force){
+  const now = Date.now();
+  if(now - lastFullResyncAt < 3000) return;   /* throttle - one sync per 3s */
+  lastFullResyncAt = now;
+  try { pollQuotes(); } catch(e){}
+  try { renderQuotes(); } catch(e){}
+  try {
+    if(activeTab === "optionchain" && ocLoaded){
+      const cur = document.getElementById("ocExpirySelect").value;
+      if(cur && /^\d{4}-\d{2}-\d{2}$/.test(cur)) fetchOC(cur);
+    }
+  } catch(e){}
+}
 function connectStream(){
   try{
     const proto = location.protocol === "https:" ? "wss://" : "ws://";
     wsConn = new WebSocket(proto + location.host + "/ws");
-  }catch(e){ setTimeout(connectStream, wsRetry); return; }
-  wsConn.onopen = () => { wsHealthy = true; wsRetry = 500; lastWsMsgAt = Date.now(); startWsWatchdog(); };
+  }catch(e){ wsConn = null; setTimeout(connectStream, wsRetry); wsRetry = Math.min(wsRetry * 2, 5000); return; }
+  wsConn.onopen = () => {
+    wsHealthy = true; wsRetry = 500; lastWsMsgAt = Date.now(); startWsWatchdog();
+    /* Reconnected - force an immediate resync so the UI resumes tick-by-tick
+       without a manual reload. */
+    fullResync(true);
+  };
   wsConn.onmessage = (ev) => {
     lastWsMsgAt = Date.now();
     try{
@@ -3577,6 +3647,26 @@ function connectStream(){
   };
   wsConn.onerror = () => { try{ wsConn.close(); }catch(e){} };
 }
+/* Auto-reconnect when the browser's internet comes back, or when the tab is
+   re-shown after being backgrounded (mobile / desktop throttle timers in the
+   background, which silently stalls a WebSocket). This removes the need to
+   manually reload the page after a network blip. */
+function ensureWsConnected(){
+  if(!quoteConnected) return false;
+  if(wsConn && (wsConn.readyState === WebSocket.OPEN || wsConn.readyState === WebSocket.CONNECTING)) return false;
+  wsRetry = 500;
+  connectStream();
+  return true;
+}
+window.addEventListener("online", () => { ensureWsConnected(); fullResync(true); });
+window.addEventListener("offline", () => { if(wsConn){ try{ wsConn.close(); }catch(e){} } });
+document.addEventListener("visibilitychange", () => {
+  if(document.visibilityState === "visible"){
+    /* Only force a full resync when the link actually died while hidden;
+       a healthy live link keeps pushing ticks so nothing needs reloading. */
+    if(ensureWsConnected()) fullResync(true);
+  }
+});
 
 /* Auto-reconnect after a server restart: if the broker is disconnected but we
    still have saved credentials, quietly re-establish the connection. */
@@ -5612,24 +5702,24 @@ function handleOCChartClick(e){
 document.querySelector("#oc-table tbody").addEventListener("click", handleOCChartClick);
 document.querySelector("#oc-all-container").addEventListener("click", handleOCChartClick);
 </script>
-<script src="/static/crossdetect.js?v=5"></script>
-<script src="/static/autotrail.js?v=1"></script>
-<script src="/static/aitrail.js?v=1"></script>
-<script src="/static/aitrades.js?v=1"></script>
-<script src="/static/strategies.js?v=65"></script>
-<script src="/static/papertrade.js?v=28"></script>
-<script src="/static/strategy_container.js?v=15"></script>
-<script src="/static/autoexperiment.v13.js?v=125"></script>
-<script src="/static/indextrend.js?v=2"></script>
-<script src="/static/simulator.js?v=2"></script>
-<script src="/static/aismart.js?v=101"></script>
-<script src="/static/paperrun.js?v=16"></script>
-<script src="/static/paperstrategies.js?v=4"></script>
-<script src="/static/hft_pool.js?v=2"></script>
-<script src="/static/hft_runner.js?v=8"></script>
-<script src="/static/final_strategy.js?v=2"></script>
-<script src="/static/smart_ntrader.js?v=46"></script>
-<script src="/static/backup.js?v=1"></script>
+<script src="/static/crossdetect.js?v=6"></script>
+<script src="/static/autotrail.js?v=2"></script>
+<script src="/static/aitrail.js?v=2"></script>
+<script src="/static/aitrades.js?v=2"></script>
+<script src="/static/strategies.js?v=68"></script>
+<script src="/static/papertrade.js?v=29"></script>
+<script src="/static/strategy_container.js?v=16"></script>
+<script src="/static/autoexperiment.v13.js?v=126"></script>
+<script src="/static/indextrend.js?v=3"></script>
+<script src="/static/simulator.js?v=3"></script>
+<script src="/static/aismart.js?v=102"></script>
+<script src="/static/paperrun.js?v=17"></script>
+<script src="/static/paperstrategies.js?v=5"></script>
+<script src="/static/hft_pool.js?v=3"></script>
+<script src="/static/hft_runner.js?v=9"></script>
+<script src="/static/final_strategy.js?v=3"></script>
+<script src="/static/smart_ntrader.js?v=47"></script>
+<script src="/static/backup.js?v=2"></script>
 <script>
 /* Engine instantiation for the base tabs and every duplicated tab. The cloned
    tab DOM is already built by PaperTabs.restore()/AeTabs.restore() above, but

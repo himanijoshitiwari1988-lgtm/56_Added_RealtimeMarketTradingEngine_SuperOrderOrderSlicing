@@ -4,6 +4,109 @@
 > quickly. Read this first, then `SESSION.md` / `CHANGELOG.md` for project
 > history.
 
+## Update (2026-09-01) — "Strikes not available" (strategy monitor + trend)
+
+**Symptoms reported:** "Strategies running me strikes nahi dikh rahi hain aur
+nifty trend following me bhi nahi dikh rahi hai. not available."
+
+**Root causes found (this session):**
+
+1. **Strategy monitor "Option chain unavailable" for F&O stocks.** The strategy
+   Details/monitor's strike section (`loadStrikeInfo` → `fetchStrikeChain`,
+   static/strategies.js) called `/api/option_chain` WITHOUT `symbol_name`. For an
+   F&O stock the server could not map the equity spot → FUTSTK, so it could not
+   build the instant scrip-master chain → returned 202 "loading", and the REST
+   refresh for the unresolved key never succeeded → the monitor rendered "Option
+   chain unavailable. Make sure you are connected to Dhan...". Additionally
+   `resolveChainExpiry` returned the OC panel's live expiry select value blindly;
+   a stale/foreign date (`2026-09-01`, today) reached `/api/option_chain`, whose
+   cold-cache guards let it through and armed a doomed 6-attempt Dhan refresh
+   loop that re-armed the global rate-limit cooldown (log:
+   `option chain refresh failed for ('option_chain', 11195, 'NSE_EQ', '2026-09-01')`).
+
+2. **The engine path (auto_strikes) was healthy all along.** `/api/auto_strikes`
+   returns success when `symbol_name` is sent (verified: INDIGO/ITC/AXISBANK →
+   200, expiry 2026-09-29). The browser's engine calls all 200. So picked strikes
+   populate after a reload; the "not available" was the monitor path above.
+
+**Fixes shipped (client `strategies.js?v=68`, server `app.py`):**
+
+- `fetchStrikeChain` now sends `symbol_name` + live `spot`; the server resolves
+  the FUTSTK and serves the instant scrip-master chain (verified: INDIGO NSE_EQ
+  2026-09-29 → `status success`, 21+ strikes, spot 5052). `fetchChain` (index
+  strategies) also sends `symbol_name`.
+- `resolveChainExpiry` now trusts the server's `/api/expiries` list; the OC-panel
+  selection is only used when the server confirms it belongs to the underlying.
+- Server `_start_rest_refresh` refuses a provably-invalid expiry up front
+  (`_prefix_for_security` + `_refuse_bad_expiry`, via new `eq_prefix` map in
+  `_build_scrip_lookups`), so a stale client can never arm a doomed 6-attempt
+  Dhan chain refresh again. `_prefix_for_security` is equity-segment-only
+  (numeric sids collide across segments: NIFTY idx 13 == ABB equity 13).
+
+**Server restarted** (was needed to load app.py). The browser auto-reconnects on
+reload via saved credentials (`hadCreds → connect()` at index.html:5681). Give
+the user the cache-busted preview link so `strategies.js?v=68` loads.
+
+**Still-open:** verify after user reloads (a) strategy Details strike section
+shows strikes, (b) NIFTY trend list + Picked Strikes populate. If any "not
+available" remains it is a different element — get the exact text/location.
+
+---
+
+## Update (2026-09-01)
+
+**AST regressions: trailing SL not working + running trades disappearing.**
+
+Symptoms reported: (1) AST Trailing SL never ratchets, (2) Running Trades list
+shows empty even with open trades, (3) some trades appear in the Running list
+then vanish mid-session.
+
+Root causes found and fixed:
+
+- **Quote eviction froze exits (`trailing SL not working`).** The client quote
+  store `mergeClientQuotes` (templates/index.html) evicts stale non-watchlist
+  quotes once the store exceeds 1200 keys. The server persists ~2789 subscribed
+  instruments, so the store grows past the cap; a traded option strike is rarely
+  in a watchlist and ticks sparsely, so 120s after its last tick it was evicted.
+  `checkAutoTargetSl`/`riskScan` (static/papertrade.js:1310) skip a position the
+  instant `quoteFor` returns null (`cur === null -> continue`), which froze the
+  SL / trailing-SL / TP line on a held trade. Fix: eviction now skips keys that
+  back an OPEN auto position in any paper engine (`openPositionQuoteKeys()` /
+  `quoteKeyForPosition()`, index.html) — held-trade quotes are never dropped.
+
+- **`_paperActiveEngine` re-routed AST to a cloned paper tab (`trades
+  disappear`).** AST mirrors positions into the BASE paper engine
+  (`TabEngines.papertrade.papertrade`), but every AST call used the global
+  `window.PaperTrade` facade, which routes by `window._paperActiveEngine`. After
+  clicking any cloned paper tab (`paperN`) that global points at that tab's
+  engine: new AST entries landed in the wrong ledger AND
+  `reconcileClosedPositions` (aismart.js:5366) could no longer find the
+  base-engine buckets, so it deleted every AST mirror entry ("taken over by
+  another engine") — running list emptied, trades vanished. Fix: added
+  `basePaper()` + `astChargesOn()` in aismart.js and pinned all 15 AST
+  execution/reconcile/close/reset/charges `window.PaperTrade` uses to the base
+  engine (`createAISmartTrading`, ~lines 42-51; call sites in HFT loop, poll
+  entry, daily-change drop, recordClosedPosition, reconcileClosedPositions,
+  renderRunning, runningRowHTML, renderClosed, renderSummary, removeSaved,
+  stopPosition, stopAll, resetPnl).
+
+Both fixes are client-side; Flask serves the files from disk so no server
+restart was needed. Syntax verified (`node --check static/aismart.js`, `new
+Function` on index.html inline scripts); `/api/feed/status` still healthy
+(`feed_up`, 2789 subscribed).
+
+Notes / still-open:
+- NIFTY trend-following daily-change drop (aismart.js:3710-3733) force-exits any
+  held position whose quote `change_pct` falls below `nt.pct` (default 2.5%)
+  while NIFTY direction matches — by design, but option contracts' own
+  `change_pct` swings fast, so trades can "disappear" this way when the feature
+  is enabled. Review threshold semantics if it keeps surprising.
+- Server marks REST/chain-refresh seeded quotes `live=True`
+  (`_seed_chain_quotes`, chain merge app.py:3078) which the client cannot
+  distinguish from real feed ticks; a stale chain snapshot could in theory
+  trigger a spurious close between real ticks. Not changed (defense-in-depth
+  candidate).
+
 ## Update (2026-08-30)
 
 **Premium-chart candle fallback (all engines): strategy never skips when the
