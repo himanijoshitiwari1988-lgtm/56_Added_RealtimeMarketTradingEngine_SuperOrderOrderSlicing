@@ -6187,7 +6187,34 @@ window.createAISmartTrading = function (suffix) {
     const list = [...(state.manual || []), ...(state.aiPicks || []), ...(state.imported || [])];
     const s = list.find(x => String(x.id) === String(id));
     if (!s) { log('Strategy not found in the selected strategies', 'warn'); return; }
-    let sym = s.symbol || null;
+    /* Running-trade chart: when a position is OPEN for this strategy, open the
+       chart on the position's EXECUTION (option strike) symbol so the entry /
+       SL / TP / live-P&L lines draw on the candles. Opening the strategy's own
+       (underlying) symbol would show a bare chart - the open position's symbol
+       never matches the displayed symbol, so syncTradeChartLines draws nothing. */
+    let sym = null;
+    const pos = Object.keys(state.positions || {})
+      .map(k => state.positions[k])
+      .find(p => p && String(p.strategyId) === String(id));
+    if (pos && pos.symbolId != null) {
+      const ex = pos.symbolExch || 'NSE_FNO';
+      const inst = pos.inst || (ex === 'NSE_EQ' ? 'EQUITY' : (ex === 'IDX_I' ? 'INDEX' : 'OPTIDX'));
+      sym = {
+        id: Number(pos.symbolId),
+        exch: ex,
+        inst: inst,
+        name: pos.symbol || pos.instrumentName || String(pos.symbolId),
+        ocId: pos.ocId != null ? Number(pos.ocId) : Number(pos.symbolId),
+        ocExch: pos.ocExch || ex
+      };
+      if (typeof setChartTf === 'function' && s.tf) setChartTf(s.tf);
+      if (typeof openOptionChartBySid === 'function') {
+        openOptionChartBySid(sym.id, sym.exch, sym.inst, sym.name, sym.ocId, sym.ocExch);
+        log('Opened running-trade chart for "' + s.name + '" on ' + (sym.name || sym.id), 'ok');
+        return;
+      }
+    }
+    if (!sym) sym = s.symbol || null;
     if (!sym && typeof selectedSymbol !== 'undefined') sym = selectedSymbol;
     if (sym && typeof selectedSymbol !== 'undefined') {
       selectedSymbol = JSON.parse(JSON.stringify(sym));

@@ -4,6 +4,39 @@
 > quickly. Read this first, then `SESSION.md` / `CHANGELOG.md` for project
 > history.
 
+## Update (2026-09-01) — AST "Open Chart" on running trade now shows ENTRY/SL/TP/live-PnL lines
+
+**User report:** in AST (Strategy tab), clicking "Open Chart" on a running trade
+showed a bare candlestick chart — no entry/SL/PnL, even though the feature
+"already existed". Root cause: `AISmartTrading.openChart(id)` opened the
+STRATEGY's symbol (underlying) instead of the position's EXECUTION (strike)
+symbol, so `onChart()` in `syncTradeChartLines()` never matched and drew nothing;
+plus `syncTradeChartLines()` only read the ACTIVE paper engine via the
+`PaperTrade` facade, while AST executes on the BASE `papertrade` engine.
+
+**Shipped (`aismart.js?v=116`, `templates/index.html`):**
+- `AISmartTrading.openChart(id)`: if a position is OPEN for the strategy, opens
+  the chart on the position's execution symbol via `openOptionChartBySid(sid,
+  exch, inst, name, ocId, ocExch)` (strategy TF applied first via setChartTf),
+  so the strike candles load and the trade lines draw; falls back to the old
+  dropdown-symbol behavior when no position is open.
+- `syncTradeChartLines()` in index.html: refactored into `drawPos()` /
+  `drawManual()` helpers (identical line logic: ENTRY, live-P&L cyan line with
+  ₹/%, SL + OVERALL SL, TP, TRAIL TP) and now ALSO iterates the base
+  `TabEngines.papertrade.papertrade` engine's open positions using the same
+  `"pe:papertrade:"` key prefix — dedupes cleanly against the facade pass when
+  the active engine already IS the base one.
+- Existing infra reused as-is: `IndChart.setTradeLines()`/`clearTradeLines()`,
+  `liveLineTitle()` (CHART <ltp> · ±₹pnl (pct) · CUT@<trail>), `trailSlDisplayLevel()`,
+  `overallSlLevel()`, `trailArmed()`, `liveQuoteForSymbol()`, `tradeChartPrice()`.
+- Verified: `node --check static/aismart.js` + extracted `syncTradeChartLines`
+  both pass; disk MD5 == served MD5 for aismart.js and index.html; v116 live.
+
+**Note:** user must reload the page for v116; lines only draw while the chart's
+symbol (selectedSymbol.id/exch) equals the position's symbolId/symbolExch, and
+they vanish automatically when the position closes (setCandles clears the
+`_tradeLines` registry on symbol switch).
+
 ## Update (2026-09-01) — AST "Ultrafast Live Feed" checkbox (in-browser live candles, <5ms reads)
 
 **User request:** a 100%-working ultrafast data function (<5ms) for the AST

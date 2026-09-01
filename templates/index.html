@@ -3442,63 +3442,91 @@ function syncTradeChartLines(){
     const exch = String(p.symbolExch != null ? p.symbolExch : "");
     return sid === String(selectedSymbol.id) && exch === String(selectedSymbol.exch);
   };
+  /* Full line set (entry / live-P&L / SL+overall / TP / trail TP) for one OPEN
+     auto position. base = the "pe:<engine>" key prefix; subKey must be unique
+     per position within that engine. Returns true when a line was drawn. */
+  const drawPos = (p, base, subKey) => {
+    if(!p || !onChart(p)) return false;
+    add(base, subKey+":entry", p.entryPrice, p.side === "BUY" ? "#00d4aa" : "#ff5252", "ENTRY " + (p.symbol||"").slice(0,14), 0);
+    const liveLtp = liveQuoteForSymbol(p.symbolId, p.symbolExch);
+    const slLvl = trailSlDisplayLevel(p, liveLtp);
+    const chartLtp = tradeChartPrice(p);
+    const liveTitle = chartLtp != null ? liveLineTitle(p, chartLtp) : null;
+    if(liveTitle) add(base, subKey+":live", chartLtp, "#00e5ff", liveTitle, 1);
+    if(slLvl != null){
+      const osl = overallSlLevel(p);
+      if(osl != null && Math.abs(osl - slLvl) < 0.005){
+        add(base, subKey+":sl", slLvl, "#ff9800", "OVERALL SL " + p.slPct + "%" + (trailArmed(p, liveLtp) ? " + TRAIL" : "") + " · " + slLvl.toFixed(2) + (liveLtp == null ? " (no live q)" : ""), 1);
+      } else {
+        if(trailArmed(p, liveLtp)){
+          add(base, subKey+":sl", slLvl, "#ff6b6b", (p.slTrailed ? "TRAIL SL" : "TRAIL SL") + " " + p.slTrailPct + "%" + " · " + slLvl.toFixed(2) + (liveLtp == null ? " (no live q)" : ""), 1);
+        } else {
+          add(base, subKey+":sl", slLvl, "#ff5252", (osl != null ? "OVERALL SL " + p.slPct + "%" : "SL") + " · " + slLvl.toFixed(2) + (liveLtp == null ? " (no live q)" : ""), 2);
+        }
+        if(osl != null) add(base, subKey+":osl", osl, "#ff9800", "OVERALL SL " + p.slPct + "%" + " · " + osl.toFixed(2), 1);
+      }
+    } else if(overallSlLevel(p) != null){
+      add(base, subKey+":osl", overallSlLevel(p), "#ff9800", "OVERALL SL " + p.slPct + "%" + " · " + overallSlLevel(p).toFixed(2), 1);
+    }
+    if(p.tpPct > 0 && p.tpPrice > 0) add(base, subKey+":tp", p.tpPrice, "#00d4aa", "TP " + p.tpPct + "%", 2);
+    if((p.targetPct || 0) > 0 && p.targetPrice > 0) add(base, subKey+":trail", p.targetPrice, "#7ad7ff", "TRAIL TP " + p.targetPct + "%", 1);
+    return true;
+  };
+  /* Manual position variant: fixed "manual" subkeys, entry price fallback from
+     the displayed symbol and a plain TP title. */
+  const drawManual = (p, base) => {
+    if(!p || !onChart(p)) return false;
+    add(base, "manual:entry", p.entryPrice, "#00d4aa", "ENTRY", 0);
+    const mpLive = liveQuoteForSymbol(p.symbolId != null ? p.symbolId : (selectedSymbol ? selectedSymbol.id : null),
+                                      p.symbolExch != null ? p.symbolExch : (selectedSymbol ? selectedSymbol.exch : null));
+    const mpChartLtp = tradeChartPrice(p);
+    const mpLiveTitle = mpChartLtp != null ? liveLineTitle(p, mpChartLtp) : null;
+    if(mpLiveTitle) add(base, "manual:live", mpChartLtp, "#00e5ff", mpLiveTitle, 1);
+    const mpSlLvl = trailSlDisplayLevel(p, mpLive);
+    if(mpSlLvl != null){
+      const mpOsl = overallSlLevel(p);
+      if(mpOsl != null && Math.abs(mpOsl - mpSlLvl) < 0.005){
+        add(base, "manual:sl", mpSlLvl, "#ff9800", "OVERALL SL " + p.slPct + "%" + (trailArmed(p, mpLive) ? " + TRAIL" : "") + " · " + mpSlLvl.toFixed(2) + (mpLive == null ? " (no live q)" : ""), 1);
+      } else {
+        if(trailArmed(p, mpLive)){
+          add(base, "manual:sl", mpSlLvl, "#ff6b6b", (p.slTrailed ? "TRAIL SL" : "TRAIL SL") + " " + p.slTrailPct + "%" + " · " + mpSlLvl.toFixed(2) + (mpLive == null ? " (no live q)" : ""), 1);
+        } else {
+          add(base, "manual:sl", mpSlLvl, "#ff5252", (mpOsl != null ? "OVERALL SL " + p.slPct + "%" : "SL") + " · " + mpSlLvl.toFixed(2) + (mpLive == null ? " (no live q)" : ""), 2);
+        }
+        if(mpOsl != null) add(base, "manual:osl", mpOsl, "#ff9800", "OVERALL SL " + p.slPct + "%" + " · " + mpOsl.toFixed(2), 1);
+      }
+    } else if(overallSlLevel(p) != null){
+      add(base, "manual:osl", overallSlLevel(p), "#ff9800", "OVERALL SL " + p.slPct + "%" + " · " + overallSlLevel(p).toFixed(2), 1);
+    }
+    if(p.targetPrice != null) add(base, "manual:tp", p.targetPrice, "#00d4aa", "TP", 2);
+    return true;
+  };
   let any = false;
   try {
     const auto = PaperTrade.getAutoPositions();
     for(const k in auto){
-      const p = auto[k];
-      if(!p || !onChart(p)) continue;
-      any = true;
-      add("pe:"+engKey, k+":entry", p.entryPrice, p.side === "BUY" ? "#00d4aa" : "#ff5252", "ENTRY " + (p.symbol||"").slice(0,14), 0);
-      const liveLtp = liveQuoteForSymbol(p.symbolId, p.symbolExch);
-      const slLvl = trailSlDisplayLevel(p, liveLtp);
-      const chartLtp = tradeChartPrice(p);
-      const liveTitle = chartLtp != null ? liveLineTitle(p, chartLtp) : null;
-      if(liveTitle) add("pe:"+engKey, k+":live", chartLtp, "#00e5ff", liveTitle, 1);
-      if(slLvl != null){
-        const osl = overallSlLevel(p);
-        if(osl != null && Math.abs(osl - slLvl) < 0.005){
-          add("pe:"+engKey, k+":sl", slLvl, "#ff9800", "OVERALL SL " + p.slPct + "%" + (trailArmed(p, liveLtp) ? " + TRAIL" : "") + " · " + slLvl.toFixed(2) + (liveLtp == null ? " (no live q)" : ""), 1);
-        } else {
-          if(trailArmed(p, liveLtp)){
-            add("pe:"+engKey, k+":sl", slLvl, "#ff6b6b", (p.slTrailed ? "TRAIL SL" : "TRAIL SL") + " " + p.slTrailPct + "%" + " · " + slLvl.toFixed(2) + (liveLtp == null ? " (no live q)" : ""), 1);
-          } else {
-            add("pe:"+engKey, k+":sl", slLvl, "#ff5252", (osl != null ? "OVERALL SL " + p.slPct + "%" : "SL") + " · " + slLvl.toFixed(2) + (liveLtp == null ? " (no live q)" : ""), 2);
-          }
-          if(osl != null) add("pe:"+engKey, k+":osl", osl, "#ff9800", "OVERALL SL " + p.slPct + "%" + " · " + osl.toFixed(2), 1);
-        }
-      } else if(overallSlLevel(p) != null){
-        add("pe:"+engKey, k+":osl", overallSlLevel(p), "#ff9800", "OVERALL SL " + p.slPct + "%" + " · " + overallSlLevel(p).toFixed(2), 1);
-      }
-      if(p.tpPct > 0 && p.tpPrice > 0) add("pe:"+engKey, k+":tp", p.tpPrice, "#00d4aa", "TP " + p.tpPct + "%", 2);
-      if((p.targetPct || 0) > 0 && p.targetPrice > 0) add("pe:"+engKey, k+":trail", p.targetPrice, "#7ad7ff", "TRAIL TP " + p.targetPct + "%", 1);
+      if(drawPos(auto[k], "pe:"+engKey, k)) any = true;
     }
     const mp = PaperTrade.getManualPosition();
-    if(mp && onChart(mp)){
-      any = true;
-      add("pe:"+engKey, "manual:entry", mp.entryPrice, "#00d4aa", "ENTRY", 0);
-      const mpLive = liveQuoteForSymbol(mp.symbolId != null ? mp.symbolId : (selectedSymbol ? selectedSymbol.id : null),
-                                        mp.symbolExch != null ? mp.symbolExch : (selectedSymbol ? selectedSymbol.exch : null));
-      const mpChartLtp = tradeChartPrice(mp);
-      const mpLiveTitle = mpChartLtp != null ? liveLineTitle(mp, mpChartLtp) : null;
-      if(mpLiveTitle) add("pe:"+engKey, "manual:live", mpChartLtp, "#00e5ff", mpLiveTitle, 1);
-      const mpSlLvl = trailSlDisplayLevel(mp, mpLive);
-      if(mpSlLvl != null){
-        const mpOsl = overallSlLevel(mp);
-        if(mpOsl != null && Math.abs(mpOsl - mpSlLvl) < 0.005){
-          add("pe:"+engKey, "manual:sl", mpSlLvl, "#ff9800", "OVERALL SL " + mp.slPct + "%" + (trailArmed(mp, mpLive) ? " + TRAIL" : "") + " · " + mpSlLvl.toFixed(2) + (mpLive == null ? " (no live q)" : ""), 1);
-        } else {
-          if(trailArmed(mp, mpLive)){
-            add("pe:"+engKey, "manual:sl", mpSlLvl, "#ff6b6b", (mp.slTrailed ? "TRAIL SL" : "TRAIL SL") + " " + mp.slTrailPct + "%" + " · " + mpSlLvl.toFixed(2) + (mpLive == null ? " (no live q)" : ""), 1);
-          } else {
-            add("pe:"+engKey, "manual:sl", mpSlLvl, "#ff5252", (mpOsl != null ? "OVERALL SL " + mp.slPct + "%" : "SL") + " · " + mpSlLvl.toFixed(2) + (mpLive == null ? " (no live q)" : ""), 2);
-          }
-          if(mpOsl != null) add("pe:"+engKey, "manual:osl", mpOsl, "#ff9800", "OVERALL SL " + mp.slPct + "%" + " · " + mpOsl.toFixed(2), 1);
-        }
-      } else if(overallSlLevel(mp) != null){
-        add("pe:"+engKey, "manual:osl", overallSlLevel(mp), "#ff9800", "OVERALL SL " + mp.slPct + "%" + " · " + overallSlLevel(mp).toFixed(2), 1);
+    if(drawManual(mp, "pe:"+engKey)) any = true;
+    /* AST's AI Smart trades execute on the BASE 'papertrade' engine no matter
+       which paper tab is currently active (the facade above routes to
+       _paperActiveEngine). Always draw the base engine's open positions too, so
+       Strategy-mode Open Chart shows the entry / SL / live-P&L lines even when
+       the active paper tab is a different engine. The shared "pe:papertrade:"
+       key prefix dedupes against the facade pass when it already returned the
+       base engine. */
+    const reg = window.TabEngines && window.TabEngines.papertrade;
+    const baseEng = reg && reg.papertrade;
+    if(baseEng && typeof baseEng.getAutoPositions === "function"){
+      const baseAuto = baseEng.getAutoPositions();
+      for(const k in baseAuto){
+        if(drawPos(baseAuto[k], "pe:papertrade", k)) any = true;
       }
-      if(mp.targetPrice != null) add("pe:"+engKey, "manual:tp", mp.targetPrice, "#00d4aa", "TP", 2);
+      if(typeof baseEng.getManualPosition === "function"){
+        const baseMp = baseEng.getManualPosition();
+        if(drawManual(baseMp, "pe:papertrade")) any = true;
+      }
     }
   } catch(e){}
   if(!any){ IndChart.clearTradeLines(); return; }
@@ -5763,7 +5791,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/autoexperiment.v14.js?v=127"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=115"></script>
+<script src="/static/aismart.js?v=116"></script>
 <script src="/static/paperrun.js?v=21"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
 <script src="/static/hft_pool.js?v=4"></script>
