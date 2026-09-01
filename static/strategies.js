@@ -70,34 +70,25 @@
   /* ---------------- engine ---------------- */
   const engine = {
     POLL_MS: 300,
-    /* Candle data is fetched with force:1 so the server keeps the bars fresh.
-       The TTL throttles the /api/candles refetch surface; the live 5ms quote
-       feed is merged into the forming bar on every read via liveBar(), so
-       indicator/filter values track the live price even between server
-       refetches. The TTL must be well above the 300ms engine poll: at 300ms the
-       cache expired every tick and every strategy symbol refetched from the
-       server each poll, flooding /api/candles into Dhan's rate-limit (95% of
-       requests came back 503), which in turn starved the NIFTY bias fetch and
-       left trend-following with "NIFTY trend unknown". 2s keeps closed-bar
-       rollover fresh while cutting the refetch surface ~7x. */
+    /* Candle data comes ONLY from the chart (when the strategy's symbol+tf is
+       the one on screen) or from the shared Data Pool (HftPool.getPatched) —
+       the same server candles the chart itself uses, live-patched once into one
+       shared array. No per-strategy fetch and no live-feed clone, so the engine
+       can never disagree with the chart. The TTL is only passed to the pool so
+       a closed-bar rollover stays fresh; the pool's own single-flight keeps the
+       /api/candles refetch surface tiny (Dhan rate-limit bound). */
     CANDLE_TTL_MS: 2000,
-    /* Client-side single-flight + rate-limit backoff for the /api/candles
-       surface. _candleInflight shares one in-flight request between concurrent
-       callers for the same key (niftyBias, strategy runs and the trend scanner
-       all ask for the same symbols) instead of each issuing its own request.
-       _candleBackoff remembers a Dhan 503 park and skips the key until the
-       server's retry_after has passed, so a rate-limited symbol is retried
-       politely on a later tick rather than hammered by an immediate retry
-       loop. */
-    _candleInflight: {},
-    _candleBackoff: {},
-    _markCandleBackoff(key, d) {
-      if (d && (d.status === 'error' || d.status === 'unavailable') &&
-          /rate|limit|unavailable|busy|loading|retry/i.test(String(d.message || ''))) {
-        const hint = Number(d.retry_after);
-        const ms = (hint && hint > 0) ? Math.min(30000, hint * 1000) : 30000;
-        (this._candleBackoff || (this._candleBackoff = {}))[key] = Date.now() + Math.max(1500, ms);
-      }
+    /* Client-side single-flight + rate-limit handling now lives in the shared
+       Data Pool (HftPool), so the engine no longer carries its own inflight /
+       backoff maps. This cache is only a MIRROR of the exact arrays the pool /
+       chart returned, keyed as `sid:exch:tf:days` so the Running-Trades P&L
+       readers and HFT fast paths can read the identical series the strategy
+       evaluated on (same array identity — never an alternate source). */
+    _cacheShared(symbol, tf, days, candles) {
+      if (!candles || !candles.length || !symbol || symbol.id == null) return candles;
+      const k = symbol.id + ':' + (symbol.exch || '') + ':' + tf + ':' + (days || 0);
+      this.candleCache[k] = { at: Date.now(), candles };
+      return candles;
     },
     /* Index strategies resolve the option chain per symbol. The OC surface is
        server-throttled to 1 req/3s and the chain (strikes/greeks) does not
@@ -145,27 +136,37 @@
       this.beginPoll(state);
     },
 
+    /* All (indicatorId, settings) pairs a condition uses, including chain legs
+       and pane conditions. First occurrence wins per id. */
+    _condIndSettings(cond) {
+      const out = [];
+      const push = (id, s) => { if (id && !out.some(p => p[0] === id)) out.push([id, s]); };
+      if (!cond) return out;
+      if (cond.indId) push(cond.indId, cond.indSettings);
+      if (cond.cmpType === 'indicator' && cond.cmpIndId) push(cond.cmpIndId, cond.cmpSettings);
+      (cond.chain || []).forEach(c => {
+        if (!c) return;
+        if (c.indId) push(c.indId, c.indSettings);
+        if (c.cmpType === 'indicator' && c.cmpIndId) push(c.cmpIndId, c.cmpSettings);
+      });
+      if (cond.paneCond && cond.paneCond.indId) push(cond.paneCond.indId, cond.paneCond.indSettings || cond.indSettings);
+      (cond.paneConds || []).forEach(p => { if (p && p.indId) push(p.indId, p.indSettings || cond.indSettings); });
+      if (cond.paneMove && cond.paneMove.indId) push(cond.paneMove.indId, cond.paneMove.indSettings);
+      (cond.paneMoves || []).forEach(pm => { if (pm && pm.indId) push(pm.indId, pm.indSettings); });
+      return out;
+    },
+
     autoDeployIndicators(strategy) {
       if (!window.IndChart || !IndChart.addIndicator) return;
-      const toDeploy = new Set();
-      if (strategy.entry && strategy.entry.indId) toDeploy.add(strategy.entry.indId);
-      if (strategy.entry && strategy.entry.cmpType === 'indicator' && strategy.entry.cmpIndId) toDeploy.add(strategy.entry.cmpIndId);
-      if (strategy.entry && strategy.entry.paneCond && strategy.entry.paneCond.indId) toDeploy.add(strategy.entry.paneCond.indId);
-      if (strategy.entry && strategy.entry.paneConds && strategy.entry.paneConds.length) {
-        strategy.entry.paneConds.forEach(p => { if (p && p.indId) toDeploy.add(p.indId); });
-      }
-      if (strategy.entry && strategy.entry.paneMove && strategy.entry.paneMove.indId) toDeploy.add(strategy.entry.paneMove.indId);
-      if (strategy.entry && strategy.entry.paneMoves && strategy.entry.paneMoves.length) {
-        strategy.entry.paneMoves.forEach(pm => { if (pm && pm.indId) toDeploy.add(pm.indId); });
-      }
-      if (strategy.exit && strategy.exit.indId) toDeploy.add(strategy.exit.indId);
-      if (strategy.exit && strategy.exit.cmpType === 'indicator' && strategy.exit.cmpIndId) toDeploy.add(strategy.exit.cmpIndId);
-      if (strategy.exit && strategy.exit.paneCond && strategy.exit.paneCond.indId) toDeploy.add(strategy.exit.paneCond.indId);
-      if (strategy.exit && strategy.exit.paneConds && strategy.exit.paneConds.length) {
-        strategy.exit.paneConds.forEach(p => { if (p && p.indId) toDeploy.add(p.indId); });
-      }
-      toDeploy.forEach(id => {
-        if (!IndChart.isDeployed(id)) IndChart.addIndicator(id);
+      const pairs = [];
+      (this._condIndSettings(strategy.entry) || []).forEach(p => { if (!pairs.some(x => x[0] === p[0])) pairs.push(p); });
+      (this._condIndSettings(strategy.exit) || []).forEach(p => { if (!pairs.some(x => x[0] === p[0])) pairs.push(p); });
+      pairs.forEach(([id, settings]) => {
+        if (!IndChart.isDeployed(id)) {
+          IndChart.addIndicator(id, settings || {});
+        } else if (IndChart.setIndicatorSettings) {
+          IndChart.setIndicatorSettings(id, settings || {});
+        }
       });
     },
 
@@ -390,6 +391,9 @@
        recompute (they are memoized per candle-array), so EMA/Supertrend/VWAP,
        filters and cross conditions read the live price instead of a stale bar
        close. Never touches a closed bar - only the trailing forming bar. */
+    /* Kept ONLY for external HFT consumers (aismart.js 3215/3229/3243). The
+       engine fetchers no longer patch — they return the chart's array or the
+       pool's shared patched array as-is. */
     liveBar(candles, symbol) {
       if (!candles || !candles.length || !symbol) return candles;
       let q = null;
@@ -413,21 +417,22 @@
       return out;
     },
 
+    /* Shared source for an option/premium series: THE chart's own candles when
+       the chart is on this security+tf (so indicator reads return the exact
+       rendered lines), otherwise the shared Data Pool — one /api/candles fetch
+       per security+tf, live-patched once, reused by every strategy on it. No
+       per-strategy fetch and no live-feed clone. */
     async fetchOptionCandles(securityId, exchangeSegment, instrumentType, tf) {
-      const key = securityId + ':' + tf;
-      const sym = { id: securityId, exch: exchangeSegment || 'NSE_EQ' };
-      const cached = this.candleCache[key];
-      const now = Date.now();
-      if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
-      const d = await fetch('/api/candles', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ security_id: securityId, exchange_segment: exchangeSegment, instrument_type: instrumentType, timeframe: tf, force: 1 })
-      }).then(r => r.json());
-      if (d && d.status === 'success' && d.data && d.data.length) {
-        this.candleCache[key] = { at: Date.now(), candles: d.data };
-        return this.liveBar(d.data, sym);
+      const sym = { id: securityId, exch: exchangeSegment || 'NSE_EQ', inst: instrumentType || 'OPTIDX' };
+      if (typeof selectedSymbol !== 'undefined' && selectedSymbol &&
+          String(selectedSymbol.id) === String(securityId) && typeof chartTf !== 'undefined' &&
+          chartTf === tf && window.IndChart && IndChart.getCandles) {
+        const chartCandles = IndChart.getCandles();
+        if (chartCandles && chartCandles.length >= 3) return this._cacheShared(sym, tf, 0, chartCandles);
       }
-      if (cached) return this.liveBar(cached.candles, sym);
+      if (window.HftPool && HftPool.getPatched) {
+        return this._cacheShared(sym, tf, 0, await HftPool.getPatched(sym, tf, 0, this.CANDLE_TTL_MS));
+      }
       return [];
     },
 
@@ -781,107 +786,53 @@
     },
 
     async fetchCandles(st) {
-      const key = st.symbol.id + ':' + st.tf;
       const sym = st.symbol;
-      const now = Date.now();
-      const cached = this.candleCache[key];
-      if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
-      if ((this._candleBackoff || {})[key] > now) return cached ? this.liveBar(cached.candles, sym) : [];
-      const chartCandles = (typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
-        window.IndChart && st.symbol && chartTf === st.tf &&
-        selectedSymbol && selectedSymbol.id === st.symbol.id && selectedSymbol.exch === st.symbol.exch)
-        ? IndChart.getCandles() : null;
-      if (chartCandles && chartCandles.length >= 3) {
-        this.candleCache[key] = { at: Date.now(), candles: chartCandles };
-        return this.liveBar(chartCandles, sym);
+      if (typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
+        window.IndChart && sym && chartTf === st.tf &&
+        selectedSymbol && selectedSymbol.id === sym.id && selectedSymbol.exch === sym.exch) {
+        const chartCandles = IndChart.getCandles();
+        if (chartCandles && chartCandles.length >= 3) return this._cacheShared(sym, st.tf, 0, chartCandles);
       }
-      const inflight = this._candleInflight || (this._candleInflight = {});
-      if (inflight[key]) return inflight[key];
-      const p = (async () => {
-        const d = await fetch('/api/candles', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ security_id: st.symbol.id, exchange_segment: st.symbol.exch, instrument_type: st.symbol.inst || 'INDEX', timeframe: st.tf, force: 1 })
-        }).then(r => r.json());
-        if (d && d.status === 'success' && d.data && d.data.length) {
-          this.candleCache[key] = { at: Date.now(), candles: d.data };
-          return this.liveBar(d.data, sym);
-        }
-        this._markCandleBackoff(key, d);
-        return cached ? this.liveBar(cached.candles, sym) : [];
-      })();
-      inflight[key] = p;
-      try { return await p; } finally { if (inflight[key] === p) delete inflight[key]; }
+      if (window.HftPool && HftPool.getPatched) {
+        return this._cacheShared(sym, st.tf, 0, await HftPool.getPatched(sym, st.tf, 0, this.CANDLE_TTL_MS));
+      }
+      return [];
     },
 
     /* Fetch candles for an arbitrary symbol/timeframe (used by the multi-chart
-       strategy monitor). Keys the cache on id+exch+tf to avoid collisions across
-       exchange segments, and reuses the chart's live candles when they match. */
+       strategy monitor). Shares the chart's candles when they match and the
+       Data Pool otherwise — no per-strategy fetch path. */
     async fetchCandlesFor(symbol, tf, periodDays) {
       if (!symbol || symbol.id == null) return [];
-      const key = symbol.id + ':' + (symbol.exch || '') + ':' + tf + ':' + (periodDays || 0);
       const sym = symbol;
-      const now = Date.now();
-      const cached = this.candleCache[key];
-      if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
-      if ((this._candleBackoff || {})[key] > now) return cached ? this.liveBar(cached.candles, sym) : [];
-      const chartCandles = (!periodDays && typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
+      if (!periodDays && typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
         window.IndChart && chartTf === tf &&
-        selectedSymbol && selectedSymbol.id === symbol.id && selectedSymbol.exch === symbol.exch)
-        ? IndChart.getCandles() : null;
-      if (chartCandles && chartCandles.length >= 3) {
-        this.candleCache[key] = { at: Date.now(), candles: chartCandles };
-        return this.liveBar(chartCandles, sym);
+        selectedSymbol && selectedSymbol.id === sym.id && selectedSymbol.exch === sym.exch) {
+        const chartCandles = IndChart.getCandles();
+        if (chartCandles && chartCandles.length >= 3) return this._cacheShared(sym, tf, 0, chartCandles);
       }
-      const inflight = this._candleInflight || (this._candleInflight = {});
-      if (inflight[key]) return inflight[key];
-      const p = (async () => {
-        const d = await fetchWithTimeout('/api/candles', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ security_id: symbol.id, exchange_segment: symbol.exch, instrument_type: symbol.inst || 'INDEX', timeframe: tf, force: 1, period_days: periodDays || null })
-        }).then(r => r.json());
-        if (d && d.status === 'success' && d.data && d.data.length) {
-          this.candleCache[key] = { at: Date.now(), candles: d.data };
-          return this.liveBar(d.data, sym);
-        }
-        /* Dhan rate-limit / temporary-unavailable / queue-busy (503): the server
-           parks the key and returns 503 with a retry_after hint. Remember the
-           park and skip until it passes - the next tick retries politely. The
-           old immediate retry loop multiplied one parked symbol into ~12
-           requests (and concurrent callers into far more), flooding /api/candles
-           until ~95% of calls were 503 and every NIFTY bias fetch starved. */
-        this._markCandleBackoff(key, d);
-        return cached ? this.liveBar(cached.candles, sym) : [];
-      })();
-      inflight[key] = p;
-      try { return await p; } finally { if (inflight[key] === p) delete inflight[key]; }
+      if (window.HftPool && HftPool.getPatched) {
+        return this._cacheShared(sym, tf, periodDays || 0, await HftPool.getPatched(sym, tf, periodDays || 0, this.CANDLE_TTL_MS));
+      }
+      return [];
     },
 
     /* Fetch candles for an arbitrary index symbol (used by Index Confirmation).
-       Mirrors fetchCandles but is not bound to the chart's selected symbol. */
+       Same shared source as every other series: chart candles when on-screen,
+       else the Data Pool. */
     async fetchIndexCandles(index, tf) {
       if (!index || !index.id) return [];
-      const key = 'IDX_' + index.id + ':' + tf;
       const sym = { id: index.id, exch: index.exch || 'IDX_I' };
-      const cached = this.candleCache[key];
-      const now = Date.now();
-      if (cached && now - cached.at < this.CANDLE_TTL_MS) return this.liveBar(cached.candles, sym);
-      if ((this._candleBackoff || {})[key] > now) return cached ? this.liveBar(cached.candles, sym) : [];
-      const inflight = this._candleInflight || (this._candleInflight = {});
-      if (inflight[key]) return inflight[key];
-      const p = (async () => {
-        const d = await fetchWithTimeout('/api/candles', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ security_id: index.id, exchange_segment: index.exch || 'IDX_I', instrument_type: index.inst || 'INDEX', timeframe: tf, force: 1 })
-        }).then(r => r.json());
-        if (d && d.status === 'success' && d.data && d.data.length) {
-          this.candleCache[key] = { at: Date.now(), candles: d.data };
-          return this.liveBar(d.data, sym);
-        }
-        this._markCandleBackoff(key, d);
-        return cached ? this.liveBar(cached.candles, sym) : [];
-      })();
-      inflight[key] = p;
-      try { return await p; } finally { if (inflight[key] === p) delete inflight[key]; }
+      if (typeof chartTf !== 'undefined' && typeof selectedSymbol !== 'undefined' &&
+        window.IndChart && chartTf === tf &&
+        selectedSymbol && String(selectedSymbol.id) === String(index.id)) {
+        const chartCandles = IndChart.getCandles();
+        if (chartCandles && chartCandles.length >= 3) return this._cacheShared(sym, tf, 0, chartCandles);
+      }
+      if (window.HftPool && HftPool.getPatched) {
+        return this._cacheShared(sym, tf, 0, await HftPool.getPatched(sym, tf, 0, this.CANDLE_TTL_MS));
+      }
+      return [];
     },
 
     /* Index Confirmation gate. When a strategy's indexConfirmation is enabled and

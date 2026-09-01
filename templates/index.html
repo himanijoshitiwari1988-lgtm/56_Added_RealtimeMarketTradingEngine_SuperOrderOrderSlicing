@@ -925,7 +925,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             </div>
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
               <div style="flex:1;min-width:280px">
-                <div style="font-size:10px;color:#66ccff;font-weight:700;margin:4px 0 2px">Running Strategies</div>
+                <div style="font-size:10px;color:#66ccff;font-weight:700;margin:4px 0 2px">Running Strategies / Indicator filter based trades</div>
                 <div id="ptRunStrategies" style="max-height:220px;overflow-y:auto"></div>
               </div>
               <div style="flex:1;min-width:280px">
@@ -952,12 +952,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <label style="font-size:9px;color:#00d4aa;display:flex;align-items:center;gap:3px;cursor:pointer;font-weight:700" title="Live Data Pool: shows the shared realtime candle (open/high/low/close/volume), indicator values and the entry-condition PASS/FAIL for every resolved symbol. The strategies read the exact same pool, so what you see is what they trade."><input type="checkbox" id="astDataPool" onchange="AISmartTrading.onDataPoolToggle()" style="accent-color:#00d4aa"> Data Pool (live candle + indicator + filter readout)</label>
             <span id="astDataPoolInfo" style="font-size:9px;color:#666">OFF - shared pool feeds strategies only</span>
             <button id="astDataPoolRefresh" onclick="AISmartTrading.poolRefresh()" style="font-size:9px;color:#fff;background:#2d2d5e;border:1px solid #3d3d7e;border-radius:3px;padding:2px 10px;cursor:pointer;font-weight:700" title="Re-resolve the selected universe and re-render the pool readout now (newly added premium charts / symbols / strikes show up immediately)">Refresh</button>
+            <label style="font-size:9px;color:#ffd700;display:flex;align-items:center;gap:3px;cursor:pointer;font-weight:700" title="Ultrafast Live Feed: runs every strategy on each symbol's own LIVE candle series built tick-by-tick in the browser from the WebSocket feed (initial history fetched once). No REST /api/candles calls in the live path, so no Dhan rate-limit stalls - strategy reads are under 5ms. When ON the normal Data Pool REST path is bypassed; when OFF the default Data Pool path stays active."><input type="checkbox" id="astFastData" onchange="AISmartTrading.onFastDataInput()" style="accent-color:#ffd700"> Ultrafast Live Feed</label>
+            <span id="astFastDataInfo" style="font-size:9px;color:#666">OFF - Data Pool path active</span>
           </div>
           <div id="astDataPoolBody" style="display:none;margin-top:6px;max-height:240px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a"></div>
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
           <div style="max-height:220px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="astRunningTable">
-              <thead><tr><th>Option</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&amp;L (net of charges)</th><th>Charges</th><th>SL/Trail</th><th>Guard</th><th></th></tr></thead>
+              <thead><tr><th>Option</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&amp;L (gross)</th><th>SL/Trail</th><th>Guard</th><th></th></tr></thead>
               <tbody id="astRunningBody"></tbody>
             </table>
           </div>
@@ -1033,7 +1035,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ff9800">HFT (ultrafast):</b></div>
             <label style="font-size:9px;color:#ff9800;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astHft" onchange="AISmartTrading.onUniversalInput()" style="accent-color:#ff9800"> HFT execution</label>
             <label style="font-size:9px;color:#ccc;margin-right:8px">max <input type="number" id="astHftOps" value="6" min="1" max="30" step="1" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"> orders/sec</label>
-            <label style="font-size:9px;color:#ccc;margin-right:8px">execute on <select id="astHftExecOn" onchange="AISmartTrading.onUniversalInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
+            <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px" title="Enable to force HFT strategy conditions to be tested against the chosen candle value (default: Candle Close). Disable to use each condition's own default candle key."><input type="checkbox" id="astHftExecOnCb" onchange="AISmartTrading.onUniversalInput()" style="accent-color:#ff9800" checked> execute on <select id="astHftExecOn" onchange="AISmartTrading.onUniversalInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
               <option value="close">Candle Close</option>
               <option value="open">Candle Open</option>
               <option value="high">Candle High</option>
@@ -1147,6 +1149,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               <select id="astRunInFno" onchange="AISmartTrading.onRunInInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
                 <option value="spot" selected>Spot chart</option>
                 <option value="premium">Option premium chart</option>
+                <option value="both">Both (spot + premium)</option>
               </select>
             </label>
             <label style="font-size:9px;color:#66ccff;margin-right:8px">Commodities
@@ -1154,6 +1157,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <option value="spot" selected>Spot chart</option>
                 <option value="futures">Futures contract</option>
                 <option value="premium">Option premium chart</option>
+                <option value="both">Both (spot + premium)</option>
               </select>
             </label>
             <label style="font-size:9px;color:#66ccff;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astRunInDefault" onchange="AISmartTrading.onRunInInput()"> Make this default setting</label>
@@ -1238,6 +1242,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <div id="astStrikesList" style="display:none;margin-top:6px;font-size:9px;color:#ccc;line-height:1.7;background:#0e1626;border:1px solid #2d2d50;border-radius:4px;padding:6px 8px"></div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:flex-start">
             <div style="font-size:9px;color:#888;margin-right:10px;padding-top:4px"><b style="color:#ffd700">Indicator filters:</b></div>
+            <label style="font-size:9px;color:#ffd700;margin-right:10px;padding-top:4px;display:flex;align-items:center;gap:3px" title="ON: the strategy's entry fires ONLY when every selected indicator/filter AND the strategy's own conditions pass together on the same bar (strict AND - no partial N-of-M). OFF: the old default entry behavior (N-of-M threshold)."><input type="checkbox" id="astAllInOne" onchange="AISmartTrading.onAllInOne()" style="accent-color:#ffd700"> All together (strict AND)</label>
             <div id="astFilterSectionBullish" style="border:1px solid #1f4a35;border-radius:4px;padding:4px 8px;margin-right:10px;background:#0e231a">
               <label style="font-size:9px;color:#26a69a;display:flex;align-items:center;gap:3px;font-weight:700"><input type="checkbox" id="astFilterBullish" onchange="AISmartTrading.onFilterMaster('bullish')" style="accent-color:#00d4aa"> Bullish <span style="font-weight:400;color:#4a7a63;font-size:8px">(select all)</span></label>
               <div style="margin-top:4px;display:flex;flex-direction:column;gap:3px">
@@ -1354,8 +1359,15 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           </div>
           <div id="astSelectedList" style="padding:2px 0"></div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-top:1px solid #1e1e40;margin-top:6px">
+            <label style="font-size:9px;color:#00d4aa;display:flex;align-items:center;gap:3px;cursor:pointer" title="Enable the normal Run Paper Trading mode. When ON the Indicator-filters button is faded/inactive.">
+              <input type="checkbox" id="astRunPaperModeCb" onchange="AISmartTrading.onRunModeToggle('normal', this.checked)" style="accent-color:#00d4aa" checked> Normal mode
+            </label>
             <button class="btn-action" id="astRunPaperBtn" style="width:auto;padding:6px 16px;margin:0;background:#00d4aa;color:#0a0a18;font-weight:700" onclick="AISmartTrading.runPaper()">Run Paper Trading</button>
-            <span style="font-size:9px;color:#888">Run the ticked strategies with the settings above in paper mode (no real Dhan orders)</span>
+            <label style="font-size:9px;color:#b39ddb;display:flex;align-items:center;gap:3px;cursor:pointer" title="Enable the Indicator-filters trading mode. When ON the normal Run Paper Trading button is faded/inactive.">
+              <input type="checkbox" id="astFilterModeCb" onchange="AISmartTrading.onRunModeToggle('filter', this.checked)" style="accent-color:#b39ddb"> Indicator-filters mode
+            </label>
+            <button class="btn-action" id="astFilterPaperBtn" style="width:auto;padding:6px 16px;margin:0;background:#b39ddb;color:#0a0a18;font-weight:700" onclick="AISmartTrading.runFilterPaper()">Place trades based on Indicator filters: All together (strict AND)</button>
+            <span style="font-size:9px;color:#888">Run the ticked strategies in paper mode (no real Dhan orders). Filter mode trades the selected universe only when ALL selected Bullish/Bearish indicator filters pass together.</span>
           </div>
           <div class="monitor-toolbar" id="psSection" style="border:1px solid #2d2d50;border-radius:4px;margin:4px 0">
             <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
@@ -1465,6 +1477,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <button class="btn-action" id="aeAutoToggle" style="width:auto;padding:5px 12px;margin:0 4px 0 0" onclick="AutoExperiment.toggleAuto()">Auto Strategy: OFF</button>
             <label style="font-size:10px;color:#66ccff;display:flex;align-items:center;gap:4px;margin:0 8px 0 0" title="Enforced: SELL/short orders have been removed from all engines"><input type="checkbox" id="aeBuyOnly" checked disabled> Buy Only (Long Only) — ENFORCED</label>
             <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px"><input type="checkbox" id="aeRunManualToggle" onchange="AutoExperiment.toggleRunManual()"> Run auto experiment on manually saved strategies</label>
+            <label style="font-size:10px;color:#ffd700;display:flex;align-items:center;gap:4px;margin:0 0 0 10px" title="ON: a strategy's entry fires ONLY when its own conditions AND every selected AST indicator filter pass together (strict AND). OFF: the old default entry behavior."><input type="checkbox" id="aeAllInOne" onchange="AutoExperiment.onAllInOne()" style="accent-color:#ffd700"> All indicators/filters together (strict AND)</label>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#b39ddb">Template:</b></div>
@@ -2058,7 +2071,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
           <div style="max-height:180px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="ntrRun">
-              <thead><tr><th>Option</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L (net of charges)</th><th>Charges</th><th>SL/Trail</th><th>Guard</th></tr></thead>
+              <thead><tr><th>Option</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L (gross)</th><th>SL/Trail</th><th>Guard</th></tr></thead>
               <tbody id="ntrRunBody"></tbody>
             </table>
           </div>
@@ -2308,7 +2321,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=48"></script>
+<script src="/static/indicators.js?v=49"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
 
@@ -3204,6 +3217,9 @@ function mergeClientQuotes(qm){
     if(prevLive && !qLive) continue;                          /* stale backfill can't stomp a live quote */
     if(!qLive && !prevLive && prev && (prev.at||0) > (q.at||0)) continue;  /* keep the newer of two backfills */
     clientQuotes[k] = q;
+    /* Ultrafast live feed: forward the tick to the per-symbol candle store so
+       the AST strategies can read live candles from memory (no REST). */
+    if(window.FastLive && FastLive.enabled) { try { FastLive.tick(k, q); } catch(e) {} }
   }
   /* Bound the store (option-chain strikes add many keys); evict stale non-
      watchlist entries only. The market-watch / dropdown symbols are always
@@ -3321,6 +3337,39 @@ function liveQuoteForSymbol(symbolId, symbolExch){
   return (q && q.live && q.ltp != null) ? Number(q.ltp) : null;
 }
 
+/* THE single source of truth for a position's current price, shared by BOTH
+   the chart's running P&L label and the Running Trades list — chart/candle
+   based only, never the delayed live feed. When the position's symbol IS the
+   chart currently on screen, its price is that chart's last candle close, so
+   Running Trades always equals exactly what the chart shows (including "no
+   candles yet" -> null, so an empty chart can never disagree). For off-chart
+   positions it uses the shared candle cache (StratEngine). */
+function tradeChartPrice(pos){
+  const sid = (pos && pos.symbolId != null) ? Number(pos.symbolId) : null;
+  if(sid == null) return null;
+  if(typeof selectedSymbol !== 'undefined' && selectedSymbol &&
+     selectedSymbol.id === sid && window.IndChart && IndChart.getCandles){
+    const c = IndChart.getCandles();
+    if(c && c.length){
+      const lc = Number(c[c.length - 1].close);
+      if(lc > 0) return lc;
+    }
+    return null;   /* chart is on this symbol but empty -> match the chart */
+  }
+  const SE = window.StratEngine;
+  const cache = (SE && SE.candleCache) || {};
+  let best = null, bestAt = 0;
+  for(const k in cache){
+    if(k.indexOf(sid + ':') !== 0) continue;
+    const e = cache[k];
+    if(e && e.candles && e.candles.length && e.at >= bestAt){
+      const lc = Number(e.candles[e.candles.length - 1].close);
+      if(lc > 0){ best = lc; bestAt = e.at; }
+    }
+  }
+  return best;
+}
+
 /* Trail-SL display guard. A BUY stop must always sit BELOW the market: the
    engine ratchets p.stopLoss up behind the peak (peak - slTrailPct%) on every
    live tick, so the level naturally rides just under the running profit and
@@ -3371,7 +3420,7 @@ function liveLineTitle(p, ltp){
   const qty = p.qty || 0;
   const pnl = p.side === 'BUY' ? (ltp - p.entryPrice) * qty : (p.entryPrice - ltp) * qty;
   const pct = p.entryPrice > 0 ? (p.side === 'BUY' ? (ltp / p.entryPrice - 1) : (p.entryPrice / ltp - 1)) * 100 : 0;
-  let label = 'LIVE ' + ltp.toFixed(2) + ' · ' + (pnl >= 0 ? '+' : '-') + '₹' + Math.abs(Math.round(pnl)).toLocaleString('en-IN') + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
+  let label = 'CHART ' + ltp.toFixed(2) + ' · ' + (pnl >= 0 ? '+' : '-') + '₹' + Math.abs(Math.round(pnl)).toLocaleString('en-IN') + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
   if(p.slTrailPct > 0 && p.stopLoss != null && p.stopLoss > 0){
     label += ' · CUT@' + p.stopLoss.toFixed(2) + ' (trail ' + p.slTrailPct + '%)';
   }
@@ -3403,8 +3452,9 @@ function syncTradeChartLines(){
       add("pe:"+engKey, k+":entry", p.entryPrice, p.side === "BUY" ? "#00d4aa" : "#ff5252", "ENTRY " + (p.symbol||"").slice(0,14), 0);
       const liveLtp = liveQuoteForSymbol(p.symbolId, p.symbolExch);
       const slLvl = trailSlDisplayLevel(p, liveLtp);
-      const liveTitle = liveLineTitle(p, liveLtp);
-      if(liveTitle) add("pe:"+engKey, k+":live", liveLtp, "#00e5ff", liveTitle, 1);
+      const chartLtp = tradeChartPrice(p);
+      const liveTitle = chartLtp != null ? liveLineTitle(p, chartLtp) : null;
+      if(liveTitle) add("pe:"+engKey, k+":live", chartLtp, "#00e5ff", liveTitle, 1);
       if(slLvl != null){
         const osl = overallSlLevel(p);
         if(osl != null && Math.abs(osl - slLvl) < 0.005){
@@ -3429,8 +3479,9 @@ function syncTradeChartLines(){
       add("pe:"+engKey, "manual:entry", mp.entryPrice, "#00d4aa", "ENTRY", 0);
       const mpLive = liveQuoteForSymbol(mp.symbolId != null ? mp.symbolId : (selectedSymbol ? selectedSymbol.id : null),
                                         mp.symbolExch != null ? mp.symbolExch : (selectedSymbol ? selectedSymbol.exch : null));
-      const mpLiveTitle = liveLineTitle(mp, mpLive);
-      if(mpLiveTitle) add("pe:"+engKey, "manual:live", mpLive, "#00e5ff", mpLiveTitle, 1);
+      const mpChartLtp = tradeChartPrice(mp);
+      const mpLiveTitle = mpChartLtp != null ? liveLineTitle(mp, mpChartLtp) : null;
+      if(mpLiveTitle) add("pe:"+engKey, "manual:live", mpChartLtp, "#00e5ff", mpLiveTitle, 1);
       const mpSlLvl = trailSlDisplayLevel(mp, mpLive);
       if(mpSlLvl != null){
         const mpOsl = overallSlLevel(mp);
@@ -5702,23 +5753,24 @@ function handleOCChartClick(e){
 document.querySelector("#oc-table tbody").addEventListener("click", handleOCChartClick);
 document.querySelector("#oc-all-container").addEventListener("click", handleOCChartClick);
 </script>
-<script src="/static/crossdetect.js?v=6"></script>
+<script src="/static/crossdetect.js?v=7"></script>
 <script src="/static/autotrail.js?v=2"></script>
 <script src="/static/aitrail.js?v=2"></script>
 <script src="/static/aitrades.js?v=2"></script>
-<script src="/static/strategies.js?v=68"></script>
-<script src="/static/papertrade.js?v=29"></script>
+<script src="/static/strategies.js?v=69"></script>
+<script src="/static/papertrade.js?v=30"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=126"></script>
+<script src="/static/autoexperiment.v14.js?v=127"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=102"></script>
-<script src="/static/paperrun.js?v=17"></script>
+<script src="/static/aismart.js?v=115"></script>
+<script src="/static/paperrun.js?v=21"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
-<script src="/static/hft_pool.js?v=3"></script>
+<script src="/static/hft_pool.js?v=4"></script>
+<script src="/static/fast_live.js?v=1"></script>
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=3"></script>
-<script src="/static/smart_ntrader.js?v=47"></script>
+<script src="/static/smart_ntrader.js?v=51"></script>
 <script src="/static/backup.js?v=2"></script>
 <script>
 /* Engine instantiation for the base tabs and every duplicated tab. The cloned

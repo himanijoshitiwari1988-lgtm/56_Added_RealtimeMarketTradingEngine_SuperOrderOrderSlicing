@@ -4,6 +4,459 @@
 > quickly. Read this first, then `SESSION.md` / `CHANGELOG.md` for project
 > history.
 
+## Update (2026-09-01) — AST "Ultrafast Live Feed" checkbox (in-browser live candles, <5ms reads)
+
+**User request:** a 100%-working ultrafast data function (<5ms) for the AST
+engine, gated by an enable/disable checkbox. When the checkbox is ON the normal
+Data Pool (REST /api/candles) path becomes inactive and strategies run + place
+trades on the new live function instead.
+
+**Shipped (`static/fast_live.js?v=1` new, `aismart.js?v=115`,
+`templates/index.html`):**
+- New `static/fast_live.js` → `window.FastLive`: a purely client-side per-symbol
+  live candle store. Initial history seeded ONCE per (symbol, timeframe) via
+  `StratEngine.fetchCandlesFor` (fallback `HftPool.getCandles` — this also
+  subscribes the symbol on the server WS feed); after that every incoming /ws
+  tick (`FastLive.tick` hooked in `mergeClientQuotes`) rolls/updates the forming
+  bar in memory. `FastLive.candlesFor(sym, tf)` resolves synchronously from
+  memory (<1ms) once seeded; `patchLive()` re-slides the array only when the
+  close moved (keeps the strategy's per-array indicator caches valid). Quote-key
+  mapping mirrors the server (`IDX_I:<sid>` for indices, else `<sid>`).
+- index.html: new `astFastData` checkbox + `astFastDataInfo` span in the AST
+  monitor toolbar (next to the Data Pool toggle); script ref added;
+  `aismart.js?v=115`.
+- aismart.js: `state.fastData` (default false) + migration; `onFastDataInput()`
+  handler (enable → `FastLive.reset()` + `setEnabled(true)`), `syncFastDataUI()`
+  restores checkbox/status + `FastLive.setEnabled(state.fastData)` on boot and
+  refreshes the "ON - N live series" count each poll; fast path in
+  `candlesForInstrument()` and `confirmCandlesFor()` (both/option/underlying
+  kinds) — when `state.fastData` is ON the Data Pool REST path is fully bypassed
+  (no `SE.fetchCandlesFor`), strategies + filter mode + Data Pool readout all
+  read the in-browser live series. Exposed as `AISmartTrading.onFastDataInput`.
+- Perf proof already visible in the UI: `astPerfInfo` ("Tick: Xms for N
+  strategy(s)").
+
+**Notes / limitations:** seed is one-time per symbol+tf (first evaluation waits
+for it, then sub-ms reads); if a strike's history is <10 candles the fast path
+returns null and skips (no underlying fallback in fast mode — premium-only
+semantics); live bar updates depend on the /ws tick stream (needs market open +
+symbol subscribed); OFF returns to the exact previous Data Pool behavior.
+
+## Update (2026-09-01) — "Both (spot + premium)" run-in option for F&O stocks and commodities (AST only)
+
+**User request:** add the "Both" option that indices already have to the
+"Strategy should be run in" dropdowns for Commodities and F&O stocks, in both AE
+and AST engines. During investigation it was found the AE (autoexperiment.v14.js)
+run-in/trade-in dropdowns are DEAD UI (no `onRunInInput`/`onTradeInInput`, no
+`state.runIn`/`state.tradeIn` — dropped in the v14 rewrite). User chose to only
+add it to the AST engine.
+
+**Shipped (`templates/index.html` only — no JS change needed):**
+- `astRunInFno` (F&O stocks) and `astRunInComm` (commodities) now offer
+  `<option value="both">Both (spot + premium)</option>`.
+- AST engine already fully supports `'both'` for every instrument type:
+  `runInMode()` passes it through (aismart.js:1458), `resolveInstruments()`
+  builds `{kind:'both', symbol, contracts}` (~2934), `candlesForInstrument`
+  evaluates on the spot chart with the premium series fetched separately
+  (`confirmCandlesFor`, Data Pool only — entry fires on spot, no separate
+  premium gate), `executionSymbolsFor` executes per trade-in (F&O → premium
+  option only, commodity → its own trade-in dropdown), paperrun `runInModeFor`
+  mirrors it, and `readRunInUI`/restore handle the value.
+- No `?v=` bump (no JS changed).
+
+**Behavior note for the user:** with run-in "Both" for F&O stocks the strategy
+evaluates on spot candles and executes on the option premium contract (trades
+only on premium, never both) — the Running Strategies list shows the spot row
+plus the picked execution strikes by design. Commodities with "Both" need a
+resolvable MCX option chain; otherwise the symbol is skipped with a log warning.
+
+## Update (2026-09-01) — AST "Place trades based on Indicator filters: All together (strict AND)" run mode
+
+**User request:** next to the Run Paper Trading button add an auto button named
+"Place trades based on Indicator filters: All together (strict AND)", each with
+an enable/disable checkbox that mutually excludes the other (one mode ON → the
+other button fades/inactive). When enabled, the engine monitors the selected
+universe (top gainers/top losers, NIFTY trend-following stocks/strikes, or chart
+symbol — "jis bhi method se") and places a trade only when ALL selected
+Bullish/Bearish indicator filters pass together on the symbol/instrument chart
+(strict AND). All other AST settings (SL, trail TP, fixed TP, lots, margin, AI
+risk, time gates) remain identical to normal mode.
+
+**Shipped (client-only):**
+- `templates/index.html` (run-button row after Selected Strategies): added
+  `astRunPaperModeCb` (Normal mode checkbox, default ON) + `astRunPaperBtn`
+  (existing), `astFilterModeCb` (Indicator-filters mode checkbox) +
+  `astFilterPaperBtn` (new "Place trades based on Indicator filters: All
+  together (strict AND)" button). Bumped `aismart.js?v=107`.
+- `aismart.js` (AST):
+  - `defaultState.filterMode` (bool). `applyRunModeUI()` syncs the two
+    checkboxes + fades/disables the inactive button; wired into
+    `applyUniversalToUI` + `boot`.
+  - `onRunModeToggle(mode, checked)`: mutual exclusion — exactly one mode
+    active; unticking one switches to the other.
+  - `runFilterPaper()`: like `runPaper` but sets `state.filterMode = true`;
+    warns when no Bullish/Bearish filter is selected.
+  - `filterModeStrategies()` / `filterStrategyFor(sym, side)` /
+    `filterSectionHas(side)`: one synthetic strategy per universe symbol, side
+    from NIFTY trend direction (trend mode) or live daily change% (gainers →
+    bullish CE, losers → bearish PE); symbols whose side has no selected filter
+    section are skipped. Strategy carries `entry = ema(9) > -1e12` (always true)
+    + `entryExtra` = all direction-matched filter conditions, marked
+    `_filterBuilt: true` + `_bindSym: symId:exch`.
+  - `tickBody`: `strategies = state.filterMode ? filterModeStrategies() :
+    activeStrategies()`; filter-mode diag when none; inner loop skips
+    non-bound instruments BEFORE any candle fetch, and skips option instruments
+    whose CE/PE side ≠ strategy cat.
+  - `workingStrategy`: `_filterBuilt` strategies are returned as-is (no
+    re-append of global filters). `entryFireAt`: `_filterBuilt` strategies
+    ALWAYS dispatch to `entryFireAllInOne` (strict AND), regardless of
+    `state.allInOne`.
+  - `executionSymbolsFor(instr, s)`: filter-built strategies pin the option
+    side (`{ optionType: CE|PE }` to `contractsFor`, and filter mixed
+    `instr.contracts` to the matching leg) so a bullish filter strategy always
+    buys CE, bearish always PE.
+  - API exports: `runFilterPaper`, `onRunModeToggle`.
+
+**Running Strategies view (same update):** the Paper Trade tab's "Running
+Strategies" heading is now "Running Strategies / Indicator filter based trades".
+- `aismart.js` `runningStrategies()` returns `filterModeStrategies()` when
+  `state.filterMode` is ON, so the list shows one row per monitored universe
+  symbol (not empty as before).
+- `paperrun.js`: strategies carry `filterBuilt` flag → rows/detail show an
+  "Indicator filter" tag; `chartsForStrategy` now ALWAYS appends the fetched
+  selected premium strikes for AI Smart strategies (even spot-run F&O stocks) so
+  the monitored/traded strikes are visible in both filter and normal modes.
+  Bumped `aismart.js?v=108`, `paperrun.js?v=21`.
+
+**Notes:** synthetic filter strategies are never persisted/rendered; settings
+snapshots use the stable `flt:<side>:<id>:<exch>` key so they do not accumulate.
+Sub-5ms per-instrument eval via cached aligned series; bind guard placed before
+candle fetch so the strategy×instrument cross-product stays cheap. AE engine
+unchanged for this feature (its "all together" checkbox is separate).
+
+## Update (2026-09-01) — Indicator-filters mode: ONE strategy, filters in the PRIMARY entry (strict AND), no entry-extra
+
+**User request (latest fix):** filter mode must NOT create one strategy row per
+symbol ("bahut sare running strategies"); there is exactly ONE running strategy.
+ALL selected Bullish/Bearish indicator filters live in its PRIMARY `entry` as an
+AND-gated array; the `entryExtra` section is removed for filter mode (it stays
+only for normal strategies); entry fires only when EVERY selected filter passes
+together on the symbol chart. The "none" entries in the detail view were
+confusing and must not appear as filters.
+
+**Shipped (client-only, `aismart.js?v=109`; `paperrun.js?v=21` already live):**
+- `aismart.js`:
+  - `filterModeStrategies()` now returns EXACTLY ONE synthetic strategy
+    `id:'flt:all'` named "Indicator filter based trades (all together)" with
+    `entry = conds` (array of ALL selected filter conditions), `exit:null`,
+    `entryExtra:[]`, `exitExtra:[]`, `entryThreshold: conds.length`,
+    `_filterBuilt:true`. Removed the per-symbol `filterStrategyFor` /
+    `filterSectionHas` / `_bindSym` machinery.
+  - New `allSelectedFilterConditions()`: every ticked Bullish+Bearish sub-filter
+    becomes a mandatory AND gate via `buildFilterConditions(tpl, state.filters)`
+    on a neutral ema(9) template — no direction-matching, no opposite-side
+    zeroing, so a ticked Bullish OR Bearish filter is always enforced on every
+    monitored symbol.
+  - `entryFireAt` (and `entryFireAllInOne`): when `s.entry` is an ARRAY, entry =
+    `evalCondAll(s.entry, i, candles)` (strict AND over the whole array; empty
+    array ⇒ no entry); gap check guarded to non-array entries. `_filterBuilt`
+    strategies always dispatch to `entryFireAllInOne`.
+  - `tickBody`: `strategies = state.filterMode ? filterModeStrategies() :
+    activeStrategies()`. The `_bindSym` guard is inert for the single strategy
+    (no `_bindSym`), so EVERY instrument in the selected universe (spot, both,
+    and each CE/PE premium strike) is evaluated against all filters together —
+    no `_bindSym`-keyed per-instrument CE/PE skip.
+  - `executionSymbolsFor(instr, s)`: removed the cat-pinned `fltSide`. Side for
+    spot/both F&O contracts now flows through the EXISTING `contractsFor` logic
+    (NIFTY trend → mover change% → active filter direction → strategy direction
+    → user option-type selector); option instruments keep their own `optionType`.
+- `paperrun.js`:
+  - `condLabel` rewrite: candle-level gates (`volUp`/`volDown`/`fakeBreakout`/
+    `reversal`/`incUp`/`incDown`) now render readable phrases ("Volume surging
+    up", "Fake breakout", ...) instead of the old "none"; new logic phrases for
+    `crossUpNow`/`crossDownNow`/`closeCrossAbove`/`closeCrossBelow`/`gapUp`/
+    `gapDown`/`asrSupGapUp`/`asrResGapUp`; `indSettingsShort` appends compact
+    settings (`EMA (len 9)`) so "EMA > -1e12" placeholders are gone.
+  - `showStrategyDetail`: exit shows "Managed by SL / Trail TP / Fixed TP" when
+    the strategy has no exit conditions; filter rows show neutral `ALL` side tag
+    (purple) instead of a misleading green `LONG`.
+
+**Notes:** `evalCondAll` over the entry array is the strict-AND gate — a single
+passing filter is NOT enough, matching the button label. `condLabel` "none" was
+the display bug the user saw: candle gates carry no `indId`, so they previously
+rendered as "none" even though they were active filters — now they show their
+real phrase. `flt:all` runs on `tf:''` → `pickTimeframe` picks the first enabled
+timeframe as in normal mode.
+
+**User clarification (same update, shipped `aismart.js?v=110`):** AST has TWO modes — (1) Strategy mode (AE-imported / ticked strategies) and (2)
+Indicator-filters mode (only ticked Bullish/Bearish indicator filters are
+read/monitored, trades placed only from them). The user explicitly said NO
+separate section should be added for "only selected filters monitored" — that
+was explained for understanding only. The requirement is exactly what the engine
+does: in Indicator-filters mode AST reads/monitors ONLY the selected filters
+(`allSelectedFilterConditions()` → `buildFilterConditions` builds only ticked
+gates; the strategy Details "Entry" shows only those conditions via `condLabel`).
+Removed a wrongly-added filter list in the Selected Strategies section (that
+belongs to strategy mode). `runFilterPaper()` now logs the EXACT selected entry
+filters (via new `selectedFilterNames()`, which excludes research-stream flags
+like Candlestick/Elliott — those gate AI research, not entries), so pressing the
+button confirms which filters are monitored. `filterSummary()` reuses
+`selectedFilterNames()`.
+
+## Update (2026-09-01) — HFT "execute on" enable/disable checkbox (Candle Close)
+
+**User request:** the HFT (ultrafast) row's "execute on Candle Close" must be
+driven by a real enable/disable checkbox that works 100% — enabling/disabling the
+100ms scanner behavior, mutually exclusive with normal execution, persistent,
+and UI-synced.
+
+**Shipped (`aismart.js?v=111`, `templates/index.html`):**
+- New `astHftExecOnCb` checkbox next to the "execute on" select (default checked).
+  Checked = scanner forces every `cmpType:'candle'` strategy condition to be
+  tested against the chosen candle value (`hftExecOn`, default `close`).
+  Unchecked = override disabled; each condition uses its own `candleKey`
+  (same as the normal 1500ms poll).
+- `defaultState.universal.hftExecEnabled: true`; migration default added
+  (`if (typeof !== 'boolean') = true`); `readUniversal()` reads the checkbox;
+  `applyUniversalToUI()` restores it on boot/load.
+- `hftScan()`: `_hftExecOn = (u.hftExecEnabled !== false) && valid(u.hftExecOn)
+  ? u.hftExecOn : null` (prev saved/restored as before). Consumed at `cmpReadAt`
+  via `const k = _hftExecOn || cond.candleKey || 'close'`.
+- `syncHftUI()`: checkbox + select fade/disable when HFT master is off; the value
+  select additionally fades/disable when its enable checkbox is unchecked, so the
+  UI always reflects the active override.
+- Mutual exclusion of run modes unchanged; timer start/stop logic untouched.
+
+**To verify (after user reload, Dhan/WS reconnect on 8081):** toggle the checkbox
+with HFT ON — checked forces close-based reads in the 100ms scan, unchecked
+returns to per-condition candle keys; refresh page → state persists.
+
+## Update (2026-09-01) — Sahi-style two-layer NIFTY trend filter (overall + current) everywhere
+
+**User request:** like the Sahi broker app, filter the NIFTY trend into OVERALL
+and CURRENT layers, and assign that filtered trend everywhere the NIFTY trend is
+needed / options are connected to it. Confirmed semantics: **trade only when BOTH
+layers agree** (BULL+BULL = bullish, BEAR+BEAR = bearish, anything else = NO
+directional bias), applied at **every NIFTY-trend touchpoint**.
+
+**Shipped (`aismart.js?v=112`, `smart_ntrader.js?v=49`):**
+- `aismart.js`:
+  - `niftyTrendAnalysis()` now also computes the Sahi-style layers (mirrors
+    `smart_ntrader.detectNifty`): OVERALL = close vs EMA50 + EMA50 slope
+    (BULL/BEAR/RANGE); CURRENT = EMA9/21 separation% (>0.05) + EMA9 slope
+    (BULL/BEAR/FLAT). Returned as `overall`/`current`, propagated through
+    `combineNiftyTfs` (5min primary) and `niftyBias` single-tf path.
+  - New `niftyOperativeDir(n)` helper: `bullish` only when overall==='BULL' &&
+    current==='BULL'; `bearish` only when both 'BEAR'; else null.
+  - Operative dir now drives: entry/exit gates (`niftyGateMet`/`niftyGateMetSync`),
+    `_lastNiftyDir` (poll + boot), trend-following drop scan, gate status paint
+    in `updateNiftyBiasStatus`. `_lastNiftyDir` being operative automatically
+    filters CE/PE auto side (`autoRunInSide`), option leg picker (`contractsFor`
+    ntSide), NIFTY trend stock picker (`niftyTrendSymbols`/`pruneNiftyTrendSymbols`)
+    and the trend list UI. `_niftySummary` now shows "overall X / current Y" (+
+    "no bias" when mixed); GIFT/VIX enhancement still only adjusts the displayed
+    ensemble `dir`, decisions come from the layers.
+- `smart_ntrader.js`:
+  - New `niftyOperative()` helper (same both-agree rule on `state.nifty`).
+  - Applied at: `trendSideQualify`, `condGateEval` (mixed/FLAT → zone-only join
+    branch), `computeActive` neutrals (`condFor(niftyOperative())`), `decideEntry`
+    (now takes full `niftyTrend` and requires overall+current agreement),
+    trend-drop scan, BB%b auto-alert targets/side, fetched-stocks display, and
+    the COND/NIFTY status line. Display badges still show both layers.
+
+**Notes:** `detectNifty` (smart_ntrader) already produced overall+current; AST's
+single weighted `dir` (score/MACD/RSI/Stoch/DI/volume ensemble) is kept for the
+displayed confidence/strength but no longer gates decisions on its own. Mixed
+regime (overall disagrees with current) behaves like the existing FLAT path in
+cond gates (zone parts still work); CE/PE auto-picking and trend stock picks are
+blocked. `enhanceNiftyBias` GIFT/VIX votes preserved via Object.assign.
+
+**To verify (after user reload):** NIFTY status shows overall/current; when they
+disagree the trend list shows "unknown", auto CE/PE side falls back to universe
+classification, and gates don't fire.
+
+**Follow-up fix (`aismart.js?v=113`, `smart_ntrader.js?v=50`):** the CURRENT
+(momentum) layer used a hard 0.05% EMA9/21-separation dead-band. Live NIFTY was
+genuinely bullish at the EMA50 layer (OVERALL=BULL) yet CURRENT stayed FLAT
+(separation ~0.016%), so the two layers NEVER agreed -> operative dir null ->
+"waiting for the live feed" and NO trend-following F&O stocks picked anywhere
+(AST trend list / Auto Select side / leg pick, smart_ntrader qualify + decideEntry,
+AE via _lastNiftyDir). Fixed CURRENT in BOTH engines to direction + slope only
+(no % band): e9>e21 && slope9>=0 -> BULL, e9<e21 && slope9<=0 -> BEAR, else FLAT.
+Verified on live 5min/1min: OVERALL=BULL CURRENT=BULL OPERATIVE=bullish.
+`renderNiftyTrendList` now also tells apart "no data yet (live feed)" vs
+"overall X / current Y - layers disagree -> no directional bias".
+
+**Follow-up (`aismart.js?v=114`, `smart_ntrader.js?v=51`):** user asked to DROP the
+FLAT blocking - when CURRENT is FLAT, stocks must be selected from the OVERALL
+trend. Changed both `niftyOperativeDir`/`niftyOperative`: direction = OVERALL
+(EMA50) regime; CURRENT only VETOES on a genuine CONTRADICTION (overall BULL +
+current BEAR, or overall BEAR + current BULL). CURRENT=FLAT = no vote -> follow
+OVERALL. Only overall RANGE (or contradiction) -> null / no bias. So "Bullish
+(overall) / Flat (current)" now picks bullish stocks. Verified all 8 combos.
+
+
+## Update (2026-09-01) — "All Indicators & Filters Together" entry (AST + AE), enable/disable checkbox
+
+**User request:** trades still open into straight loss even when all entry
+conditions appear met; indicators/filters were NOT being used together for the
+entry. Wanted: in BOTH the AI Smart (AST) and Auto Experiment (AE) engines a new
+function (replacing the old partial-pass logic) so the entry uses ALL selected
+indicators/filters together — behind an enable/disable checkbox. Enable =
+strategy built on the full indicator/filter set together; disable = old default.
+
+**Shipped (client-only):**
+- `aismart.js` (AST):
+  - New `entryFireAllInOne(s, candles, i)`: strict AND of primary entry (incl.
+    chain/pane/gap) + EVERY `entryExtra` condition + candlestick patterns — no
+    N-of-M threshold, no partial pass.
+  - `entryFireAt` dispatches to it when `state.allInOne === true` (new
+    `defaultState` flag); old N-of-M path kept as the OFF (default) behavior.
+  - New helpers `directionFilterConditions(tpl)` (direction-matched filter
+    conditions) and `strictEntryOkAt(tpl, candles, i)` (strict all-together eval
+    on any candle series).
+  - Public API: `onAllInOne()` (checkbox → state + cache clear + save + log),
+    `allInOneEnabled()`, `filterConditionsFor(tpl)`, `strictEntryOk(tpl,
+    candles, i)`; `applyAllInOneToUI()` synced in `applyUniversalToUI` + boot.
+  - Engine-settings template now captures/applies `allInOne`.
+  - Data Pool "Entry" column now evaluates `workingStrategy(s)` (filters
+    included) so the readout matches the live gate.
+  - `signalDiag` prints `extra[N] ALL` in strict mode.
+- `autoexperiment.js` (AE):
+  - `state.allInOne` flag (defaultState + save + sanitize).
+  - `evalEntryLive`: when `state.allInOne` AND `window.AISmartTrading.
+    strictEntryOk` exist, the entry = `AISmartTrading.strictEntryOk(r, candles,
+    last)` (own conditions + entryExtra + candlestick + all direction-matched
+    AST filters, strict AND). OFF = old entry.
+  - Public API `onAllInOne()`; `applyUniversalToUI` syncs the checkbox.
+- `templates/index.html`: `astAllInOne` checkbox in the Indicator filters row
+  ("All together (strict AND)"), `aeAllInOne` checkbox in the AE toolbar
+  ("All indicators/filters together (strict AND)").
+- Version bumps: `aismart.js?v=106`, AE now served as
+  `static/autoexperiment.v14.js?v=127` (copy of edited autoexperiment.js;
+  v13 still on disk but unreferenced).
+
+**How it fixes the complaint:** with the checkbox ON, a trade can only open when
+the strategy's own signal AND every selected indicator filter ALL pass on the
+same bar — no partial N-of-M pass, and the Data Pool readout shows the same
+result. Off = previous threshold-based default.
+
+**Notes / still-open:** AE strict mode depends on `AISmartTrading` being loaded
+(runtime check, safe if absent). Live verification still needs a page reload with
+saved Dhan credentials (WS was disconnected).
+
+---
+
+## Update (2026-09-01) — Running Trades GROSS, Closed Trades NET (charges at close only)
+
+**User request:** broker charges should NOT be deducted while a trade is open;
+they should be deducted ONCE when the trade closes and shown in Closed Positions
+(entry charges + exit charges added together).
+
+**Shipped (client-only):**
+- All running/open position displays now show GROSS P&L — no charge deduction,
+  no charges column, no "gross" sub-line:
+  - `paperrun.js` `tradeRowHTML` (Paper Run "Running Trades")
+  - `aismart.js` `runningRowHTML` (AI Smart "Running Trades") + `renderSummary`
+    unrealized ("Smart Live P&L (gross)")
+  - `papertrade.js` `renderOpenTable` + `renderSummary` / `renderChart` now use
+    gross `unrealizedPnl()` for the Live P&L card + equity curve
+  - `smart_ntrader.js` `renderPositions` running rows + `renderSummary` unrealized
+- Closed positions already recorded `netPnl = gross − charges.total` at close
+  (`computeChargesForTrade` = entry side + exit side = full round-trip) — kept
+  as-is. Realized P&L / charges totals all derive from that.
+- Headers in `templates/index.html` updated: astRunning + ntrRun now read
+  "P&L (gross)", Charges column removed.
+- Bumped: `papertrade.js?v=30`, `aismart.js?v=105`, `paperrun.js?v=20`,
+  `smart_ntrader.js?v=48`.
+
+**Caveats for next session:** `unrealizedPnlNet()` (papertrade.js) is now unused
+dead code but harmless. `chargesTotalForOpen` still exported (API surface).
+Result: with market closed, Running Trades now matches the chart's gross 0
+instead of showing a −₹77 charge loss; the charges appear only after the trade
+closes, summed into the Closed Trades net P&L.
+
+---
+
+## Update (2026-09-01) — Strategy engine reads ONLY the chart + shared Data Pool
+
+**Symptom reported:** strategies enter late / "indicator filter wrong read" —
+the engine evaluated indicators on a per-tick live-patched candle clone whose
+prices differed from the chart's rendered bars, so the strategy fired at a
+different moment than the chart.
+
+**Design shipped (client-only):**
+- `HftPool.getPatched(symbol, tf, days, ttl)` (hft_pool.js): one `/api/candles`
+  fetch per (symbol x tf) shared by every consumer (single-flight + TTL), and a
+  single shared `patchedStore[k]` copy whose last bar is live-LTP-patched ONCE
+  and reused until the raw array refetches or the LTP changes — every strategy
+  on that series reads the SAME array identity + content.
+- `strategies.js` fetchers now go chart-first, pool-second, engine-cache-mirror:
+  `fetchCandles` / `fetchOptionCandles` / `fetchCandlesFor` / `fetchIndexCandles`
+  all return `IndChart.getCandles()` when the chart is on that symbol+tf (so the
+  strategy reads the exact rendered bars incl. the in-place live-patched forming
+  bar), else `HftPool.getPatched`. The engine's own `/api/candles` fetches,
+  `_candleInflight`, `_candleBackoff`, `_markCandleBackoff`, and per-strategy
+  `candleCache` writes are GONE. `candleCache` remains ONLY as a mirror of the
+  exact arrays the pool/chart returned (key `sid:exch:tf:days`) so Running
+  Trades P&L (`tradeChartPrice`) and HFT fast paths read the same series.
+  `liveBar` kept solely for `aismart.js` consumers (3215/3229/3243) — no longer
+  used by the engine fetchers.
+- `IndChart.renderedLastTwo` now matches the deployed instance by id AND settings
+  (`JSON.stringify`), so a strategy whose condition uses EMA21 reads the EMA21
+  line (never a same-id EMA9 instance), and `addIndicator(id, settings)` +
+  `IndChart.setIndicatorSettings(id, settings)` deploy/sync the strategy's EXACT
+  saved settings onto the chart — chart line and engine read always agree.
+  `crossdetect.js` `readLastTwo` already goes through
+  `renderedLastTwo`/`computeLastTwo`, so cross detection shares the same series.
+- `autoDeployIndicators` (strategies.js) now deploys each indicator WITH the
+  strategy's saved settings (entry/exit/chain/pane conditions, first occurrence
+  wins per id) and re-syncs on every `start()`.
+
+**Caveats for next session:**
+- The chart's `patchLastBar` mutates its `candles` array in place and
+  `IndChart.getCandles()` returns that same array, so chart-first reads always
+  equal the rendered series. For OFF-chart symbols the pool's shared patched
+  copy is the single source — never the live-feed quote store.
+- `renderedLastTwo` falls back to `computeLastTwo` when the chart is on a
+  different symbol or settings differ (compute runs on the same shared candles,
+  so values stay consistent).
+- Dhan/WS was disconnected at the end of the session; live verification needs a
+  page reload via saved credentials.
+- Bumped: `indicators.js?v=49`, `crossdetect.js?v=7`, `strategies.js?v=69`,
+  `hft_pool.js?v=4`.
+
+---
+
+## Update (2026-09-01) — Running Trades P&L disconnected from live feed
+
+**Symptom reported:** live feed (WS tick LTP) is delayed and Running Trades kept
+showing a wrong loss.
+
+**Fix shipped (client-only, `aismart.js?v=104`, `paperrun.js?v=19`, inline
+index.html):** Running Trades / Running Positions P&L no longer reads the
+live-feed quote store (`clientQuotes`) at all. A single shared
+`window.tradeChartPrice(pos)` (index.html, next to `liveQuoteForSymbol`) is now
+the ONE source of a position's current price used by BOTH the chart's running
+P&L label (`syncTradeChartLines` -> `liveLineTitle`, label prefix now "CHART"
+not "LIVE") AND Running Trades (`currentPriceForPos` paperrun,
+`positionCurrentPrice` aismart, both delegate to `tradeChartPrice`). Logic: if
+the position's symbol is the displayed chart -> that chart's last candle close
+(returns null when the chart has no candles, so an empty chart can never
+disagree); else `StratEngine.candleCache` last close. The live-feed helpers
+were removed (`quoteForPos`, `posQuoteKey`, `instrumentQuoteKey` paperrun;
+`positionQuote`, `positionQuoteKey` aismart). Live feed is still used ONLY for
+the chart's SL/TP line clamping (`liveQuoteForSymbol`), never for P&L. So chart
+running P&L and Running Trades can never diverge — with market closed and no
+candle data both go blank instead of showing a stale -117.
+
+Caveat for next session: after this fix, if the user's trade's chart HAS candles
+the chart line will now show the real (possibly loss) PnL consistently with the
+Running Trades row — the "chart 0 vs trades -117" divergence is gone by
+construction.
+
+---
+
 ## Update (2026-09-01) — "Strikes not available" (strategy monitor + trend)
 
 **Symptoms reported:** "Strategies running me strikes nahi dikh rahi hain aur

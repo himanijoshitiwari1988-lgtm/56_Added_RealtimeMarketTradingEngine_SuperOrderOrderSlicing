@@ -242,10 +242,19 @@
   /* The NIFTY trend-following filter is active only when the explicit toggle
      is on (auto stock-pickup mode no longer exists). */
   function trendFilterActive() { return state.trend.enabled; }
+  /* Sahi-style two-layer filter. Direction = the OVERALL (EMA50) regime; the
+     CURRENT (EMA9/21) layer only VETOES when it genuinely CONTRADICTS (overall
+     BULL + current BEAR, or overall BEAR + current BULL). CURRENT=FLAT carries
+     no vote -> follow the OVERALL regime; overall RANGE -> null (no bias). */
+  function niftyOperative() {
+    if (state.nifty.overall === 'BULL') return state.nifty.current === 'BEAR' ? null : 'BULL';
+    if (state.nifty.overall === 'BEAR') return state.nifty.current === 'BULL' ? null : 'BEAR';
+    return null;
+  }
   function trendSideQualify(stock, cls) {
     if (isCommodity(stock.sym)) return true;
     if (!trendFilterActive()) return true;
-    var nc = state.nifty.current;
+    var nc = niftyOperative();
     var chg = dailyChangePct(stock);
     var thresh = trendPct();
     if (isNaN(chg)) return false;
@@ -328,7 +337,10 @@
      allocations; runs once per tick (see _dbgCondGateMs). */
   function condGateEval() {
     if (!state.condition.enabled) { state.cond.bull = true; state.cond.bear = true; return; }
-    var nc = state.nifty.current;
+    /* Two-layer agreement: a clean BULL/BEAR regime uses the matching row only;
+       a mixed (overall != current) or FLAT regime has no direction to match, so
+       the outer connector joins the two BB%B zone parts. */
+    var nc = niftyOperative();
     var bb = state.nifty.bb;
     if (nc === 'BULL') {
       state.cond.bull = condRowGate(state.condition.bull, bb);
@@ -604,9 +616,12 @@
     var overall = (last.close > last.e50 && last.slope50 > 0) ? 'BULL'
       : (last.close < last.e50 && last.slope50 < 0) ? 'BEAR' : 'RANGE';
     var diff = last.e9 - last.e21;
-    var pct = (last.e21 > 0) ? (diff / last.e21) * 100 : 0;
-    var current = (pct > 0.05 && last.slope9 > 0) ? 'BULL'
-      : (pct < -0.05 && last.slope9 < 0) ? 'BEAR' : 'FLAT';
+    /* CURRENT = short momentum: EMA9 above EMA21 AND EMA9 still rising ->
+       BULL; below AND falling -> BEAR; otherwise FLAT. No % dead-band (a hard
+       0.05% band left current FLAT in real uptrends where EMA9 hugs EMA21, so
+       the two layers never agreed and trend stocks were not picked). */
+    var current = (diff > 0 && last.slope9 >= 0) ? 'BULL'
+      : (diff < 0 && last.slope9 <= 0) ? 'BEAR' : 'FLAT';
     var bb = ind.bb;
     var reversal = '';
     if (bb) {
@@ -651,7 +666,7 @@
 
   /* ---------------- entry decision (pure, <5ms) ---------------- */
 
-  function decideEntry(stock, ind, niftyCurrent) {
+  function decideEntry(stock, ind, niftyTrend) {
     if (!ind || ind.n < 25) return null;
     /* Commodities: no NIFTY regime. Trade the FUTURES on the commodity's OWN
        trend - BULL classification + fresh EMA9/21 bullish cross on its own
@@ -664,8 +679,8 @@
       return (diff > 0 && ind.last.slope9 > 0 && cross <= 0) ? 'LONG' : null;
     }
     var side = null;
-    if (niftyCurrent === 'BULL' && stock.cls === 'BULL') side = 'CE';
-    else if (niftyCurrent === 'BEAR' && stock.cls === 'BEAR') side = 'PE';
+    if (niftyTrend && niftyTrend.overall === 'BULL' && niftyTrend.current === 'BULL' && stock.cls === 'BULL') side = 'CE';
+    else if (niftyTrend && niftyTrend.overall === 'BEAR' && niftyTrend.current === 'BEAR' && stock.cls === 'BEAR') side = 'PE';
     if (!side) return null;
     /* BB%B gate (AST integration): don't chase a CE buy into an overbought
        stock, and don't buy a PE into an oversold one. */
@@ -921,7 +936,7 @@
     var bIdx = 0, rIdx = 0;
     for (j = 0; j < g.bulls.length; j++) { var b = g.bulls[j]; if (b.enabled && b.tfOk !== false && bIdx < bullCap) { b.active = true; bIdx++; } }
     for (j = 0; j < g.bears.length; j++) { var r = g.bears[j]; if (r.enabled && r.tfOk !== false && rIdx < bearCap) { r.active = true; rIdx++; } }
-    for (j = 0; j < g.neus.length; j++) { var nn = g.neus[j]; if (nn.enabled && nn.tfOk !== false && condFor(state.nifty.current)) nn.active = true; }
+    for (j = 0; j < g.neus.length; j++) { var nn = g.neus[j]; if (nn.enabled && nn.tfOk !== false && condFor(niftyOperative())) nn.active = true; }
   }
 
   /* ---------------- universe classification warmup ---------------- */
@@ -1282,7 +1297,7 @@
       var sideCls = null;
       if (mode === 'bull') sideCls = 'BULL';
       else if (mode === 'bear') sideCls = 'BEAR';
-      else if (mode === 'auto') sideCls = (state.nifty.current === 'BULL') ? 'BULL' : (state.nifty.current === 'BEAR') ? 'BEAR' : null;
+      else if (mode === 'auto') sideCls = niftyOperative();
       if (!sideCls) return [];
       var out = [];
       for (var i = 0; i < state.stocks.length; i++) {
@@ -1295,7 +1310,7 @@
       var mode = (ln.trade && ln.trade.mode) || 'auto';
       var targets = alertTradeTargets(mode);
       if (!targets.length) return;
-      var side = (mode === 'bear' || (mode === 'auto' && state.nifty.current === 'BEAR')) ? 'PE' : 'CE';
+      var side = (mode === 'bear' || (mode === 'auto' && niftyOperative() === 'BEAR')) ? 'PE' : 'CE';
       /* Max-trades cap (Max trades / Auto trades): Auto = unlimited; Max =
          fill only the remaining open-position slots, skip when reached. */
       var remaining = tradeCapRemaining();
@@ -1869,7 +1884,7 @@
        force-exit any open position whose stock is no longer on the NIFTY trend
        side / above the daily change% threshold (or has no live quote). */
     if (trendFilterActive()) {
-      var nc = state.nifty.current;
+      var nc = niftyOperative();
       var thresh = trendPct();
       for (var pi = 0; pi < state.stocks.length; pi++) {
         var ps = state.stocks[pi];
@@ -1899,7 +1914,7 @@
       if (pos && !isCommodity(act.sym) && niftyTrend.reversal.indexOf(act.cls === 'BULL' ? 'BEARISH' : 'BULLISH') !== -1) {
         exitPosition(act);
       }
-      var side = decideEntry(act, ind, niftyTrend.current);
+      var side = decideEntry(act, ind, niftyTrend);
       if (side && !act.inPos && !tradeCapReached()) {
         var lb = lastBarTime(state.series[k]);
         if (lb && lb !== act.firedBar) {
@@ -2191,8 +2206,8 @@
       ' · OSL ' + (state.overallSl.enabled ? state.overallSl.pct + '%' : 'OFF') +
       ' · TF ' + (trendFilterActive() ? 'ON (' + trendPct() + '%)' : 'OFF') +
       ' · TRD ' + (state.tradeCap.auto ? 'AUTO' : (state.tradeCap.enabled ? 'MAX ' + state.tradeCap.count + ' (' + openTradeCount() + ' open)' : 'OFF')) +
-      ' · COND ' + (state.condition.enabled ? (state.nifty.current === 'BULL' ? (state.cond.bull ? 'BULL OK' : 'BULL BLOCKED') : state.nifty.current === 'BEAR' ? (state.cond.bear ? 'BEAR OK' : 'BEAR BLOCKED') : (state.cond.bull ? 'FLAT OK' : 'FLAT BLOCKED')) : 'OFF') +
-      ' · NIFTY ' + state.nifty.current);
+      ' · COND ' + (state.condition.enabled ? (niftyOperative() === 'BULL' ? (state.cond.bull ? 'BULL OK' : 'BULL BLOCKED') : niftyOperative() === 'BEAR' ? (state.cond.bear ? 'BEAR OK' : 'BEAR BLOCKED') : (state.cond.bull ? 'FLAT OK' : 'FLAT BLOCKED')) : 'OFF') +
+      ' · NIFTY ' + (niftyOperative() || '--'));
 
     var tt = el('ntrTrendToggle');
     if (tt && tt.textContent !== ('Trend Follow: ' + (state.trend.enabled ? 'ON' : 'OFF'))) {
@@ -2230,7 +2245,7 @@
   function renderFetched() {
     var box = el('ntrFetched');
     if (!box) return;
-    var nc = state.nifty.current;
+    var nc = niftyOperative();
     var out = '';
     if (trendFilterActive()) {
       var thresh = trendPct();
@@ -2445,18 +2460,17 @@
           var q = quoteForSym({ id: p.symbolId, exch: p.symbolExch });
           var cur = (q && q.ltp) ? Number(q.ltp) : p.entryPrice;
           var pnl = (p.side === 'BUY' ? (cur - p.entryPrice) : (p.entryPrice - cur)) * p.qty;
-          var chOn = chargesOn();
-          var charges = (chOn && ntPaper() && ntPaper().chargesTotalForOpen)
-            ? ntPaper().chargesTotalForOpen(p, cur) : 0;
-          var net = pnl - charges;
-          var col = net >= 0 ? '#00d4aa' : '#ff4d6a';
+          /* Running/open trades show GROSS P&L only — no broker-charge
+             deduction while the trade is open. Charges (entry + exit
+             round-trip) are applied ONCE at close and show net in Closed. */
+          var col = pnl >= 0 ? '#00d4aa' : '#ff4d6a';
           var guard = (p._slGuard && p._slGuard.hunt) ? '<span style="color:#ff9800">HUNT ' + (p._slGuard.widenedTo != null ? p._slGuard.widenedTo.toFixed(2) : '') + '</span>' : '--';
           var qtyTxt = p.qty;
           if (p.lotSize) qtyTxt = p.qty + ' <span style="font-size:8px;color:#666">(' + (p.lots || Math.round(p.qty / p.lotSize)) + '&times;' + p.lotSize + ')</span>';
-          html += '<tr><td>' + p.symbol + '</td><td>' + qtyTxt + '</td><td>' + p.entryPrice.toFixed(2) + '</td><td>' + cur.toFixed(2) + '</td><td style="color:' + col + '">' + (net >= 0 ? '+' : '') + fmtMoney(net) + (chOn ? '<br><span style="font-size:8px;color:#888">gross ' + (pnl >= 0 ? '+' : '') + fmtMoney(pnl) + '</span>' : '') + '</td><td style="color:#888">' + (chOn ? fmtMoney(charges) : '--') + '</td><td style="color:#888">' + (p.slPct || 0) + '%/' + (p.targetPct || 0) + '%' + (p.tpPct > 0 ? ' <span style="color:#26a69a">TP ' + p.tpPct + '%</span>' : '') + '</td><td>' + guard + '</td></tr>';
+          html += '<tr><td>' + p.symbol + '</td><td>' + qtyTxt + '</td><td>' + p.entryPrice.toFixed(2) + '</td><td>' + cur.toFixed(2) + '</td><td style="color:' + col + '">' + (pnl >= 0 ? '+' : '') + fmtMoney(pnl) + '</td><td style="color:#888">' + (p.slPct || 0) + '%/' + (p.targetPct || 0) + '%' + (p.tpPct > 0 ? ' <span style="color:#26a69a">TP ' + p.tpPct + '%</span>' : '') + '</td><td>' + guard + '</td></tr>';
         }
       }
-      tb.innerHTML = html || '<tr><td colspan="8" style="color:#555;font-size:9px">No Smart NTrader positions open</td></tr>';
+      tb.innerHTML = html || '<tr><td colspan="7" style="color:#555;font-size:9px">No Smart NTrader positions open</td></tr>';
     }
     var tbc = el('ntrClosedBody');
     if (tbc) {
@@ -2499,12 +2513,14 @@
     var realized = 0;
     for (i = 0; i < closed.length; i++) realized += (chOn && closed[i].netPnl != null) ? closed[i].netPnl : (closed[i].pnl || 0);
     var unreal = 0;
+    /* Live P&L is GROSS: running trades never deduct broker charges — charges
+       (entry + exit round-trip) are applied once at close and show in the
+       realized P&L. */
     for (i = 0; i < open.length; i++) {
       var p = open[i];
       var q = quoteForSym({ id: p.symbolId, exch: p.symbolExch });
       if (q && q.ltp) {
-        var g = (p.side === 'BUY' ? (Number(q.ltp) - p.entryPrice) : (p.entryPrice - Number(q.ltp))) * p.qty;
-        unreal += (chOn && ntPaper() && ntPaper().chargesTotalForOpen) ? g - ntPaper().chargesTotalForOpen(p, Number(q.ltp)) : g;
+        unreal += (p.side === 'BUY' ? (Number(q.ltp) - p.entryPrice) : (p.entryPrice - Number(q.ltp))) * p.qty;
       }
     }
     var live = realized + unreal;

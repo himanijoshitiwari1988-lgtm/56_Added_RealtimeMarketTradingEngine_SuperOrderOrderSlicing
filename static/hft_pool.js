@@ -29,6 +29,13 @@
   var store = {};
   var subs = [];
 
+  /* One shared, live-patched copy per pool key. The pool hands every reader the
+     SAME patched array (same identity + same content) until either the raw
+     candles refetch OR the live feed LTP for that symbol changes, so the
+     content-keyed indicator cache computes each series once and every strategy
+     on the symbol reads the identical values. */
+  var patchedStore = {};
+
   function keyFor(symbol, tf, days) {
     return String(symbol.id) + ':' + (symbol.exch || '') + ':' + (tf || '') + ':' + (days || 0);
   }
@@ -76,11 +83,12 @@
     }
   }
 
-  function getCandles(symbol, tf, days) {
+  function getCandles(symbol, tf, days, ttl) {
     var k = keyFor(symbol, tf, days);
+    var ttlMs = (ttl && ttl > 0) ? ttl : CANDLE_TTL;
     var now = Date.now();
     var e = store[k];
-    if (e && e.candles && now - e.at < CANDLE_TTL) {
+    if (e && e.candles && now - e.at < ttlMs) {
       return Promise.resolve(e.candles);
     }
     if (e && e.promise) return e.promise;
@@ -106,6 +114,35 @@
     });
     e.promise = p;
     return p;
+  }
+
+  /* Shared candles with the last (forming) bar's close patched to the live feed
+     LTP. Patches ONE shared copy (not per reader) and reuses it until the raw
+     array refetches or the LTP changes, so every consumer on this key sees the
+     exact same series. */
+  function getPatched(symbol, tf, days, ttl) {
+    var k = keyFor(symbol, tf, days);
+    return getCandles(symbol, tf, days, ttl).then(function (candles) {
+      if (!candles || !candles.length) return candles;
+      var q = quote(symbol);
+      var ltp = (q && q.ltp != null) ? Number(q.ltp) : null;
+      var e = patchedStore[k];
+      if (e && e.ref === candles && e.ltp === ltp) return e.patched;
+      var last = candles[candles.length - 1];
+      var out;
+      if (ltp && isFinite(ltp) && ltp > 0) {
+        out = candles.slice();
+        out[out.length - 1] = Object.assign({}, last, {
+          close: ltp,
+          high: Math.max(Number(last.high) || ltp, ltp),
+          low: Math.min(Number(last.low) || ltp, ltp)
+        });
+      } else {
+        out = candles;
+      }
+      patchedStore[k] = { ref: candles, ltp: ltp, patched: out };
+      return out;
+    });
   }
 
   function quote(symbol) {
@@ -141,6 +178,7 @@
 
   window.HftPool = {
     getCandles: getCandles,
+    getPatched: getPatched,
     quote: quote,
     evalEntry: evalEntry,
     indSeries: indSeries,

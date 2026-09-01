@@ -76,6 +76,9 @@ window.createPaperRun = function (suffix) {
           runIn: st.runIn || {},
           premiumOnly: st.premiumOnly === true,
           strike: st.strike || {},
+          /* Synthetic Indicator-filters-mode strategy (one per universe symbol);
+             rendered with its own tag and its fetched strikes shown. */
+          filterBuilt: s._filterBuilt === true,
           progress: (st.runProgress || {})[s.id != null ? s.id : s.key]
         });
       });
@@ -207,33 +210,50 @@ window.createPaperRun = function (suffix) {
   /* The charts a strategy runs on, each with its label and an opener. The spot
      chart and the selected-strike option premium charts are listed separately,
      once per symbol the strategy is actually trading on. AI Smart strategies
-     list every picked premium contract as its own chart. */
+     list every picked premium contract as its own chart. The fetched selected
+     strikes are ALWAYS listed for AI Smart strategies too - even when the run
+     chart is spot (F&O stocks) the engine still resolves option contracts for
+     execution, so the monitored/traded strikes stay visible in the list. */
   async function chartsForStrategy(s) {
     const syms = strategySymbols(s);
     const charts = [];
+    const seen = {};
+    const add = (c) => {
+      if (!c || !c.sym || c.sym.id == null) return;
+      const k = String(c.sym.id);
+      if (seen[k]) return;
+      seen[k] = 1;
+      charts.push(c);
+    };
     for (const sym of syms) {
       const mode = runInModeFor(s, sym);
       if (mode === 'spot' || mode === 'both') {
         const spot = spotSymbolFor(s, sym);
-        if (spot) charts.push({ kind: 'spot', label: 'Spot chart', sym: spot });
+        if (spot) add({ kind: 'spot', label: 'Spot chart', sym: spot });
       }
       if (mode === 'premium' || mode === 'both') {
         if (s.engine === 'ast') {
           let premCharts = [];
           try { premCharts = await astPremiumChartsFor(s, sym); } catch (e) { premCharts = []; }
           if (premCharts.length) {
-            charts.push.apply(charts, premCharts);
+            premCharts.forEach(add);
             continue;
           }
         }
         const prem = await premiumSymbolFor(s, sym);
-        if (prem) charts.push({ kind: 'premium', label: 'Option premium chart', sym: prem });
+        if (prem) add({ kind: 'premium', label: 'Option premium chart', sym: prem });
+      } else if (s.engine === 'ast') {
+        /* Spot-run AI Smart strategy: append the fetched selected strikes
+           (premium contracts resolved for execution) so they are visible. */
+        let premCharts = [];
+        try { premCharts = await astPremiumChartsFor(s, sym); } catch (e) { premCharts = []; }
+        premCharts.forEach(add);
       }
     }
     if (!charts.length) {
       for (const sym of syms) {
         const spot = spotSymbolFor(s, sym);
-        if (spot) charts.push({ kind: 'spot', label: 'Spot chart', sym: spot });
+        if (spot) add({ kind: 'spot', label: 'Spot chart', sym: spot });
       }
     }
     return charts;
@@ -250,35 +270,13 @@ window.createPaperRun = function (suffix) {
     return out;
   }
 
-  /* Quote key for a position so live LTP / P&L can be shown. */
-  function posQuoteKey(pos) {
-    if (pos.symbolId != null) return String(pos.symbolExch === 'IDX_I' ? 'IDX_I:' + pos.symbolId : pos.symbolId);
-    if (pos.instrument) return instrumentQuoteKey(pos.instrument);
-    if (pos.instr) return instrumentQuoteKey(pos.instr);
-    if (typeof selectedSymbol !== 'undefined' && selectedSymbol) {
-      return selectedSymbol.exch === 'IDX_I' ? 'IDX_I:' + selectedSymbol.id : String(selectedSymbol.id);
-    }
-    return null;
-  }
-
-  function instrumentQuoteKey(instr) {
-    if (instr.kind === 'option' && instr.sid != null) return String(instr.sid);
-    const sym = instr.symbol;
-    if (!sym) return null;
-    return sym.exch === 'IDX_I' ? 'IDX_I:' + sym.id : String(sym.id);
-  }
-
-  function quoteForPos(pos) {
-    const key = posQuoteKey(pos);
-    if (!key) return null;
-    return (typeof clientQuotes !== 'undefined' && clientQuotes) ? clientQuotes[key] : null;
-  }
-
-  /* The option premium chart's current price: the last candle close of the
-     premium chart the trade runs on. Falls back to the chart candle cache
-     (StratEngine) when the displayed chart isn't this option, so the Running
-     Trades P&L matches the option premium chart even without a live quote. */
+  /* The chart's current price for a position: delegates to the single shared
+     chart/candle source (tradeChartPrice in index.html) so the Running Trades
+     P&L is guaranteed identical to the chart's running P&L — never the delayed
+     live feed. Falls back to local chart/candle logic only if the shared
+     helper is unavailable. */
   function premiumLastClose(pos) {
+    if (typeof window.tradeChartPrice === 'function') return window.tradeChartPrice(pos);
     if (pos.symbolId == null) return null;
     const sid = Number(pos.symbolId);
     if (typeof selectedSymbol !== 'undefined' && selectedSymbol &&
@@ -303,13 +301,10 @@ window.createPaperRun = function (suffix) {
     return best;
   }
 
-  /* Current price for a position: the live feed quote first (the same source
-     the chart overlay uses); when the trade is on the option premium chart but
-     no live quote is streaming yet, fall back to the premium chart's last
-     candle close so the Running Trades P&L matches the option premium chart. */
+  /* Current price for a position: the chart/candle close only. The live feed
+     quote source (clientQuotes) was removed entirely — Running Trades P&L now
+     always matches the chart's own price, never a delayed feed tick. */
   function currentPriceForPos(pos) {
-    const q = quoteForPos(pos);
-    if (q && q.live && q.ltp != null) return Number(q.ltp);
     return premiumLastClose(pos);
   }
 
@@ -393,25 +388,57 @@ window.createPaperRun = function (suffix) {
     const CP = window.CandlePatterns;
     return (CP && CP.PATTERNS && CP.PATTERNS[key]) ? CP.PATTERNS[key].name : key;
   }
+  function indSettingsShort(settings) {
+    const s = settings || {};
+    const p = [];
+    if (s.length != null) p.push('len ' + s.length);
+    if (s.factor != null) p.push('f ' + s.factor);
+    if (s.atrPeriod != null) p.push('atr ' + s.atrPeriod);
+    if (s.fast != null) p.push('fast ' + s.fast);
+    if (s.slow != null) p.push('slow ' + s.slow);
+    return p.length ? ' (' + p.join(', ') + ')' : '';
+  }
+  /* Human-readable entry/exit condition label. Candle-level gates (volume
+     surge, fake breakout, reversal) carry no indicator id - render them with a
+     real phrase instead of the old "none" placeholder. */
   function condLabel(c) {
     if (Array.isArray(c)) return c.map(x => condLabel(x)).join(' AND ');
-    if (!c) return 'none';
+    if (!c) return '';
     if (c.cmpType === 'candlestick_pattern' || c.cmpType === 'pattern') {
       return (c.candlePatterns || []).map(patternName).join(', ');
     }
-    if (!c.indId) return 'none';
-    const primary = indName(c.indId);
-    const logicMap = { gt: '>', lt: '<', gte: '>=', lte: '<=', eq: '=', neq: '!=', crossAbove: 'crosses above', crossBelow: 'crosses below', incUp: 'increasing upward', incDown: 'increasing downward' };
+    if (!c.indId) {
+      const gates = {
+        volUp: 'Volume surging up',
+        volDown: 'Volume surging down',
+        fakeBreakout: 'Fake breakout',
+        reversal: 'Reversal',
+        incUp: 'Increasing upward',
+        incDown: 'Increasing downward'
+      };
+      return gates[c.logic] || (c.logic ? String(c.logic) : '');
+    }
+    const primary = indName(c.indId) + indSettingsShort(c.indSettings);
+    const logicMap = {
+      gt: '>', lt: '<', gte: '>=', lte: '<=', eq: '=', neq: '!=',
+      crossAbove: 'crossed above', crossBelow: 'crossed below',
+      crossUpNow: 'crossed above', crossDownNow: 'crossed below',
+      incUp: 'increasing upward', incDown: 'increasing downward',
+      closeCrossAbove: 'close crossed above', closeCrossBelow: 'close crossed below',
+      gapUp: 'gap increasing vs', gapDown: 'gap decreasing vs',
+      asrSupGapUp: 'support gap widening', asrResGapUp: 'resistance gap widening'
+    };
     const lg = logicMap[c.logic] || c.logic;
-    if (c.logic === 'incUp' || c.logic === 'incDown') return primary + ' ' + lg;
+    if (c.logic === 'incUp' || c.logic === 'incDown' || c.logic === 'asrSupGapUp' || c.logic === 'asrResGapUp') return primary + ' ' + lg;
     let cmp;
-    if (c.cmpType === 'number') cmp = c.number;
+    if (c.cmpType === 'number') cmp = String(c.number);
     else if (c.cmpType === 'candle') cmp = 'candle ' + (c.candleKey || 'close');
     else if (c.cmpType === 'smoothed') cmp = 'signal (' + indName(c.indId) + ')';
     else if (c.cmpType === 'plot') cmp = 'plot (' + indName(c.indId) + ')';
-    else if (c.cmpType === 'indicator') cmp = indName(c.cmpIndId);
+    else if (c.cmpType === 'indicator') cmp = indName(c.cmpIndId) + indSettingsShort(c.cmpSettings);
     else cmp = '?';
-    return primary + ' ' + lg + ' ' + cmp;
+    const bare = (c.logic === 'crossUpNow' || c.logic === 'crossDownNow' || c.logic === 'closeCrossAbove' || c.logic === 'closeCrossBelow');
+    return primary + ' ' + lg + (bare || !cmp ? '' : ' ' + cmp);
   }
 
   function showStrategyDetail(s) {
@@ -419,14 +446,16 @@ window.createPaperRun = function (suffix) {
     if (!m) return;
     const title = $id('ptRunDetailTitle');
     if (title) title.textContent = 'Running Strategy';
-    const tag = ENGINE_TAG[s.engine] || { label: s.engine, color: '#888' };
-    const sideCol = s.cat === 'bearish' ? '#ef5350' : '#00d4aa';
-    const sideTag = 'LONG'; // buy-only engines: bearish strategies buy PE puts, never short
+    const tag = s.filterBuilt ? { label: 'Indicator filter', color: '#b39ddb' } : (ENGINE_TAG[s.engine] || { label: s.engine, color: '#888' });
+    const sideCol = s.filterBuilt ? '#b39ddb' : (s.cat === 'bearish' ? '#ef5350' : '#00d4aa');
+    const sideTag = s.filterBuilt ? 'ALL' : 'LONG'; // buy-only engines: bearish strategies buy PE puts, never short
     const vCol = s.score >= 75 ? '#ffd700' : (s.score >= 60 ? '#00d4aa' : (s.score >= 45 ? '#ff9800' : '#888'));
     const mode = runInModeFor(s);
     const modeLabel = mode === 'spot' ? 'Spot chart' : (mode === 'both' ? 'Spot + option premium charts' : 'Option premium chart');
     const entryStr = condLabel(s.entry);
-    const exitStr = condLabel(s.exit);
+    const exitStr = (s.exit && (s.exit.indId || s.exit.logic || Array.isArray(s.exit)))
+      ? condLabel(s.exit)
+      : ((s.exitExtra && s.exitExtra.length) ? condLabel(s.exitExtra) : 'Managed by SL / Trail TP / Fixed TP');
     const entryExtraStr = s.entryExtra && s.entryExtra.length ? condLabel(s.entryExtra) : null;
     const exitExtraStr = s.exitExtra && s.exitExtra.length ? condLabel(s.exitExtra) : null;
     let patStr = 'none';
@@ -526,9 +555,9 @@ window.createPaperRun = function (suffix) {
   }
 
   function strategyRowHTML(s) {
-    const tag = ENGINE_TAG[s.engine] || { label: s.engine, color: '#888' };
-    const sideCol = s.cat === 'bearish' ? '#ef5350' : '#00d4aa';
-    const sideTag = 'LONG'; // buy-only engines: bearish strategies buy PE puts, never short
+    const tag = s.filterBuilt ? { label: 'Indicator filter', color: '#b39ddb' } : (ENGINE_TAG[s.engine] || { label: s.engine, color: '#888' });
+    const sideCol = s.filterBuilt ? '#b39ddb' : (s.cat === 'bearish' ? '#ef5350' : '#00d4aa');
+    const sideTag = s.filterBuilt ? 'ALL' : 'LONG'; // buy-only engines: bearish strategies buy PE puts, never short
     const vCol = s.score >= 75 ? '#ffd700' : (s.score >= 60 ? '#00d4aa' : (s.score >= 45 ? '#ff9800' : '#888'));
     const mode = runInModeFor(s);
     const modeLabel = mode === 'spot' ? 'Spot' : (mode === 'both' ? 'Spot + Premium' : 'Premium');
@@ -564,14 +593,10 @@ window.createPaperRun = function (suffix) {
     const sideCol = p.side === 'BUY' ? '#00d4aa' : '#ef5350';
     const cur = currentPriceForPos(p);
     const pnl = tradePnl(p, cur);
-    /* Net P&L view when the shared Dhan broker-charge simulation is ON:
-       live open positions subtract their projected round-trip charges. */
-    const chargesOn = !!(window.PaperTrade && PaperTrade.getCharges && PaperTrade.getCharges());
-    const charges = (chargesOn && cur != null && window.PaperTrade && PaperTrade.chargesTotalForOpen)
-      ? PaperTrade.chargesTotalForOpen(p, cur)
-      : 0;
-    const netPnl = chargesOn && pnl != null ? pnl - charges : pnl;
-    const pnlCol = netPnl == null ? '#888' : (netPnl >= 0 ? '#00d4aa' : '#ef5350');
+    /* Running Trades shows GROSS P&L only — no broker-charge deduction while
+       the trade is open. Charges (entry + exit round-trip) are applied ONCE
+       when the trade CLOSES and are shown net in Closed Positions. */
+    const pnlCol = pnl == null ? '#888' : (pnl >= 0 ? '#00d4aa' : '#ef5350');
     const name = tradeName(p);
     const sym = symbolForPos(p);
     return '<div style="background:#12122a;border:1px solid #2d6d5a;border-radius:4px;padding:5px 8px;margin:2px 0;font-size:10px">' +
@@ -581,7 +606,7 @@ window.createPaperRun = function (suffix) {
         '<span style="color:#fff;flex:1;min-width:100px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(name) + '</span>' +
         (p.orderType === 'LIMIT' ? '<span style="color:#ffd700;font-size:8px;border:1px solid #ffd700;border-radius:3px;padding:0 3px">LIMIT</span>' : '') +
         '<span style="color:#888;min-width:60px">' + fmt2(p.entryPrice) + ' &rarr; ' + (cur != null ? fmt2(cur) : '--') + '</span>' +
-        '<span style="color:' + pnlCol + ';min-width:80px;text-align:right">' + (netPnl == null ? '--' : (netPnl >= 0 ? '+' : '') + fmtMoney(netPnl)) + (chargesOn && pnl != null ? '<div style="font-size:8px;color:#888">gross ' + (pnl >= 0 ? '+' : '') + fmtMoney(pnl) + '</div>' : '') + '</span>' +
+        '<span style="color:' + pnlCol + ';min-width:80px;text-align:right">' + (pnl == null ? '--' : (pnl >= 0 ? '+' : '') + fmtMoney(pnl)) + '</span>' +
         (sym
           ? '<button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px" onclick="PaperRun.openTradeChart(' + idx + ')">Open Chart</button>'
           : '') +

@@ -269,8 +269,10 @@ window.createPaperTrade = function (suffix) {
       const cur = (r.quote && r.quote.live && r.quote.ltp != null) ? Number(r.quote.ltp) : null;
       const pnl = cur !== null ? pnlFor(p, cur) : null;
       const pnlPct = pnl !== null ? pnlPctFor(p, pnl) : null;
-      const netPnl = (cur !== null && chargesEnabled) ? pnl - chargesTotalForOpen(p, cur) : pnl;
-      const col = (chargesEnabled ? (netPnl === null ? '#888' : (netPnl >= 0 ? '#00d4aa' : '#ef5350')) : (pnl === null ? '#888' : (pnl >= 0 ? '#00d4aa' : '#ef5350')));
+      /* Running/open trades show GROSS P&L only — no broker-charge deduction
+         while the trade is open. Charges (entry + exit round-trip) are applied
+         ONCE when the trade CLOSES and are shown net in Closed Trades. */
+      const col = (pnl === null ? '#888' : (pnl >= 0 ? '#00d4aa' : '#ef5350'));
       const sideCol = p.side === 'BUY' ? '#00d4aa' : '#ef5350';
       const tag = r.auto ? ' <span style="color:#66ccff;font-size:8px">AUTO</span>' : '';
       return '<tr>' +
@@ -281,7 +283,7 @@ window.createPaperTrade = function (suffix) {
         '<td>' + (cur !== null ? fmt(cur, 2) : '--') + '</td>' +
         '<td style="color:#00d4aa">' + fmt(p.targetPrice, 2) + (p.tpPct > 0 ? ' <span style="color:#26a69a;font-size:8px">FIX ' + fmt(p.tpPrice, 2) + '</span>' : '') + '</td>' +
         '<td style="color:#ef5350">' + fmt(p.stopLoss, 2) + (p.slTrailPct > 0 ? ' <span style="color:#ff6b6b;font-size:8px">' + (trailArmed(p, cur) ? (p.slTrailed ? 'TRAIL↑' : 'TRAIL') : 'TRAIL*') + ' ' + fmt(p.slTrailPct, 2) + '%</span>' : '') + '</td>' +
-        '<td style="color:' + col + '">' + (chargesEnabled ? (netPnl === null ? '--' : (netPnl >= 0 ? '+' : '') + fmtMoney(netPnl)) : (pnl === null ? '--' : (pnl >= 0 ? '+' : '') + fmtMoney(pnl))) + (chargesEnabled && pnl !== null ? '<div style="font-size:8px;color:#888">gross ' + (pnl >= 0 ? '+' : '') + fmtMoney(pnl) + '</div>' : '') + '</td>' +
+        '<td style="color:' + col + '">' + (pnl === null ? '--' : (pnl >= 0 ? '+' : '') + fmtMoney(pnl)) + '</td>' +
         '<td style="color:' + col + '">' + (pnlPct === null ? '--' : fmt(pnlPct, 2) + '%') + '</td>' +
         '</tr>';
     }).join('');
@@ -318,7 +320,9 @@ window.createPaperTrade = function (suffix) {
 
   function renderSummary() {
     const realized = realizedPnl();
-    const unrealized = chargesEnabled ? unrealizedPnlNet() : unrealizedPnl();
+    /* Live P&L = realized (net, charges banked at close) + unrealized GROSS
+       (running trades never deduct charges — they are applied only at close). */
+    const unrealized = unrealizedPnl();
     const live = realized + unrealized;
     const wins = state.closed.filter(t => (chargesEnabled && t.netPnl != null ? t.netPnl : t.pnl) > 0).length;
     const total = state.closed.length;
@@ -337,7 +341,7 @@ window.createPaperTrade = function (suffix) {
     if (!canvas) return;
     const points = equityCurve.map(p => ({ at: p.at, y: Math.round(p.y * 100) / 100 }));
     if (state.closed.length || state.position || Object.keys(state.autoPositions || {}).length) {
-      points.push({ at: Date.now(), y: Math.round((realizedPnl() + (chargesEnabled ? unrealizedPnlNet() : unrealizedPnl())) * 100) / 100 });
+      points.push({ at: Date.now(), y: Math.round((realizedPnl() + unrealizedPnl()) * 100) / 100 });
     }
     const labels = points.map(p => { const d = new Date(p.at); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0'); });
     const data = points.map(p => p.y);

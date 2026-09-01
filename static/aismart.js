@@ -776,6 +776,9 @@ window.createAISmartTrading = function (suffix) {
     const c = _workingCache.get(s.id);
     if (c && c.sig === fsig) return c.s;
     const copy = JSON.parse(JSON.stringify(s));
+    /* Indicator-filters-mode synthetic strategies already carry the selected
+       filter conditions as their entry conditions - do not append them again. */
+    if (copy._filterBuilt) { _workingCache.set(s.id, { sig: fsig, s: copy }); return copy; }
     const side = (s.cat === 'bearish') ? 'bearish' : 'bullish';
     const f = JSON.parse(JSON.stringify(state.filters || {}));
     /* Zero the opposite-direction filter section so only matching-side
@@ -802,6 +805,37 @@ window.createAISmartTrading = function (suffix) {
     _workingCache.set(s.id, { sig: fsig, s: copy });
     if (_workingCache.size > 500) _workingCache.clear();
     return copy;
+  }
+
+  /* Direction-matched filter conditions for a strategy template: only the
+     filters whose direction matches the strategy's category are built, so the
+     appended conditions can only reinforce the strategy's direction. Shared by
+     the AST strict mode and the Auto Experiment engine's "all together" entry. */
+  function directionFilterConditions(tpl) {
+    const side = (tpl && tpl.cat === 'bearish') ? 'bearish' : 'bullish';
+    const f = JSON.parse(JSON.stringify(state.filters || {}));
+    if (side === 'bullish') {
+      f.bearish = false;
+      BEAR_FILTER_KEYS.forEach(k => delete f[k]);
+    } else {
+      f.bullish = false;
+      BULL_FILTER_KEYS.forEach(k => delete f[k]);
+    }
+    return buildFilterConditions(tpl, f);
+  }
+
+  /* Strict all-together entry for any strategy template (AST strategy or AE
+     result): the strategy's own conditions + all direction-matched filters must
+     pass together on bar `i`. Used by the Auto Experiment engine when its
+     "all together" checkbox is ON. */
+  function strictEntryOkAt(tpl, candles, i) {
+    if (!tpl) return false;
+    const copy = JSON.parse(JSON.stringify(tpl));
+    const extra = (copy.entryExtra || []).slice();
+    const fc = directionFilterConditions(copy);
+    if (fc.length) extra.push.apply(extra, fc);
+    copy.entryExtra = extra;
+    return entryFireAllInOne(copy, candles, i);
   }
 
   /* Which directional indicator filter (if any) is active for strike pick and
@@ -1006,7 +1040,7 @@ window.createAISmartTrading = function (suffix) {
   function defaultState() {
     return {
       enabled: false,
-      universal: { lotSize: null, lots: 1, margin: 100000, tpPct: 1, manualTrail: true, aiSl: true, aiTp: true, manualSL: false, manualSLPct: 1, manualTrailTP: false, manualTrailTPPct: 20, manualTP: false, manualTPPct: 5, aiTP: false, rrEnabled: false, rrValue: 2, mtfConfirm: false, fnoLimit: true, tfs: { '1min': true, '5min': true }, tradeLimitEnabled: false, tradeLimitCount: 5, aiTrades: false, hft: false, hftOps: 6, hftExecOn: 'close', startTradeAfterEnabled: false, startTradeAfter: '09:15', noTradeAfterEnabled: false, noTradeAfter: '15:30', autoSquareOffEnabled: false, autoSquareOffTime: '15:20', astUseOwnSettings: false },
+      universal: { lotSize: null, lots: 1, margin: 100000, tpPct: 1, manualTrail: true, aiSl: true, aiTp: true, manualSL: false, manualSLPct: 1, manualTrailTP: false, manualTrailTPPct: 20, manualTP: false, manualTPPct: 5, aiTP: false, rrEnabled: false, rrValue: 2, mtfConfirm: false, fnoLimit: true, tfs: { '1min': true, '5min': true }, tradeLimitEnabled: false, tradeLimitCount: 5, aiTrades: false, hft: false, hftOps: 6, hftExecEnabled: true, hftExecOn: 'close', startTradeAfterEnabled: false, startTradeAfter: '09:15', noTradeAfterEnabled: false, noTradeAfter: '15:30', autoSquareOffEnabled: false, autoSquareOffTime: '15:20', astUseOwnSettings: false },
       runProgress: {},     // strategyId -> { pct, status, updated } live per-tick pipeline progress
       strike: { mode: 'both_atm', count: 3, optionType: 'both', positiveOnly: true },
       runIn: { index: 'both', fno: 'spot', comm: 'spot', default: false }, // chart the strategy run + trade execution runs on: 'spot', 'premium' or 'both'
@@ -1020,6 +1054,18 @@ window.createAISmartTrading = function (suffix) {
       commodity: { enabled: false, sids: [] }, // MCX commodity futures paper trading: trades each +Add-ed FUTCOM contract directly (spot mode), alongside stocks/F&O
       showPickedStrikes: false,
       filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullEma9_21: false, bearEma9_21: false, bullEma21_35: false, bearEma21_35: false, bullEma35_50: false, bearEma35_50: false, bullEma50_100: false, bearEma50_100: false, bullEma100_200: false, bearEma100_200: false, bullEma200_300: false, bearEma200_300: false, bullSt10_1_2: false, bearSt10_1_2: false, bullSt10_2_3: false, bearSt10_2_3: false, bullSt1CloseCrossAbove: false, bearSt1CloseCrossBelow: false, bullVwapCloseCrossAbove: false, bearVwapCloseCrossBelow: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false },
+      /* All-indicators-together entry mode: when ON the strategy's entry fires
+         only when the strategy's own conditions AND every selected indicator
+         filter pass together on the same bar (strict AND - no N-of-M). When OFF
+         the old default (threshold-based N-of-M) applies. */
+      allInOne: false,
+      /* Indicator-filters run mode: when ON the engine trades the selected
+         universe (top movers / NIFTY trend / chart symbols) placing a trade
+         only when ALL selected Bullish/Bearish indicator filters pass together
+         on the symbol/instrument chart (strict AND) - no saved strategy needed.
+         Mutually exclusive with the normal "Run Paper Trading" mode (checked
+         via the checkbox next to the run buttons). */
+      filterMode: false,
       niftyEntry: { enabled: false, dir: 'bullish', zone: 'above_upper' },
       niftyExit: { enabled: false, dir: 'bearish', zone: 'below_lower' },
       selected: {},
@@ -1051,7 +1097,8 @@ window.createAISmartTrading = function (suffix) {
          reads these to show the exact SL / Trail SL / TP / AI settings that
          were applied while a strategy was running. */
       settingsSnapshots: {},
-      dataPool: false // Live Data Pool monitor: shared realtime candle/indicator/filter readout for every resolved instrument
+      dataPool: false, // Live Data Pool monitor: shared realtime candle/indicator/filter readout for every resolved instrument
+      fastData: false // Ultrafast live feed: strategies read in-browser live candles built from WebSocket ticks instead of the Data Pool REST path
     };
   }
 
@@ -1122,6 +1169,7 @@ window.createAISmartTrading = function (suffix) {
       if (typeof s.universal.fnoLimit !== 'boolean') s.universal.fnoLimit = true;
       if (typeof s.universal.astUseOwnSettings !== 'boolean') s.universal.astUseOwnSettings = false;
       if (typeof s.dataPool !== 'boolean') s.dataPool = false;
+      if (typeof s.fastData !== 'boolean') s.fastData = false;
       if (!s.universal.tfs || typeof s.universal.tfs !== 'object') s.universal.tfs = { '1min': true, '5min': true };
       if (typeof s.universal.tfs['1min'] !== 'boolean') s.universal.tfs['1min'] = true;
       if (typeof s.universal.tfs['5min'] !== 'boolean') s.universal.tfs['5min'] = true;
@@ -1137,6 +1185,7 @@ window.createAISmartTrading = function (suffix) {
       if (!Number.isFinite(Number(s.universal.hftOps)) || Number(s.universal.hftOps) < 1) s.universal.hftOps = 6;
       if (Number(s.universal.hftOps) > 30) s.universal.hftOps = 30;
       if (['open', 'high', 'low', 'close'].indexOf(s.universal.hftExecOn) < 0) s.universal.hftExecOn = 'close';
+      if (typeof s.universal.hftExecEnabled !== 'boolean') s.universal.hftExecEnabled = true;
       if (typeof s.universal.startTradeAfterEnabled !== 'boolean') s.universal.startTradeAfterEnabled = false;
       if (typeof s.universal.noTradeAfterEnabled !== 'boolean') s.universal.noTradeAfterEnabled = false;
       if (typeof s.universal.autoSquareOffEnabled !== 'boolean') s.universal.autoSquareOffEnabled = false;
@@ -1337,6 +1386,57 @@ window.createAISmartTrading = function (suffix) {
       }
     }
     return out;
+  }
+
+  /* ---------------- Indicator-filters run mode ----------------
+     "Place trades based on Indicator filters: All together (strict AND)".
+     Instead of running saved strategies, the engine monitors the selected
+     universe (top gainers/losers, NIFTY trend-following stocks/strikes, or the
+     open chart symbol) and places a BUY trade only when EVERY selected
+     Bullish/Bearish indicator filter passes together on the symbol's chart
+     (strict AND, no N-of-M). A SINGLE synthetic strategy carries ALL selected
+     filter conditions in its primary entry (no entry-extra section - that stays
+     for normal strategies) and runs on every universe symbol through the
+     existing per-instrument evaluation/execution pipeline (same SL / trail TP /
+     fixed TP / lots / margin / AI risk). */
+
+  /* All selected Bullish+Bearish indicator filter conditions, built WITHOUT
+     direction matching so every ticked sub-filter becomes a mandatory AND gate
+     (contrast with directionFilterConditions used for normal strategies, which
+     zeroes the opposite section). */
+  function allSelectedFilterConditions() {
+    const tpl = { entry: { indId: 'ema', indSettings: { length: 9, source: 'close' }, valueKey: 'v0' }, entryExtra: [], exit: null, exitExtra: [], candlestick: { enabled: false, entry: [], exit: [] } };
+    return buildFilterConditions(tpl, state.filters || {});
+  }
+
+  /* The strategy set for Indicator-filters mode: exactly ONE synthetic strategy.
+     Its primary `entry` holds every selected filter condition (AND) and its
+     entry-extra is empty, so entry fires only when all selected filters pass
+     together. The per-symbol execution side is decided by the universe method
+     itself (NIFTY trend direction / top gainer-loser / active filter side), so
+     no per-symbol strategy binding is needed. */
+  function filterModeStrategies() {
+    const conds = allSelectedFilterConditions();
+    if (!conds.length) return [];
+    return [{
+      id: 'flt:all',
+      name: 'Indicator filter based trades (all together)',
+      cat: 'bullish',
+      method: '',
+      tf: '',
+      /* Primary entry = ALL selected filter conditions (strict AND). */
+      entry: conds,
+      exit: null,
+      entryExtra: [],
+      exitExtra: [],
+      entryThreshold: conds.length,
+      candlestick: { enabled: false, entry: [], exit: [] },
+      /* Synthetic strategy: never persisted and must not re-append the global
+         filters (they ARE the entry conditions). */
+      _filterBuilt: true,
+      createdAt: Date.now(),
+      autoSlPct: null
+    }];
   }
 
   /* ---------------- symbol / instrument resolution ---------------- */
@@ -1983,7 +2083,15 @@ window.createAISmartTrading = function (suffix) {
     }
     if (!dir) {
       host.style.display = '';
-      host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend unknown yet (waiting for the live feed) - no directional F&O stocks picked.</div>';
+      const cached = _niftyBiasCache[_niftyTf];
+      const nb = (cached && cached.bias) ? cached.bias : null;
+      if (nb && nb.overall && nb.current) {
+        const o = nb.overall === 'BULL' ? 'Bullish' : nb.overall === 'BEAR' ? 'Bearish' : 'Range';
+        const c = nb.current === 'BULL' ? 'Bullish' : nb.current === 'BEAR' ? 'Bearish' : 'Flat';
+        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend is <b style="color:#e67e22">' + o + ' (overall) / ' + c + ' (current)</b> - the two layers do NOT agree, so there is <b style="color:#e67e22">no directional bias</b> right now (waiting for overall + current to agree) - no directional F&O stocks picked.</div>';
+      } else {
+        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend unknown yet (waiting for the live feed) - no directional F&O stocks picked.</div>';
+      }
       return;
     }
     const list = (typeof SYMBOLS !== 'undefined' && Array.isArray(SYMBOLS)) ? SYMBOLS : [];
@@ -2319,6 +2427,21 @@ window.createAISmartTrading = function (suffix) {
     const e9 = emaSeries(C, 9), e21 = emaSeries(C, 21), e50 = emaSeries(C, 50);
     const e200 = n >= 220 ? emaSeries(C, 200) : null;
 
+    /* Sahi-style two-layer trend filter. OVERALL = the big-picture regime:
+       close vs EMA50 plus the EMA50 slope (BULL / BEAR / RANGE). CURRENT = the
+       short momentum: EMA9 vs EMA21 (BULL / BEAR / FLAT). The operative
+       direction follows OVERALL, and CURRENT only vetoes on a genuine
+       contradiction (see niftyOperativeDir). Mirrors smart_ntrader detectNifty. */
+    const slope9 = i >= 1 ? (e9[i] - e9[i - 1]) : 0;
+    const slope50 = i >= 1 ? (e50[i] - e50[i - 1]) : 0;
+    const overall = (C[i] > e50[i] && slope50 > 0) ? 'BULL' : (C[i] < e50[i] && slope50 < 0) ? 'BEAR' : 'RANGE';
+    /* CURRENT = short momentum: EMA9 above EMA21 AND EMA9 still rising ->
+       BULL; below AND falling -> BEAR; otherwise FLAT. No % dead-band: a hard
+       0.05% separation band left current FLAT in real uptrends (EMA9 hugging
+       EMA21), so the two layers almost never agreed and NO trend stocks were
+       picked anywhere. Direction sign + slope direction is the confirmation. */
+    const current = (e9[i] > e21[i] && slope9 >= 0) ? 'BULL' : (e9[i] < e21[i] && slope9 <= 0) ? 'BEAR' : 'FLAT';
+
     let score = 0, total = 0;
     const add = (signal, weight) => { total += weight; score += (signal || 0) * weight; };
 
@@ -2376,7 +2499,7 @@ window.createAISmartTrading = function (suffix) {
     }
 
     const er = niftyBbExtremeReversal(candles);
-    return { dir, confidence, strength, reversal, reversalDir, zone: bb.zone, pctb: bb.pctb, close: bb.close, bbSlope: niftyBbSlope(candles), bbIncUp: er.inc_up, bbIncDown: er.inc_down };
+    return { dir, confidence, strength, reversal, reversalDir, zone: bb.zone, pctb: bb.pctb, close: bb.close, bbSlope: niftyBbSlope(candles), bbIncUp: er.inc_up, bbIncDown: er.inc_down, overall, current };
   }
 
   /* Combine the 1min and 5min ensemble analyses into a single NIFTY view:
@@ -2403,6 +2526,7 @@ window.createAISmartTrading = function (suffix) {
     return {
       dir: dir, confidence: confidence, strength: strength,
       reversal: primary.reversal, reversalDir: primary.reversalDir,
+      overall: primary.overall, current: primary.current,
       zone: primary.zone, pctb: primary.pctb, close: primary.close,
       bbSlope: primary.bbSlope, bbIncUp: primary.bbIncUp, bbIncDown: primary.bbIncDown,
       sessLow: low, sessHigh: high, overbought: over.overbought, oversold: over.oversold,
@@ -2430,7 +2554,7 @@ window.createAISmartTrading = function (suffix) {
         const ta = niftyTrendAnalysis(candles);
         const range = sessionBbRange(candles);
         const over = bbOverState(ta.pctb, range.low, range.high);
-        bias = { dir: ta.dir, confidence: ta.confidence, strength: ta.strength, reversal: ta.reversal, reversalDir: ta.reversalDir, zone: ta.zone, pctb: ta.pctb, close: ta.close, bbSlope: ta.bbSlope, bbIncUp: ta.bbIncUp, bbIncDown: ta.bbIncDown, sessLow: range.low, sessHigh: range.high, overbought: over.overbought, oversold: over.oversold, mixed: false, tf: t, at: now };
+        bias = { dir: ta.dir, confidence: ta.confidence, strength: ta.strength, reversal: ta.reversal, reversalDir: ta.reversalDir, overall: ta.overall, current: ta.current, zone: ta.zone, pctb: ta.pctb, close: ta.close, bbSlope: ta.bbSlope, bbIncUp: ta.bbIncUp, bbIncDown: ta.bbIncDown, sessLow: range.low, sessHigh: range.high, overbought: over.overbought, oversold: over.oversold, mixed: false, tf: t, at: now };
       }
       if (!bias) return (c && c.bias) || null;
       bias = await enhanceNiftyBias(bias, t);
@@ -2496,6 +2620,19 @@ window.createAISmartTrading = function (suffix) {
     return 0;
   }
 
+  /* Sahi-style operative direction. Direction = the OVERALL (EMA50) regime;
+     the CURRENT (EMA9/21) layer only VETOES when it genuinely CONTRADICTS
+     (overall BULL + current BEAR, or overall BEAR + current BULL).
+     CURRENT=FLAT carries no vote -> fall back to the OVERALL regime, so a flat
+     short-term momentum never starves the trend picker. Overall RANGE ->
+     null (no directional bias). */
+  function niftyOperativeDir(n) {
+    if (!n) return null;
+    if (n.overall === 'BULL') return (n.current === 'BEAR') ? null : 'bullish';
+    if (n.overall === 'BEAR') return (n.current === 'BULL') ? null : 'bearish';
+    return null;
+  }
+
   /* BB%B gate matching. Overbought / Oversold compare %B against the session
      support/resistance range (session BB%B high/low); the classic band zones
      map to the standard %B thresholds. */
@@ -2516,7 +2653,7 @@ window.createAISmartTrading = function (suffix) {
     const gate = g || {};
     if (!gate.enabled) return false;
     const nifty = await niftyBias(_niftyTf);
-    return !!(nifty && nifty.dir && nifty.dir === gate.dir && niftyZoneAllowed(nifty, gate.zone));
+    return !!(nifty && niftyOperativeDir(nifty) === gate.dir && niftyZoneAllowed(nifty, gate.zone));
   }
 
   /* Synchronous version of the NIFTY entry gate for the HFT scanner, which runs
@@ -2527,8 +2664,10 @@ window.createAISmartTrading = function (suffix) {
     if (!gate.enabled) return true;
     const cached = _niftyBiasCache[_niftyTf];
     const nifty = cached ? cached.bias : null;
-    if (!nifty || !nifty.dir) return false;
-    return nifty.dir === gate.dir && niftyZoneAllowed(nifty, gate.zone);
+    if (!nifty) return false;
+    const op = niftyOperativeDir(nifty);
+    if (!op) return false;
+    return op === gate.dir && niftyZoneAllowed(nifty, gate.zone);
   }
 
   /* Beyond the NIFTY exit gate above, signal exits are disabled: open legs are
@@ -2548,8 +2687,11 @@ window.createAISmartTrading = function (suffix) {
     if (bias.gift) gv.push('GIFT ' + (bias.gift === 'bullish' ? 'Bull' : 'Bear'));
     if (bias.vix) gv.push('VIX ' + (bias.vix === 1 ? 'fall' : 'rise'));
     const gvTxt = gv.length ? ' &middot; <span style="color:#7e57c2">' + gv.join(' / ') + '</span>' : '';
+    const op = niftyOperativeDir(bias);
+    const layTxt = (bias.overall && bias.current)
+      ? ' &middot; <span style="color:#888">overall ' + bias.overall + ' / current ' + bias.current + (op ? '</span>' : ' &middot; no bias</span>') : '';
     return '<span style="color:' + (bias.dir === 'bullish' ? '#00d4aa' : '#ef5350') + '">NIFTY ' + (bias.dir === 'bullish' ? 'Bullish' : 'Bearish') +
-      ' &middot; conf ' + conf + '% (' + (bias.strength || '') + ')' + rev + mix + gvTxt +
+      ' &middot; conf ' + conf + '% (' + (bias.strength || '') + ')' + layTxt + rev + mix + gvTxt +
       ' &middot; %B ' + (bias.pctb != null ? bias.pctb.toFixed(2) : '?') + ' (' + (NIFTY_ZONE_LABEL[bias.zone] || bias.zone) + ')' + ob + inc + sr + '</span>';
   }
 
@@ -2566,7 +2708,7 @@ window.createAISmartTrading = function (suffix) {
         const gb = await niftyBias(_niftyTf);
         if (!gb) html = '<span style="color:#ff9800">' + label + ': no data</span>';
         else {
-          const ok = gb.dir === gate.dir && niftyZoneAllowed(gb, gate.zone);
+          const ok = niftyOperativeDir(gb) === gate.dir && niftyZoneAllowed(gb, gate.zone);
           html = '<span style="color:' + (ok ? '#00d4aa' : '#888') + '">' + label + ' [' + tfTxt(_niftyTf) + ' ' + (gate.dir === 'bullish' ? 'Bullish' : 'Bearish') + ' + ' + (NIFTY_ZONE_LABEL[gate.zone] || gate.zone) + '] ' + (ok ? '&rarr; ' + action : '&rarr; waiting') + '</span>';
         }
       }
@@ -2864,30 +3006,13 @@ window.createAISmartTrading = function (suffix) {
     const sym = instr.symbol;
     return qm[sym.exch === 'IDX_I' ? 'IDX_I:' + sym.id : String(sym.id)] || null;
   }
-  /* Live quote for an open position stored on state.positions. Positions carry
-     their executed instrument identity (symbolId/symbolExch/inst) rather than a
-     full run instrument, so resolve the cache key from those fields directly. */
-  function positionQuoteKey(p) {
-    if (p.symbolId != null) return p.symbolExch === 'IDX_I' ? 'IDX_I:' + p.symbolId : String(p.symbolId);
-    if (p.instr) {
-      const i = p.instr;
-      if (i.kind === 'option') return String(i.sid);
-      const s = i.symbol;
-      if (s) return s.exch === 'IDX_I' ? 'IDX_I:' + s.id : String(s.id);
-    }
-    return null;
-  }
-  function positionQuote(p) {
-    const qm = quoteCache();
-    const k = positionQuoteKey(p);
-    return k ? (qm[k] || null) : null;
-  }
-  /* The option premium chart's current price: the last candle close of the
-     premium chart the trade runs on. Falls back to the shared candle cache
-     (StratEngine) when the displayed chart isn't this option, so the Running
-     Trades / Running Positions P&L matches the option premium chart even
-     without a live quote. */
+  /* The chart's current price for a position: delegates to the single shared
+     chart/candle source (tradeChartPrice in index.html) so the Running
+     Positions P&L is guaranteed identical to the chart's running P&L — never
+     the delayed live feed. Falls back to local chart/candle logic only if the
+     shared helper is unavailable. */
   function positionPremiumLastClose(p) {
+    if (typeof window.tradeChartPrice === 'function') return window.tradeChartPrice(p);
     if (p.symbolId == null) return null;
     const sid = Number(p.symbolId);
     if (typeof selectedSymbol !== 'undefined' && selectedSymbol &&
@@ -2911,13 +3036,11 @@ window.createAISmartTrading = function (suffix) {
     }
     return best;
   }
-  /* Current price for a position: the live feed quote first (the same source
-     the chart overlay uses); when no live quote is streaming yet, fall back to
-     the option premium chart's last candle close so the P&L matches the
-     premium chart. */
+  /* Current price for a position: the chart/candle close only. The live feed
+     quote source (clientQuotes) was removed entirely — Running Trades / Running
+     Positions P&L now always matches the chart's own price, never a delayed
+     feed tick. */
   function positionCurrentPrice(p) {
-    const q = positionQuote(p);
-    if (q && q.live && q.ltp != null) return Number(q.ltp);
     return positionPremiumLastClose(p);
   }
   /* Execution targets per the "Trade should be executed in" setting: the
@@ -2927,7 +3050,7 @@ window.createAISmartTrading = function (suffix) {
      instrument, while paper positions are placed on these targets. When
      execution is premium/both but the run-in instrument carries no option
      contract, the first selected strike's option contract is used. */
-  async function executionSymbolsFor(instr) {
+  async function executionSymbolsFor(instr, s) {
     const sym = instr.symbol;
     if (!sym) return [];
     // Premium-chart candle fallback active: the run-in premium chart has no
@@ -2994,6 +3117,20 @@ window.createAISmartTrading = function (suffix) {
   }
 
   async function candlesForInstrument(instr, tf) {
+    /* Ultrafast live feed: read the symbol's in-browser live candle series
+       built from WebSocket ticks (initial history seeded once). No REST
+       /api/candles call in the live path. */
+    if (state.fastData && window.FastLive) {
+      try {
+        if (instr.kind === 'option') {
+          const optSym = { id: Number(instr.sid), exch: optionExch(instr.symbol), inst: optionInst(instr.symbol), name: (instr.symbol.name || '') };
+          const c = await FastLive.candlesFor(optSym, tf);
+          return (c && c.length >= 10) ? c : null;
+        }
+        const c = await FastLive.candlesFor(instr.symbol, tf);
+        return (c && c.length >= 10) ? c : null;
+      } catch (e) { return null; }
+    }
     const SE = window.StratEngine;
     if (!SE || !SE.fetchCandlesFor) return null;
     if (instr.kind === 'option') {
@@ -3041,11 +3178,18 @@ window.createAISmartTrading = function (suffix) {
      candles are available. */
   async function confirmCandlesFor(instr, tf, ci) {
     if (instr.kind !== 'both') return null;
-    const SE = window.StratEngine;
-    if (!SE || !SE.fetchCandlesFor) return null;
     const c0 = (instr.contracts && instr.contracts.length) ? instr.contracts[ci || 0] : null;
     if (!c0) return null;
     const optSym = { id: Number(c0.sid), exch: optionExch(instr.symbol), inst: optionInst(instr.symbol), name: (instr.symbol.name || '') };
+    /* Ultrafast live feed path: read the strike's in-browser live series. */
+    if (state.fastData && window.FastLive) {
+      try {
+        const c = await FastLive.candlesFor(optSym, tf);
+        return (c && c.length >= 10) ? c : null;
+      } catch (e) { return null; }
+    }
+    const SE = window.StratEngine;
+    if (!SE || !SE.fetchCandlesFor) return null;
     try {
       const c = await SE.fetchCandlesFor(optSym, tf);
       return (c && c.length >= 10) ? c : null;
@@ -3308,7 +3452,12 @@ window.createAISmartTrading = function (suffix) {
     const t0 = performance.now();
     const u = state.universal || {};
     const prevExecOn = _hftExecOn;
-    _hftExecOn = ['open', 'high', 'low', 'close'].indexOf(u.hftExecOn) >= 0 ? u.hftExecOn : 'close';
+    /* "execute on" enable checkbox: when ON (default) the scanner forces every
+       candle-type strategy condition to be tested against the chosen candle
+       value (open/high/low/close, default Candle Close). When OFF the override
+       is disabled and each condition uses its own default candle key (same as
+       the normal 1500ms poll). */
+    _hftExecOn = (u.hftExecEnabled !== false) && ['open', 'high', 'low', 'close'].indexOf(u.hftExecOn) >= 0 ? u.hftExecOn : null;
     try {
     const pt = basePaper();
     const SE = window.StratEngine;
@@ -3442,6 +3591,14 @@ window.createAISmartTrading = function (suffix) {
     const ms = 100;
     const opsEl = $id('astHftOps');
     if (opsEl) { opsEl.disabled = !hftOn; opsEl.style.opacity = hftOn ? '1' : '0.5'; }
+    /* "execute on" enable checkbox + value select: both fade/disable when HFT is
+       off; the value select additionally fades/disable when its enable checkbox
+       is unchecked so the user sees the override is inactive. */
+    const execCbEl = $id('astHftExecOnCb');
+    if (execCbEl) { execCbEl.disabled = !hftOn; execCbEl.style.opacity = hftOn ? '1' : '0.5'; }
+    const execEl = $id('astHftExecOn');
+    const execOn = hftOn && u.hftExecEnabled !== false;
+    if (execEl) { execEl.disabled = !execOn; execEl.style.opacity = execOn ? '1' : '0.5'; }
     if (hftOn && state.enabled && !_hftTimer) {
       _hftTimer = setInterval(hftScan, ms);
       _hftMs = ms;
@@ -3486,19 +3643,62 @@ window.createAISmartTrading = function (suffix) {
   /* Whether the strategy's entry conditions fire at bar index `i` (no signal
      state mutation). `i` is normally the last (forming) bar, but the entry loop
      also probes the just-closed bar so a fresh cross is not missed. */
-  function entryFireAt(s, candles, i) {
+  /* Strict "all indicators & filters together" entry: the strategy's own
+     conditions AND every extra condition / selected filter must ALL pass on the
+     same bar - no N-of-M threshold, no partial pass. This is the "all together"
+     mode the user enables from the Indicator filters toolbar. The primary
+     (incl. chain/pane/gap) and candlestick gates still apply on top, so the
+     entry only fires when the full set agrees. */
+  function entryFireAllInOne(s, candles, i) {
     let condOk = true;
-    if (s.entry && s.entry.indId) {
-      if (isComplexCond(s.entry)) {
-        condOk = (i === candles.length - 1 && window.StratEngine)
-          ? !!StratEngine.evalCondEdge(s.entry, candles, null)
-          : false;
-      } else {
-        condOk = evalCondAll(s.entry, i, candles);
+    if (s.entry) {
+      /* Indicator-filters mode carries ALL selected filter conditions as an
+         array in the primary entry - every one of them must pass (strict AND). */
+      if (Array.isArray(s.entry)) {
+        condOk = s.entry.length ? evalCondAll(s.entry, i, candles) : false;
+      } else if (s.entry.indId) {
+        if (isComplexCond(s.entry)) {
+          condOk = (i === candles.length - 1 && window.StratEngine)
+            ? !!StratEngine.evalCondEdge(s.entry, candles, null)
+            : false;
+        } else {
+          condOk = evalCondAll(s.entry, i, candles);
+        }
       }
     }
     let gapOk = true;
-    if (i === candles.length - 1 && s.entry && s.entry.gap && s.entry.gap.enabled && window.StratEngine) {
+    if (i === candles.length - 1 && s.entry && !Array.isArray(s.entry) && s.entry.gap && s.entry.gap.enabled && window.StratEngine) {
+      gapOk = StratEngine.evalGap(s.entry.gap, candles) !== false;
+    }
+    const extraOk = (s.entryExtra && s.entryExtra.length)
+      ? evalCondAll(s.entryExtra, i, candles)
+      : true;
+    const patternOk = (!s.candlestick || !s.candlestick.entry || !s.candlestick.entry.length)
+      ? true : patternHitAt(s.candlestick.entry, i, candles);
+    return condOk && gapOk && extraOk && patternOk;
+  }
+
+  function entryFireAt(s, candles, i) {
+    /* "All indicators & filters together" mode replaces the N-of-M entry path.
+       Indicator-filters-mode strategies ALWAYS evaluate strict AND - the user
+       explicitly chose "All together (strict AND)" when starting that mode. */
+    if (state.allInOne || s._filterBuilt) return entryFireAllInOne(s, candles, i);
+    let condOk = true;
+    if (s.entry) {
+      if (Array.isArray(s.entry)) {
+        condOk = s.entry.length ? evalCondAll(s.entry, i, candles) : false;
+      } else if (s.entry.indId) {
+        if (isComplexCond(s.entry)) {
+          condOk = (i === candles.length - 1 && window.StratEngine)
+            ? !!StratEngine.evalCondEdge(s.entry, candles, null)
+            : false;
+        } else {
+          condOk = evalCondAll(s.entry, i, candles);
+        }
+      }
+    }
+    let gapOk = true;
+    if (i === candles.length - 1 && s.entry && !Array.isArray(s.entry) && s.entry.gap && s.entry.gap.enabled && window.StratEngine) {
       gapOk = StratEngine.evalGap(s.entry.gap, candles) !== false;
     }
     const extraOk = (s.entryExtra && s.entryExtra.length)
@@ -3541,7 +3741,7 @@ window.createAISmartTrading = function (suffix) {
       }
     }
     if (s.entryExtra && s.entryExtra.length) {
-      parts.push('extra[' + s.entryExtra.length + '] need>=' + ((s.entryThreshold != null && s.entryThreshold >= 1) ? s.entryThreshold : s.entryExtra.length));
+      parts.push('extra[' + s.entryExtra.length + '] ' + (state.allInOne ? 'ALL' : 'need>=' + ((s.entryThreshold != null && s.entryThreshold >= 1) ? s.entryThreshold : s.entryExtra.length)));
     }
     log('Signal diag "' + s.name + '" @ ' + tstr + ' lastClose=' + (c ? c.close : '--') +
       ' -> ' + (parts.length ? parts.join(' | ') : 'no primary cond') +
@@ -3701,9 +3901,18 @@ window.createAISmartTrading = function (suffix) {
         render();
       }
 
-      const strategies = activeStrategies();
+      const filterMode = state.filterMode === true;
+      /* Indicator-filters mode has its own strategy set: ONE synthetic strategy
+         whose primary entry carries all selected filter conditions (strict AND)
+         across the whole selected universe. Normal mode runs the ticked
+         strategies as usual. */
+      const strategies = filterMode ? filterModeStrategies() : activeStrategies();
       if (!strategies.length) {
-        diag('noStrategies', 15000, 'No strategies ticked - tick at least one saved/imported/AI strategy to run it in paper mode', 'warn');
+        if (filterMode) {
+          diag('noStrategies', 15000, 'Indicator-filters mode: no tradable symbol for the selected filter side(s) - tick at least one Bullish/Bearish indicator filter and enable a universe (Top Movers / NIFTY trend / chart symbol)', 'warn');
+        } else {
+          diag('noStrategies', 15000, 'No strategies ticked - tick at least one saved/imported/AI strategy to run it in paper mode', 'warn');
+        }
         return;
       }
 
@@ -3712,14 +3921,14 @@ window.createAISmartTrading = function (suffix) {
       // picker can build its F&O stock set from the current NIFTY direction.
       const nifty = await niftyBias();
       updateNiftyBiasStatus(nifty);
-      if (nifty) _lastNiftyDir = nifty.dir;
+      if (nifty) _lastNiftyDir = niftyOperativeDir(nifty);
 
       // NIFTY trend-following immediate removal: while trend mode is on, any open
       // position this engine owns whose symbol is a trend-followed F&O stock that
       // has dropped below the daily change% threshold is force-exited right away
       // (not waiting for the next 60s scan) so it stops being traded immediately.
       if (state.niftyTrend && state.niftyTrend.enabled) {
-        const tDir = nifty ? nifty.dir : null;
+        const tDir = nifty ? niftyOperativeDir(nifty) : null;
         if (tDir === 'bullish' || tDir === 'bearish') {
           const nt = state.niftyTrend;
           const tThresh = (Number(nt.pct) > 0) ? Number(nt.pct) : 2.5;
@@ -3800,11 +4009,19 @@ window.createAISmartTrading = function (suffix) {
 
         for (const instr of instruments) {
           const key = strategyKey(s, instr);
+          /* Indicator-filters mode runs ONE synthetic strategy across the whole
+             selected universe (no per-symbol binding), so every instrument's
+             chart is evaluated against all selected filters together. */
+          if (s._bindSym) {
+            const isym = instr.symbol;
+            if (!isym || String(isym.id) + ':' + (isym.exch || '') !== s._bindSym) continue;
+            if (instr.kind === 'option' && ((instr.optionType === 'CE') !== (s.cat !== 'bearish'))) continue;
+          }
           const candles = await candlesForInstrument(instr, entryTf);
           if (!candles || candles.length < 10) { prog(s.id, 5, 'Waiting candles'); bump(instr, 'candles'); continue; }
           const trendCandles = trendTf ? await candlesForInstrument(instr, trendTf) : null;
 
-          const tradeTargets = await executionSymbolsFor(instr);
+          const tradeTargets = await executionSymbolsFor(instr, s);
           if (!tradeTargets.length) {
             if (chainRateLimited(instr.symbol)) prog(s.id, 15, 'Option chain rate-limited - retrying in ~' + _CHAIN_RL_SEC + 's');
             else prog(s.id, 15, 'No execution target (option chain unavailable)');
@@ -4023,7 +4240,7 @@ window.createAISmartTrading = function (suffix) {
 
   function startPoll() {
     if (_pollTimer) clearInterval(_pollTimer);
-    _pollTimer = setInterval(() => { tick(); refreshNiftyStatus(); renderMoversList(); renderNiftyTrendList(); renderPickedStrikes(); if (state.dataPool) poolScan(); }, POLL_MS);
+    _pollTimer = setInterval(() => { tick(); refreshNiftyStatus(); renderMoversList(); renderNiftyTrendList(); renderPickedStrikes(); if (state.dataPool) poolScan(); syncFastDataUI(); }, POLL_MS);
   }
   function stopPoll() {
     if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
@@ -4033,7 +4250,7 @@ window.createAISmartTrading = function (suffix) {
      its own 60s cache, so this only re-fetches candles at most once a minute
      while the displayed reading refreshes on every poll. */
   function refreshNiftyStatus() {
-    niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); _lastNiftyDir = b.dir; } });
+    niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); _lastNiftyDir = niftyOperativeDir(b); } });
   }
 
   /* ---------------- log ---------------- */
@@ -4087,9 +4304,10 @@ window.createAISmartTrading = function (suffix) {
     state.universal.tradeLimitEnabled = tlEl ? tlEl.checked : false;
     state.universal.tradeLimitCount = tlCntEl ? (Number(tlCntEl.value) || 5) : 5;
     state.universal.aiTrades = aiTrEl ? aiTrEl.checked : false;
-    const hftEl = $id('astHft'), hftOpsEl = $id('astHftOps'), hftExecEl = $id('astHftExecOn');
+    const hftEl = $id('astHft'), hftOpsEl = $id('astHftOps'), hftExecEl = $id('astHftExecOn'), hftExecCbEl = $id('astHftExecOnCb');
     state.universal.hft = hftEl ? hftEl.checked : false;
     state.universal.hftOps = hftOpsEl ? (Number(hftOpsEl.value) || 6) : 6;
+    state.universal.hftExecEnabled = hftExecCbEl ? hftExecCbEl.checked : true;
     state.universal.hftExecOn = hftExecEl ? (hftExecEl.value || 'close') : 'close';
     syncHftUI();
     const flEl = $id('astFnoLimit');
@@ -4242,16 +4460,26 @@ window.createAISmartTrading = function (suffix) {
     log('Entry filters ' + (any ? 'enabled: ' + filterSummary() : 'disabled'), any ? 'ok' : 'warn');
   }
 
-  function filterSummary() {
+  /* Readable names of EVERY currently-selected indicator filter that becomes an
+     entry gate, one per ticked Bullish/Bearish sub-filter. Research-stream flags
+     (Candlestick patterns / Elliott Wave / ...) are NOT entry filters - they
+     gate which strategies the AI trader researches, so they are excluded here.
+     Shared by filterSummary() and the Indicator-filters-mode start log so both
+     list EXACTLY the filters AST reads/monitors. */
+  function selectedFilterNames() {
     const f = state.filters || {};
-    const parts = [];
+    const out = [];
     const add = (sec, items) => {
       if (!f[sec]) return;
-      if (items.length) parts.push((sec === 'bullish' ? 'Bullish' : 'Bearish') + ': ' + items.join(', '));
+      items.forEach(n => { if (n) out.push((sec === 'bullish' ? 'Bullish' : 'Bearish') + ': ' + n); });
     };
-    add('bullish', [f.incUp ? 'Increasing upward' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Increasing upward (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Pane all lines increasing upward' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close crossed above BB middle band (upper+lower expanding)' : null, f.bullPcCrossAbove ? 'Close crossed above price channel middle line' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising + volume increasing' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullEma9_21 ? 'EMA 9 crossed above EMA 21' : null, f.bullEma21_35 ? 'EMA 21 crossed above EMA 35' : null, f.bullEma35_50 ? 'EMA 35 crossed above EMA 50' : null, f.bullEma50_100 ? 'EMA 50 crossed above EMA 100' : null, f.bullEma100_200 ? 'EMA 100 crossed above EMA 200' : null, f.bullEma200_300 ? 'EMA 200 crossed above EMA 300' : null, f.bullSt10_1_2 ? 'Supertrend(10,1) crossed above Supertrend(10,2)' : null, f.bullSt10_2_3 ? 'Supertrend(10,2) crossed above Supertrend(10,3)' : null, f.bullSt1CloseCrossAbove ? 'Close crossed above Supertrend(10,1) (ST crossed below close)' : null, f.bullVwapCloseCrossAbove ? 'Close crossed above VWAP' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null, f.bullCandle ? 'Candlestick patterns' : null, f.bullElliott ? 'Elliott Wave' : null, f.bullIndicator ? 'Indicators' : null, f.bullPane ? 'Pane indicators' : null, f.bullSymmetry ? 'Symmetry' : null, f.bullStructure ? 'Chart structure' : null, f.bullAtr ? 'ATR / Volatility' : null].filter(Boolean));
-    add('bearish', [f.incDown ? 'Increasing downward' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Increasing downward (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Pane all lines increasing downward' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close crossed below BB middle band (upper+lower expanding)' : null, f.bearPcCrossBelow ? 'Close crossed below price channel middle line' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling + volume increasing' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearEma9_21 ? 'EMA 9 crossed below EMA 21' : null, f.bearEma21_35 ? 'EMA 21 crossed below EMA 35' : null, f.bearEma35_50 ? 'EMA 35 crossed below EMA 50' : null, f.bearEma50_100 ? 'EMA 50 crossed below EMA 100' : null, f.bearEma100_200 ? 'EMA 100 crossed below EMA 200' : null, f.bearEma200_300 ? 'EMA 200 crossed below EMA 300' : null, f.bearSt10_1_2 ? 'Supertrend(10,1) crossed below Supertrend(10,2)' : null, f.bearSt10_2_3 ? 'Supertrend(10,2) crossed below Supertrend(10,3)' : null, f.bearSt1CloseCrossBelow ? 'Close crossed below Supertrend(10,1) (ST crossed above close)' : null, f.bearVwapCloseCrossBelow ? 'Close crossed below VWAP' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null, f.bearCandle ? 'Candlestick patterns' : null, f.bearElliott ? 'Elliott Wave' : null, f.bearIndicator ? 'Indicators' : null, f.bearPane ? 'Pane indicators' : null, f.bearSymmetry ? 'Symmetry' : null, f.bearStructure ? 'Chart structure' : null, f.bearAtr ? 'ATR / Volatility' : null].filter(Boolean));
-    return parts.join(' | ');
+    add('bullish', [f.incUp ? 'Increasing upward' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Increasing upward (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Pane all lines increasing upward' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close crossed above BB middle band (upper+lower expanding)' : null, f.bullPcCrossAbove ? 'Close crossed above price channel middle line' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising + volume increasing' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullEma9_21 ? 'EMA 9 crossed above EMA 21' : null, f.bullEma21_35 ? 'EMA 21 crossed above EMA 35' : null, f.bullEma35_50 ? 'EMA 35 crossed above EMA 50' : null, f.bullEma50_100 ? 'EMA 50 crossed above EMA 100' : null, f.bullEma100_200 ? 'EMA 100 crossed above EMA 200' : null, f.bullEma200_300 ? 'EMA 200 crossed above EMA 300' : null, f.bullSt10_1_2 ? 'Supertrend(10,1) crossed above Supertrend(10,2)' : null, f.bullSt10_2_3 ? 'Supertrend(10,2) crossed above Supertrend(10,3)' : null, f.bullSt1CloseCrossAbove ? 'Close crossed above Supertrend(10,1) (ST crossed below close)' : null, f.bullVwapCloseCrossAbove ? 'Close crossed above VWAP' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null].filter(Boolean));
+    add('bearish', [f.incDown ? 'Increasing downward' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Increasing downward (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Pane all lines increasing downward' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close crossed below BB middle band (upper+lower expanding)' : null, f.bearPcCrossBelow ? 'Close crossed below price channel middle line' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling + volume increasing' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearEma9_21 ? 'EMA 9 crossed below EMA 21' : null, f.bearEma21_35 ? 'EMA 21 crossed below EMA 35' : null, f.bearEma35_50 ? 'EMA 35 crossed below EMA 50' : null, f.bearEma50_100 ? 'EMA 50 crossed below EMA 100' : null, f.bearEma100_200 ? 'EMA 100 crossed below EMA 200' : null, f.bearEma200_300 ? 'EMA 200 crossed below EMA 300' : null, f.bearSt10_1_2 ? 'Supertrend(10,1) crossed below Supertrend(10,2)' : null, f.bearSt10_2_3 ? 'Supertrend(10,2) crossed below Supertrend(10,3)' : null, f.bearSt1CloseCrossBelow ? 'Close crossed below Supertrend(10,1) (ST crossed above close)' : null, f.bearVwapCloseCrossBelow ? 'Close crossed below VWAP' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null].filter(Boolean));
+    return out;
+  }
+
+  function filterSummary() {
+    return selectedFilterNames().join(' | ');
   }
 
   function syncFilterSections(masterOff) {
@@ -4275,6 +4503,12 @@ window.createAISmartTrading = function (suffix) {
         el.checked = !!state.filters[p[1]];
       });
     });
+  }
+
+  /* Reflect the "All indicators & filters together" checkbox from saved state. */
+  function applyAllInOneToUI() {
+    const el = $id('astAllInOne');
+    if (el) el.checked = state.allInOne === true;
   }
 
   function applyModeToUI() {
@@ -4585,11 +4819,13 @@ window.createAISmartTrading = function (suffix) {
     const dpEl = $id('astDataPool'); if (dpEl) dpEl.checked = state.dataPool === true;
     const dpBody = $id('astDataPoolBody'); if (dpBody) dpBody.style.display = state.dataPool ? 'block' : 'none';
     const dpInfo = $id('astDataPoolInfo'); if (dpInfo) dpInfo.textContent = state.dataPool ? 'scanning...' : 'OFF - shared pool feeds strategies only';
+    syncFastDataUI();
     const tlEl = $id('astTradeLimit'); if (tlEl) tlEl.checked = !!u.tradeLimitEnabled;
     const tlCntEl = $id('astTradeLimitCount'); if (tlCntEl) tlCntEl.value = (Number(u.tradeLimitCount) > 0 ? u.tradeLimitCount : 5);
     const aiTrEl = $id('astAiTrades'); if (aiTrEl) aiTrEl.checked = !!u.aiTrades;
     const hftEl = $id('astHft'); if (hftEl) hftEl.checked = !!u.hft;
     const hftOpsEl = $id('astHftOps'); if (hftOpsEl) hftOpsEl.value = (Number(u.hftOps) > 0 ? u.hftOps : 6);
+    const hftExecCbEl = $id('astHftExecOnCb'); if (hftExecCbEl) hftExecCbEl.checked = u.hftExecEnabled !== false;
     const hftExecEl = $id('astHftExecOn'); if (hftExecEl) hftExecEl.value = (['open', 'high', 'low', 'close'].indexOf(u.hftExecOn) >= 0 ? u.hftExecOn : 'close');
     const flEl = $id('astFnoLimit'); if (flEl) flEl.checked = u.fnoLimit !== false;
     const staEl = $id('astStartTradeAfter'); if (staEl) staEl.value = u.startTradeAfter || '09:15';
@@ -4635,6 +4871,8 @@ window.createAISmartTrading = function (suffix) {
       else f[p[1]] = false;
     });
     syncFilterSections();
+    applyAllInOneToUI();
+    applyRunModeUI();
     applyMoversToUI();
     applyNiftyTrendToUI();
     applySimToUI();
@@ -5236,7 +5474,10 @@ window.createAISmartTrading = function (suffix) {
           const vwap = poolIndValue('vwap', { anchor: 'session' }, i, candles);
           let cond = 'FAIL';
           for (const s of acts) {
-            try { if (entryFireAt(s, candles, i)) { cond = 'PASS'; break; } } catch (e) {}
+            /* Evaluate against the working copy so the readout reflects the
+               selected indicator filters (and the all-together strict mode),
+               exactly as the live entry gate does. */
+            try { if (entryFireAt(workingStrategy(s), candles, i)) { cond = 'PASS'; break; } } catch (e) {}
           }
           const vol = poolVolume(instr, contract, bar);
           rows.push('<tr><td>' + label + '</td><td>' + type + '</td><td>' + src.chart + '</td><td>' + tf + '</td>' +
@@ -5262,6 +5503,37 @@ window.createAISmartTrading = function (suffix) {
     if (host) host.style.display = state.dataPool ? 'block' : 'none';
     if (info) info.textContent = state.dataPool ? 'scanning...' : 'OFF - shared pool feeds strategies only';
     if (state.dataPool) poolScan();
+  }
+  /* Ultrafast live feed toggle: when ON, strategies run + trade on the browser-
+     side live candle store (built tick-by-tick from the WebSocket feed) instead
+     of the Data Pool REST path. When OFF, the default Data Pool path stays. */
+  function onFastDataInput() {
+    const el = $id('astFastData');
+    state.fastData = !!(el && el.checked);
+    save();
+    if (state.fastData) {
+      if (window.FastLive && FastLive.reset) { try { FastLive.reset(); } catch (e) {} }
+      if (window.FastLive && FastLive.setEnabled) { try { FastLive.setEnabled(true); } catch (e) {} }
+      log('Ultrafast live feed ON - strategies read live in-browser candles (no REST /api/candles in the live path)', 'ok');
+    } else {
+      if (window.FastLive && FastLive.setEnabled) { try { FastLive.setEnabled(false); } catch (e) {} }
+      log('Ultrafast live feed OFF - default Data Pool path active', '');
+    }
+    syncFastDataUI();
+  }
+  function syncFastDataUI() {
+    const el = $id('astFastData');
+    if (el) el.checked = state.fastData === true;
+    if (window.FastLive && FastLive.setEnabled) { try { FastLive.setEnabled(state.fastData === true); } catch (e) {} }
+    const info = $id('astFastDataInfo');
+    if (!info) return;
+    if (state.fastData) {
+      let n = 0;
+      if (window.FastLive) { try { n = FastLive.activeCount(); } catch (e) { n = 0; } }
+      info.textContent = 'ON - ' + n + ' live series';
+    } else {
+      info.textContent = 'OFF - Data Pool path active';
+    }
   }
   /* Manual Data Pool refresh: force the pool to re-resolve the selected
      universe right now (ignoring the 15s idle throttle) so newly added premium
@@ -5434,7 +5706,7 @@ window.createAISmartTrading = function (suffix) {
       .filter(k => !!astOwnedLive(pt2 ? pt2.getState().autoPositions : null, k))
       .map(k => state.positions[k]);
     if (!openPositions.length) {
-      host.innerHTML = '<tr><td colspan="9" style="color:#666;font-size:10px;padding:6px 8px">No AI Smart positions open. Tick at least one saved strategy and toggle AI Smart Trading ON.</td></tr>';
+      host.innerHTML = '<tr><td colspan="8" style="color:#666;font-size:10px;padding:6px 8px">No AI Smart positions open. Tick at least one saved strategy and toggle AI Smart Trading ON.</td></tr>';
       return;
     }
     /* Render each position defensively: a malformed record must not blank the
@@ -5449,14 +5721,11 @@ window.createAISmartTrading = function (suffix) {
   function runningRowHTML(p) {
       const cur = positionCurrentPrice(p);
       const pnl = cur != null ? (p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty) : null;
-      const bpt = basePaper();
-      const chargesOn = !!(bpt && bpt.getCharges && bpt.getCharges());
-      const charges = (chargesOn && cur != null && bpt && bpt.chargesTotalForOpen)
-        ? bpt.chargesTotalForOpen(p, cur)
-        : 0;
-      const net = pnl != null ? pnl - charges : null;
+      /* Running Trades shows GROSS P&L only — no broker-charge deduction while
+         the trade is open. Charges (entry + exit round-trip) are applied ONCE
+         when the trade CLOSES and are shown net in Closed Positions. */
       const pnlPct = pnl != null && p.entryPrice && p.qty ? (pnl / (p.entryPrice * p.qty)) * 100 : null;
-      const col = net == null ? '#888' : (net >= 0 ? '#00d4aa' : '#ef5350');
+      const col = pnl == null ? '#888' : (pnl >= 0 ? '#00d4aa' : '#ef5350');
       const sideCol = p.side === 'BUY' ? '#00d4aa' : '#ef5350';
       const u = state.universal || {};
       const aiSlOn = u.aiSl !== false && u.manualSL !== true && u.manualTrailSL !== true;
@@ -5475,8 +5744,7 @@ window.createAISmartTrading = function (suffix) {
         '<td>' + qtyTxt + '</td>' +
         '<td>' + fmt2(p.entryPrice) + '</td>' +
         '<td>' + (cur != null ? fmt2(cur) : '--') + '</td>' +
-        '<td style="color:' + col + '">' + (net == null ? '--' : (net >= 0 ? '+' : '') + fmtMoney(net) + '<br><span style="font-size:8px;color:#888">' + fmt2(pnlPct) + '%</span>') + '</td>' +
-        '<td style="color:#888">' + (chargesOn && cur != null ? fmtMoney(charges) : '--') + '</td>' +
+        '<td style="color:' + col + '">' + (pnl == null ? '--' : (pnl >= 0 ? '+' : '') + fmtMoney(pnl) + '<br><span style="font-size:8px;color:#888">' + fmt2(pnlPct) + '%</span>') + '</td>' +
         '<td style="color:#888">' + (slTrailTxt || '--') + '</td>' +
         '<td style="color:#ff9800">' + guard + '</td>' +
         '<td><button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ef5350;color:#fff" onclick="AISmartTrading.stopPosition(\'' + esc(p.strategyId) + '\')">Stop</button></td>' +
@@ -5550,15 +5818,14 @@ window.createAISmartTrading = function (suffix) {
       if (net > 0) winCount++;
     }
     let unreal = 0;
+    /* Live P&L is GROSS: running trades never deduct broker charges — charges
+       (entry + exit round-trip) are applied once at close and show in the
+       realized P&L. */
     for (const k in state.positions) {
       const p = state.positions[k];
       const cur = positionCurrentPrice(p);
       if (cur != null) {
-        const g = p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty;
-        const bpt = basePaper();
-        unreal += (chargesOn && bpt && bpt.chargesTotalForOpen)
-          ? g - bpt.chargesTotalForOpen(p, cur)
-          : g;
+        unreal += p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty;
       }
     }
     const live = realized + unreal;
@@ -5567,7 +5834,7 @@ window.createAISmartTrading = function (suffix) {
     const el = $id('astSummary');
     if (!el) return;
     el.innerHTML =
-      '<div class="acard" style="flex:1"><div class="label">Smart Live P&L</div><div class="value" style="color:' + (live >= 0 ? '#00d4aa' : '#ef5350') + '">' + (live >= 0 ? '+' : '') + fmtMoney(live) + '</div></div>' +
+      '<div class="acard" style="flex:1"><div class="label">Smart Live P&L (gross)</div><div class="value" style="color:' + (live >= 0 ? '#00d4aa' : '#ef5350') + '">' + (live >= 0 ? '+' : '') + fmtMoney(live) + '</div></div>' +
       '<div class="acard" style="flex:1"><div class="label">Smart Realized P&L</div><div class="value" style="color:' + (realized >= 0 ? '#00d4aa' : '#ef5350') + '">' + (realized >= 0 ? '+' : '') + fmtMoney(realized) + '</div></div>' +
       '<div class="acard" style="flex:1"><div class="label">Smart Win Rate</div><div class="value" style="color:' + (wr >= 50 ? '#00d4aa' : '#ff9800') + '">' + fmt2(wr) + '%</div></div>' +
       '<div class="acard" style="flex:1"><div class="label">Smart Trades (W/L)</div><div class="value" style="font-size:13px">' + total + ' (' + winCount + 'W / ' + (total - winCount) + 'L)</div></div>' +
@@ -5671,13 +5938,75 @@ window.createAISmartTrading = function (suffix) {
     // only the ticked strategies are evaluated - nothing is auto-picked.
     state.aiPick = false;
     state.callManual = true;
+    state.filterMode = false;
     applyModeToUI();
+    applyRunModeUI();
     state.enabled = true;
     save();
     applyUniversalToUI();
     render();
     log('Run Paper Trading started - evaluating ticked strategies in paper mode', 'ok');
     tick();
+  }
+
+  /* Start the Indicator-filters run mode: place a trade on every symbol of the
+     selected universe only when ALL selected Bullish/Bearish indicator filters
+     pass together on its chart (strict AND). All other engine settings (SL /
+     trail TP / fixed TP / lots / margin / AI risk / time gates) apply exactly
+     like the normal Run Paper Trading mode. */
+  function runFilterPaper() {
+    readUniversal();
+    state.filterMode = true;
+    state.aiPick = false;
+    state.callManual = true;
+    applyModeToUI();
+    applyRunModeUI();
+    state.enabled = true;
+    save();
+    applyUniversalToUI();
+    render();
+    const f = state.filters || {};
+    const bullOn = !!f.bullish && BULL_FILTER_KEYS.some(k => !!f[k]);
+    const bearOn = !!f.bearish && BEAR_FILTER_KEYS.some(k => !!f[k]);
+    if (!bullOn && !bearOn) {
+      log('Indicator-filters mode started - NO Bullish/Bearish filter selected, no trades will be placed. Tick at least one indicator filter in the Indicator filters section.', 'warn');
+    } else {
+      /* List EXACTLY the ticked filters that AST now reads/monitors (the entry
+         gates). Only these are evaluated on each monitored symbol - unselected
+         filters are never included. */
+      const names = selectedFilterNames();
+      log('Indicator-filters mode started - AST monitors ONLY these ' + names.length + ' selected filter' + (names.length === 1 ? '' : 's') + ': ' + names.join(' | ') + '. A trade is placed on a symbol only when ALL of them pass together on its chart (strict AND)', 'ok');
+    }
+    tick();
+  }
+
+  /* Mutual-exclusion run-mode selector: exactly one run mode is active. Ticking
+     a mode's checkbox activates it (the other fades/inactive); unticking one
+     silently switches to the other so a run mode is always selected. */
+  function onRunModeToggle(mode, checked) {
+    state.filterMode = (checked) ? mode === 'filter' : mode !== 'filter';
+    save();
+    applyRunModeUI();
+  }
+
+  /* Reflect the active run mode on the two run buttons + their checkboxes:
+     active mode fully visible, the opposite button faded + disabled. */
+  function applyRunModeUI() {
+    const filterMode = state.filterMode === true;
+    const nCb = $id('astRunPaperModeCb');
+    if (nCb) nCb.checked = !filterMode;
+    const fCb = $id('astFilterModeCb');
+    if (fCb) fCb.checked = filterMode;
+    const runBtn = $id('astRunPaperBtn');
+    if (runBtn) {
+      runBtn.style.opacity = filterMode ? '0.35' : '1';
+      runBtn.disabled = filterMode;
+    }
+    const fBtn = $id('astFilterPaperBtn');
+    if (fBtn) {
+      fBtn.style.opacity = filterMode ? '1' : '0.35';
+      fBtn.disabled = !filterMode;
+    }
   }
 
   function importFromPaperTrade(list) {
@@ -5986,7 +6315,8 @@ window.createAISmartTrading = function (suffix) {
       niftyExit: JSON.parse(JSON.stringify(state.niftyExit)),
       niftyTf: _niftyTf,
       commodity: state.commodity ? JSON.parse(JSON.stringify(state.commodity)) : { enabled: false, sids: [] },
-      symbols: experimentSymbols()
+      symbols: experimentSymbols(),
+      allInOne: state.allInOne === true
     };
   }
 
@@ -6041,6 +6371,7 @@ window.createAISmartTrading = function (suffix) {
     if (s.niftyExit) state.niftyExit = Object.assign(state.niftyExit || {}, JSON.parse(JSON.stringify(s.niftyExit)));
     if (s.niftyTf) setNiftyTf(s.niftyTf);
     if (s.commodity) state.commodity = Object.assign({ enabled: false, sids: [] }, JSON.parse(JSON.stringify(s.commodity)));
+    if (typeof s.allInOne === 'boolean') state.allInOne = s.allInOne;
     /* Restore the template's captured instrument set so the engine's symbol
        selection (experimentSymbols / pooled runner) matches the template. */
     if (Array.isArray(s.symbols) && s.symbols.length) state.symbols = s.symbols.slice();
@@ -6087,6 +6418,7 @@ window.createAISmartTrading = function (suffix) {
     toggleAuto,
     onUniversalInput() { readUniversal(); },
     onDataPoolToggle() { onDataPoolToggle(); },
+    onFastDataInput() { onFastDataInput(); },
     poolRefresh() { poolRefresh(); },
     toggleAutoSl,
     onStrikeInput() { readStrikeUI(); },
@@ -6107,6 +6439,23 @@ window.createAISmartTrading = function (suffix) {
     removeNiftyTrendIndex,
     renderNiftyTrendList,
     onFiltersInput() { readFiltersUI(); },
+    /* "All indicators & filters together" mode: ON = the strategy's entry fires
+       only when every selected indicator/filter AND its own conditions pass
+       together (strict AND, no N-of-M). OFF = old default entry behavior. */
+    onAllInOne() {
+      const el = $id('astAllInOne');
+      state.allInOne = !!(el && el.checked);
+      _workingCache.clear();
+      save();
+      log('Entry "all indicators & filters together": ' + (state.allInOne ? 'ON (strict AND)' : 'OFF (old default)'), state.allInOne ? 'ok' : 'warn');
+    },
+    allInOneEnabled() { return state.allInOne === true; },
+    /* Direction-matched filter conditions built for a strategy template (also
+       exposed for the Auto Experiment engine). */
+    filterConditionsFor(tpl) { return directionFilterConditions(tpl); },
+    /* Strict all-together entry evaluation on a given candle series (used by
+       the Auto Experiment engine when its "all together" checkbox is ON). */
+    strictEntryOk(tpl, candles, i) { return strictEntryOkAt(tpl, candles, i); },
     /* Master Bullish/Bearish checkbox: checking it selects every sub-filter in
        that section, unchecking it clears them all (no more one-by-one). */
     onFilterMaster(side) {
@@ -6146,6 +6495,11 @@ window.createAISmartTrading = function (suffix) {
     refresh,
     runManual,
     runPaper,
+    /* Indicator-filters run mode: "Place trades based on Indicator filters: All
+       together (strict AND)". runFilterPaper starts the engine in filter mode,
+       onRunModeToggle handles the mutual-exclusive mode checkboxes. */
+    runFilterPaper,
+    onRunModeToggle,
     importFromPaperTrade,
     clearImported,
     removeImported,
@@ -6162,7 +6516,12 @@ window.createAISmartTrading = function (suffix) {
     onTabShow,
     onTabHide,
     tick,
-    runningStrategies() { return activeStrategies(); },
+    runningStrategies() {
+      /* Indicator-filters mode has no ticked strategies - expose the synthetic
+         filter strategies so the Running Strategies view lists them and their
+         fetched strikes. */
+      return (state.filterMode === true) ? filterModeStrategies() : activeStrategies();
+    },
     /* Multi-timeframe confirmation helpers (exposed for the pooled runner and
        tests): mtfPair() resolves the {entry, trend} timeframe pair from the
        enabled checkboxes; evalEntryMtfLive() runs the confirmation check. */
@@ -6372,6 +6731,8 @@ window.createAISmartTrading = function (suffix) {
     syncNiftyTfUI();
     renderTemplateSelect();
     applyCommodityToUI();
+    applyAllInOneToUI();
+    applyRunModeUI();
     render();
     startPoll();
     const nEl = $id('astAiPickN');

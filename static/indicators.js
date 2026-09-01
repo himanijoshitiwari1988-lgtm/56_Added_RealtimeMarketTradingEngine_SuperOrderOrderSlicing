@@ -1603,15 +1603,15 @@
   }
 
   /* Fastest path: when the requested indicator is deployed on the chart with
-     matching settings and the candle data matches the chart's own candles,
-     read {prev, last} directly from the already-rendered series (no recompute). */
+     EXACTLY matching settings and the candle data matches the chart's own
+     candles, read {prev, last} directly from the already-rendered series (no
+     recompute). The instance is matched by id AND settings so a strategy whose
+     condition uses EMA21 reads the EMA21 line, not a same-id EMA9 instance. */
   function renderedLastTwo(indId, settings, key, candlesArr) {
     if (!indicators || !indicators.length) return null;
-    const dep = indicators.find(i => i.def.id === indId);
-    if (!dep || !dep._series || !dep._series.length) return null;
     const want = JSON.stringify(settings || {});
-    const have = JSON.stringify(dep.settings || {});
-    if (want !== have) return null;
+    const dep = indicators.find(i => i.def.id === indId && JSON.stringify(i.settings || {}) === want);
+    if (!dep || !dep._series || !dep._series.length) return null;
     const ch = getCandles();
     if (!ch || !ch.length || !candlesArr || !candlesArr.length) return null;
     const c0 = ch[ch.length - 1], c1 = candlesArr[candlesArr.length - 1];
@@ -1931,10 +1931,12 @@
     try { document.dispatchEvent(new CustomEvent('statechange')); } catch (e) {}
   };
 
-  function addIndicator(id) {
+  function addIndicator(id, settings) {
     const def = IND[id];
     if (!def) return;
-    indicators.push({ uid: uidCounter++, def, settings: defaultsFor(def), _series: null });
+    const base = defaultsFor(def) || {};
+    const merged = Object.assign({}, base, settings || {});
+    indicators.push({ uid: uidCounter++, def, settings: merged, _series: null });
     if (chart) {
       rebuild();
       requestAnimationFrame(() => scrollToPane(indicators[indicators.length - 1].uid));
@@ -2242,6 +2244,21 @@
       stateChange();
     },
     addIndicator,
+    /* Programmatically set the settings of a deployed indicator instance by its
+       indicator id (first instance). Used by the strategy engine so the chart
+       renders EXACTLY the settings the strategy's conditions evaluate with —
+       chart line and engine read then always agree (renderedLastTwo matches). */
+    setIndicatorSettings(id, settings) {
+      const ind = indicators.find(i => i.def.id === id);
+      if (!ind) return;
+      const next = Object.assign({}, ind.settings, settings || {});
+      if (JSON.stringify(next) !== JSON.stringify(ind.settings)) {
+        ind.settings = next;
+        ind._series = null;
+        if (chart) rebuild(); else updateLegend();
+        stateChange();
+      }
+    },
     removeIndicator,
     removeAll,
     openSettings,
