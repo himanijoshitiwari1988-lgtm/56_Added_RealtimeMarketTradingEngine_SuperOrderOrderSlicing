@@ -32,10 +32,33 @@
      issuing ANY /api/candles request for a few seconds and serves its stale
      snapshots / empty arrays, so the gate can actually clear. */
   var RL_BACKOFF_MS = 8000;
+  var RL_MAX_BACKOFF_MS = 45000;
   var rlUntil = 0;
+  var lastRlAt = 0;
 
   function serverRateLimited() {
     return Date.now() < rlUntil;
+  }
+
+  /* Arm the shared backoff. When the server's 503 carries a retry_after (the
+     server's own global rate-limit cooldown, typically ~30s), honour it so the
+     pool does not wake up mid-cooldown and immediately re-trip Dhan. A fixed
+     8s was shorter than that cooldown, so cold keys kept re-arming the limiter
+     and every fetch during the window returned empty (dropped strikes). */
+  function armRateLimit(retryAfterSec) {
+    var ms = RL_BACKOFF_MS;
+    if (retryAfterSec && retryAfterSec > 0) ms = Math.max(ms, retryAfterSec * 1000);
+    ms = Math.min(ms, RL_MAX_BACKOFF_MS);
+    rlUntil = Date.now() + ms;
+    lastRlAt = Date.now();
+  }
+
+  function backoffMs() {
+    return Math.max(0, rlUntil - Date.now());
+  }
+
+  function rateLimitRecent(withinMs) {
+    return lastRlAt > 0 && (Date.now() - lastRlAt) < (withinMs || 45000);
   }
 
   var store = {};
@@ -87,16 +110,17 @@
          backoff so the pool does not keep re-firing the same keys while Dhan
          is rejecting us (each retry re-arms the server cooldown and freezes
          /api/candles for the whole app). */
-      if (r.status === 429 || r.status === 503 || r.status >= 500) {
-        rlUntil = Date.now() + RL_BACKOFF_MS;
-      }
-      return r.json();
-    }).then(function (d) {
-      if (d && d.status === 'success' && Array.isArray(d.data) && d.data.length) return d.data;
-      if (d && d.status === 'error' && /rate ?limit/i.test(String(d.message || ''))) {
-        rlUntil = Date.now() + RL_BACKOFF_MS;
-      }
-      return null;
+      var statusRl = (r.status === 429 || r.status === 503 || r.status >= 500);
+      return r.json().catch(function () {
+        return statusRl ? { status: 'error', message: 'HTTP ' + r.status } : null;
+      }).then(function (d) {
+        if (statusRl) armRateLimit(d && d.retry_after ? Number(d.retry_after) : 0);
+        if (d && d.status === 'error' && /rate ?limit/i.test(String(d.message || ''))) {
+          armRateLimit(d && d.retry_after ? Number(d.retry_after) : 0);
+        }
+        if (d && d.status === 'success' && Array.isArray(d.data) && d.data.length) return d.data;
+        return null;
+      });
     });
   }
 
@@ -217,6 +241,8 @@
     stats: stats,
     lastBarTime: lastBarTime,
     barIsCurrent: barIsCurrent,
+    backoffMs: backoffMs,
+    rateLimitRecent: rateLimitRecent,
     start: function () { window.HftPool._started = true; }
   };
 })();

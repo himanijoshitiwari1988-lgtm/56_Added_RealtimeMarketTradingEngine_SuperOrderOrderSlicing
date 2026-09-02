@@ -3816,6 +3816,43 @@ window.createAutoExperiment = function (suffix) {
     log('NIFTY ensemble trend timeframe set to ' + (_niftyTf === 'both' ? '1 min + 5 min' : _niftyTf), 'ok');
   }
 
+  /* Wait helpers for transient Dhan rate limits. When the server is inside its
+     rate-limit cooldown, /api/candles returns 503 (with retry_after) and the
+     HftPool serves empty arrays for cold keys instead of firing new requests.
+     fetchCandlesWithBackoff wraps a candle fetch for the experiment's fetch
+     phase: an empty/short result is only trusted once the pool's backoff has
+     cleared (a rate-limited fetch must not make the engine skip a whole symbol
+     or strike as if it had no data). A genuinely empty series - illiquid
+     strike with no trading history - is returned untouched on the first pass
+     when no rate limit is active. */
+  const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  function rlBackoffMs() {
+    if (window.HftPool && typeof HftPool.backoffMs === 'function') return HftPool.backoffMs();
+    return 0;
+  }
+  function rlRateLimitRecent(withinMs) {
+    if (window.HftPool && typeof HftPool.rateLimitRecent === 'function') return HftPool.rateLimitRecent(withinMs);
+    return false;
+  }
+  async function fetchCandlesWithBackoff(fetchFn, minLen) {
+    const minBars = minLen || 1;
+    let out = null;
+    let waitedRecent = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      out = await fetchFn();
+      if (out && out.length >= minBars) return out;
+      const w = rlBackoffMs();
+      if (w > 0) { await sleep(Math.min(w + 300, 40000)); continue; }
+      if (!waitedRecent && rlRateLimitRecent(45000)) {
+        waitedRecent = true;
+        await sleep(2500);
+        continue;
+      }
+      return out;
+    }
+    return out;
+  }
+
   async function candlesFor(symbol, tf, useCache) {
     const cur = (typeof selectedSymbol !== 'undefined') ? selectedSymbol : null;
     const isCurrent = cur && symbol && cur.id === symbol.id && cur.exch === symbol.exch;
@@ -4587,7 +4624,7 @@ window.createAutoExperiment = function (suffix) {
       progressFetch();
       const underlyingByTf = {};
       const uRes = await tfPool(activeTfs, 2, async (t) => {
-        const u = await candlesFor(sym, t, true);
+        const u = await fetchCandlesWithBackoff(() => candlesFor(sym, t, true), 60);
         bump(1); progressFetch();
         return { t, u };
       });
@@ -4666,7 +4703,7 @@ window.createAutoExperiment = function (suffix) {
         const ocList = await tfPool(contracts, 2, async (c) => {
           const ocByTf = {};
           const cres = await tfPool(activeTfs, 2, async (t) => {
-            const oc = await candlesForOption(sym, c.sid, t, true);
+            const oc = await fetchCandlesWithBackoff(() => candlesForOption(sym, c.sid, t, true), 60);
             bump(1); progressFetch();
             return { t, oc };
           });
@@ -4701,7 +4738,7 @@ window.createAutoExperiment = function (suffix) {
       const ocList = await tfPool(contracts, 2, async (c) => {
         const ocByTf = {};
         const cres = await tfPool(activeTfs, 2, async (t) => {
-          const oc = await candlesForOption(sym, c.sid, t, true);
+          const oc = await fetchCandlesWithBackoff(() => candlesForOption(sym, c.sid, t, true), 60);
           bump(1); progressFetch();
           return { t, oc };
         });
