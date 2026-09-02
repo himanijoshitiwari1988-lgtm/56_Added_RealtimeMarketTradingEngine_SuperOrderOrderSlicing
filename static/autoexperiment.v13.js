@@ -1206,8 +1206,8 @@ window.createAutoExperiment = function (suffix) {
          candle close, and between the primary line and a same-indicator twin
          with different values, e.g. EMA 9 vs EMA 20)
        - crossed above / crossed below the same indicator with different values */
-  function buildFilterConditions(tpl) {
-    const f = state.filters || {};
+  function buildFilterConditions(tpl, fOverride) {
+    const f = fOverride || state.filters || {};
     const enabled = (f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc)) || (f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc));
     if (!enabled) return [];
     const out = [];
@@ -1423,6 +1423,73 @@ window.createAutoExperiment = function (suffix) {
     return buildFilterConditions(tpl).map(c => condLabel(c, true));
   }
 
+  /* ---------------- strict "all indicators & filters together" mode ------------
+     When the AE "All together (strict AND)" checkbox is ON the experiment stops
+     sweeping the research templates and instead builds pure indicator-filter
+     strategies whose entry = EVERY currently selected Bullish/Bearish indicator
+     filter condition (all must pass together on the same bar = strict AND). This
+     mirrors the AI Smart engine's "Indicator filter based trades: All together
+     (strict AND)" mode, but here each result is a backtested strategy per
+     symbol/strike so it surfaces in the AE results list. Filters that reference
+     "the strategy's primary line" (increasing upward / downward, gap and
+     twin-cross gates) are built around a neutral EMA-9 primary so they still
+     have a concrete line to evaluate, exactly like the AI Smart engine. Returns
+     an empty list when strict mode is off, no filter section is enabled, or no
+     condition could be built for the side(s). */
+  const STRICT_NEUTRAL_TPL = { entry: { indId: 'ema', indSettings: { length: 9, source: 'close' }, valueKey: 'v0' } };
+  const STRICT_BULL_KEYS = ['bullish', 'incUp', 'gapUp', 'incUpAll', 'crossUp', 'gtUp', 'ltUp', 'paneCrossUp', 'paneIncUpAll']
+    .concat(FILTER_EXTRA_KEYS.filter(k => k.indexOf('bull') === 0))
+    .concat(STREAM_FLAG_KEYS.filter(k => k.indexOf('bull') === 0));
+  const STRICT_BEAR_KEYS = ['bearish', 'incDown', 'gapDown', 'incDownAll', 'crossDown', 'gtDown', 'ltDown', 'paneCrossDown', 'paneIncDownAll']
+    .concat(FILTER_EXTRA_KEYS.filter(k => k.indexOf('bear') === 0))
+    .concat(STREAM_FLAG_KEYS.filter(k => k.indexOf('bear') === 0));
+
+  /* All selected filter conditions of ONE side (Bullish or Bearish), with the
+     opposite side's flags zeroed so a bullish strict strategy can never be
+     gated by a bearish filter (and vice-versa). */
+  function strictSideCondSet(side) {
+    const keep = side === 'bullish' ? STRICT_BULL_KEYS : STRICT_BEAR_KEYS;
+    const drop = side === 'bullish' ? STRICT_BEAR_KEYS : STRICT_BULL_KEYS;
+    const f = {};
+    keep.forEach(k => { f[k] = !!(state.filters && state.filters[k]); });
+    drop.forEach(k => { f[k] = false; });
+    return buildFilterConditions(JSON.parse(JSON.stringify(STRICT_NEUTRAL_TPL)), f);
+  }
+
+  /* The strict filter-mode strategy templates the experiment should run (0..2:
+     one per enabled Bullish/Bearish side). The strike- / filter-direction gate
+     is honoured so CE / a bullish filter never experiments with bearish
+     strategies (and PE / a bearish filter never with bullish ones). */
+  function strictFilterTemplates() {
+    if (state.allInOne !== true) return [];
+    const f = state.filters || {};
+    const out = [];
+    const dirGate = effectiveStrategyDirection();
+    const sides = [];
+    if (f.bullish && (!dirGate || dirGate === 'bullish')) sides.push('bullish');
+    if (f.bearish && (!dirGate || dirGate === 'bearish')) sides.push('bearish');
+    for (const side of sides) {
+      const conds = strictSideCondSet(side);
+      if (!conds.length) continue;
+      const sideLabel = side === 'bullish' ? 'Bullish' : 'Bearish';
+      out.push({
+        key: 'indf:' + side,
+        name: 'Indicator filter based trades (' + side + ', all together)',
+        cat: side,
+        method: 'Indicator filters',
+        research: sideLabel + ' indicator filters (strict AND)',
+        entry: conds,
+        exit: null,
+        candlestick: null,
+        entryExtra: [],
+        exitExtra: [],
+        filters: conds.map(c => condLabel(c, true)),
+        __filterBuilt: true
+      });
+    }
+    return out;
+  }
+
   function applyLogicAt(logic, last, prev, cmpLast, cmpPrev) {
     if (last == null || cmpLast == null) return false;
     switch (logic) {
@@ -1562,6 +1629,36 @@ window.createAutoExperiment = function (suffix) {
       const dir = cond.dir === -1 ? 'bearish' : 'bullish';
       const out = new Array(n).fill(false);
       for (let i = 0; i < n; i++) out[i] = reversalAt(candles, i, dir);
+      return out;
+    }
+    /* Candle close vs indicator band gates (mirror of evalCondAt): the close
+       must be above/below the indicator band on the bar, and a Bollinger gate
+       additionally requires the band width to be expanding. */
+    if (cond.logic === 'closeCrossAbove' || cond.logic === 'closeCrossBelow') {
+      const bandArr = alignedSeries(cond.indId, cond.indSettings, cond.valueKey || 'v1', candles);
+      const widthArr = (cond.expand && cond.indId === 'bb') ? bbGapSeries(cond.indSettings, candles) : null;
+      const out = new Array(n).fill(false);
+      for (let i = 0; i < n; i++) {
+        const bar = candles[i];
+        const band = bandArr ? bandArr[i] : null;
+        if (!bar || band == null) continue;
+        const crossed = cond.logic === 'closeCrossAbove' ? bar.close > band : bar.close < band;
+        if (!crossed) continue;
+        if (widthArr && !trendAt(widthArr, i, 'up')) continue;
+        out[i] = true;
+      }
+      return out;
+    }
+    /* Auto Support Resistance gap gates (mirror of evalCondAt): the signed gap
+       series must be positive (price on the correct side of the line) AND
+       widening. */
+    if (cond.logic === 'asrSupGapUp' || cond.logic === 'asrResGapUp') {
+      const gap = autoSRGapSeries(cond.indSettings, candles, cond.logic === 'asrSupGapUp' ? 'sup' : 'res');
+      const out = new Array(n).fill(false);
+      for (let i = 0; i < n; i++) {
+        if (gap[i] == null || gap[i] <= 0) continue;
+        if (trendAt(gap, i, 'up')) out[i] = true;
+      }
       return out;
     }
     if (!cond.indId) return null;
@@ -1782,7 +1879,12 @@ window.createAutoExperiment = function (suffix) {
     let curDay = null, dayCount = 0;
     let trades = [], wins = 0, losses = 0, grossWin = 0, grossLoss = 0;
     let equity = [0], tradesList = [];
-    const entrySignal = buildSignal(tpl.entry, candles);
+    /* Entry may be a single condition or an ARRAY of conditions (the strict
+       indicator-filter strategies carry every selected filter as the entry
+       array): an array entry is ANDed across all of them (all must pass). */
+    const entrySignal = Array.isArray(tpl.entry)
+      ? (tpl.entry.length ? buildAll(tpl.entry, candles) : null)
+      : buildSignal(tpl.entry, candles);
     const etConds = tpl.entryExtra || [];
     const need = (tpl.entryThreshold != null && tpl.entryThreshold >= 1)
       ? Math.min(tpl.entryThreshold, etConds.length) : etConds.length;
@@ -1969,7 +2071,9 @@ window.createAutoExperiment = function (suffix) {
     if (!srcs.length) return null;
     const tradeTimes = tradeCandles.map(c => c.time);
     const aligned = srcs.map(sc => {
-      const entrySignal = buildSignal(tpl.entry, sc);
+      const entrySignal = Array.isArray(tpl.entry)
+        ? (tpl.entry.length ? buildAll(tpl.entry, sc) : null)
+        : buildSignal(tpl.entry, sc);
       const etConds = tpl.entryExtra || [];
       const need = (tpl.entryThreshold != null && tpl.entryThreshold >= 1)
         ? Math.min(tpl.entryThreshold, etConds.length) : etConds.length;
@@ -4132,7 +4236,7 @@ window.createAutoExperiment = function (suffix) {
       if (splitOpts) {
         splitKey = '|split:' + (splitOpts.signalCandles || []).map(seriesKey).join('+') + '>' + seriesKey(splitOpts.tradeCandles || candles);
       }
-      const key = fTpl.key + '|' + (fTpl.entryExtra ? JSON.stringify(fTpl.entryExtra) : '') + '|' + series + '|' + oKey + splitKey;
+      const key = fTpl.key + '|' + (fTpl.entry ? JSON.stringify(fTpl.entry) : '') + '|' + (fTpl.entryExtra ? JSON.stringify(fTpl.entryExtra) : '') + '|' + series + '|' + oKey + splitKey;
       const hit = _backtestCache.get(key);
       if (hit && (Date.now() - hit.at) < _BACKTEST_CACHE_MS) return hit.m;
       const m = splitOpts
@@ -4157,7 +4261,11 @@ window.createAutoExperiment = function (suffix) {
       const autoSl = autoSLPct(tradeCandles);
       const symId = symIdOf(sym);
         const runTemplates = async (tpl, source, extra) => {
-        const fTpl = applyFilters(tpl);
+        /* Strict filter-mode templates already carry every selected filter
+           condition as their entry (they ARE the strategy) - applying the
+           filters a second time would duplicate every condition. */
+        const isFilterTpl = tpl.__filterBuilt === true;
+        const fTpl = isFilterTpl ? tpl : applyFilters(tpl);
         /* Resolve the trade quantity for broker-charge deduction the same way
            paper trading does: the underlying's real lot size (from the broker
            scrip master) unless the user set a universal override. */
@@ -4170,7 +4278,9 @@ window.createAutoExperiment = function (suffix) {
           ? backtestCached(fTpl, tradeCandles, bOpts, seriesKey(tradeCandles), splitOpts)
           : backtestCached(fTpl, backCandles, bOpts, seriesKey(backCandles));
         const score = scoreOf(m);
-        const filterNames = fTpl !== tpl ? activeFilterLabels(tpl) : [];
+        const filterNames = isFilterTpl
+          ? (tpl.filters || [])
+          : (fTpl !== tpl ? activeFilterLabels(tpl) : []);
         const uu = state.universal || {};
         const refManualSLOn = uu.manualSL === true;
         const refTrailOn = uu.manualTrailSL === true;
@@ -4230,11 +4340,33 @@ window.createAutoExperiment = function (suffix) {
       const enabledGroups = (state.groups && state.groups.length) ? state.groups : GROUP_KEYS.slice();
       const dirGate = effectiveStrategyDirection();
       const streamGroups = activeFilterGroups();
+      /* Strict "all indicators & filters together" mode: the pure indicator-filter
+         strategy (entry = every selected filter, strict AND) replaces the whole
+         research-template sweep, so only it is counted / run per unit. */
+      const filterTpls = strictFilterTemplates();
       /* Number of templates (incl. manual strategies) this unit will actually
          run after the group / direction / stream gates - used to advance the
          progress bar smoothly per template instead of one coarse step per unit. */
       const totalRun = (() => {
         let c = 0;
+        /* Strict filter mode counts one run per strict filter strategy (per
+           saved-engine-template scope when the auto strategy sender is on). */
+        if (filterTpls.length) {
+          if (scopedTpls.length) {
+            const orig = captureEngineSettings();
+            try {
+              for (const t of scopedTpls) {
+                applyEngineSettingsSilent(t.settings);
+                c += Math.max(1, strictFilterTemplates().length);
+              }
+            } finally {
+              applyEngineSettingsSilent(orig);
+            }
+          } else {
+            c = filterTpls.length;
+          }
+          return c;
+        }
         /* Auto strategy sender scope: each selected engine template applies its
            saved settings and the research-template sweep runs under that
            configuration, so the count is the union of every template's sweep. */
@@ -4287,6 +4419,36 @@ window.createAutoExperiment = function (suffix) {
         const now = Date.now();
         if (now - lastYield >= 16) { lastYield = now; await yieldToUI(); }
       };
+      /* Strict "all indicators & filters together" mode: run ONLY the pure
+         indicator-filter strategy (all selected filters ANDed as the entry) on
+         this chart - no research-template sweep, no manual strategies. When the
+         auto strategy sender scopes the run to saved engine templates, each
+         template's saved settings (incl. its own filter selection) are applied
+         and the matching strict filter strategy is rebuilt under them. */
+      if (filterTpls.length) {
+        const runFilterSet = async (list) => {
+          for (const ft of list) {
+            await runTemplates(ft, 'auto');
+            ran++;
+            if (tick) tick(ran, totalRun);
+            await maybeYield();
+          }
+        };
+        if (scopedTpls.length) {
+          const origScope = captureEngineSettings();
+          for (const t of scopedTpls) {
+            applyEngineSettingsSilent(t.settings);
+            try {
+              await runFilterSet(strictFilterTemplates());
+            } finally {
+              applyEngineSettingsSilent(origScope);
+            }
+          }
+        } else {
+          await runFilterSet(filterTpls);
+        }
+        return;
+      }
       /* Auto strategy sender scope: each selected engine template's saved
          settings are applied (silently) and the full research-template sweep
          runs under that configuration; settings are restored after each so the
