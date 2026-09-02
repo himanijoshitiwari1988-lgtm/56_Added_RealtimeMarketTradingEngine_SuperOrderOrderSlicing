@@ -194,6 +194,40 @@
       walls.sort((a, b) => b.oi - a.oi);
       res.walls = walls.slice(0, (opts.maxWalls != null ? opts.maxWalls : 10));
     }
+    /* PER-STRIKE CE/PE OI interplay right around the current price (both legs).
+       The two decisive strikes are the strongest call wall just ABOVE spot
+       (overhead supply that caps up-moves) and the strongest put wall just
+       BELOW spot (underfoot support that cushions down-moves). Comparing them
+       answers exactly "call OI high at a strike while put OI there is low/high
+       and how it pushes the trend":
+         resOverhead = ceOi / (ceOi+peOi) of those two near strikes (0..1, 1 =
+                       calls dominate overhead -> caps bulls),
+         supUnder    = peOi / (ceOi+peOi) (1 = puts dominate below -> aids bulls),
+         netOi       = supUnder - resOverhead (-1..1, >0 bullish put build below),
+         box         = min(resOverhead, supUnder) (high when BOTH legs are heavy
+                       near spot -> the price is PINCHED between the camps). */
+    if (spot > 0 && list.length) {
+      const nearPct = opts.oiNearPct != null ? opts.oiNearPct : 0.006;
+      const loB = spot * (1 - nearPct), hiB = spot * (1 + nearPct);
+      let nearCe = { strike: 0, oi: 0, chg: 0 }, nearPe = { strike: 0, oi: 0, chg: 0 };
+      let ceB = 0, peB = 0;
+      for (const r of list) {
+        if (r.strike > spot && r.strike <= hiB && r.ceOi > nearCe.oi) nearCe = { strike: r.strike, oi: r.ceOi, chg: r.ceChg };
+        if (r.strike < spot && r.strike >= loB && r.peOi > nearPe.oi) nearPe = { strike: r.strike, oi: r.peOi, chg: r.peChg };
+        if (r.strike >= loB && r.strike <= hiB) { ceB += r.ceOi; peB += r.peOi; }
+      }
+      const tot = nearCe.oi + nearPe.oi;
+      const resOverhead = tot > 0 ? nearCe.oi / tot : 0;
+      const supUnder = tot > 0 ? nearPe.oi / tot : 0;
+      res.resOverhead = resOverhead;
+      res.supUnder = supUnder;
+      res.netOi = tot > 0 ? (nearPe.oi - nearCe.oi) / tot : 0;
+      res.box = Math.min(resOverhead, supUnder);
+      res.nearCe = nearCe.oi > 0 ? nearCe : null;
+      res.nearPe = nearPe.oi > 0 ? nearPe : null;
+      res.pcrBand = ceB > 0 ? peB / ceB : (peB > 0 ? 3 : null);
+      res.ceOiBand = ceB; res.peOiBand = peB;
+    }
     return res;
   }
 
@@ -355,6 +389,12 @@
       pcrLevel: 0,    /* +1 extreme-low(call-heavy), -1 extreme-high(put-heavy) */
       walls: (level && level.walls) || []
     };
+    ctx.oi = (level && (level.netOi != null || level.box != null)) ? {
+      res: level.resOverhead || 0,   /* call OI share overhead (caps up-moves) */
+      sup: level.supUnder || 0,      /* put OI share underfoot (supports bulls) */
+      net: level.netOi || 0,         /* sup - res */
+      box: level.box || 0            /* min(res,sup): OI pinch both sides */
+    } : null;
     if (n < 5) return ctx;
     const closes = new Array(n), vols = new Array(n), highs = new Array(n), lows = new Array(n);
     for (let i = 0; i < n; i++) { closes[i] = candles[i].close; highs[i] = candles[i].high; lows[i] = candles[i].low; vols[i] = candles[i].volume || 0; }
@@ -413,23 +453,63 @@
   /* Turn the regime + the combined trend-movement context into the arrow /
      label / color. Returns {kind:'continue'|'reversal'|'consolidation',
      arrow:'up'|'down'|null, label, color, wall, ctx}.
-     A single weighted score fuses price-method agreement, volume trend and
-     PCR so volume increasing/decreasing + PCR take part in every trend state,
-     exactly like the other methods - never a separate filter. */
+     A single weighted score fuses price-method agreement, volume trend, PCR
+     and the PER-STRIKE CE/PE OI interplay around the current price (both
+     legs), so volume increasing/decreasing + PCR + OI all take part in every
+     trend state - never separate filters.
+
+     Per-strike OI (ctx.oi): the strongest call wall just ABOVE spot
+     (ctx.oi.res = overhead call supply that caps rallies) vs the strongest
+     put wall just BELOW spot (ctx.oi.sup = underfoot put support).
+       net = sup - res : <0 means call OI dominates at the strikes around the
+             price (caps an up-trend / presses it down), >0 means put OI
+             dominates (cushions a down-trend / lifts it up).
+       box = min(res,sup) : high when BOTH legs have built heavy OI on both
+             sides of the current price -> the move is PINCHED between them.
+     Consolidation is therefore detected not only from the EMA9/21 price
+     regime being flat but ALSO from this OI pinch (both camps heavy near the
+     price). And a flat EMA regime with a strongly one-sided OI build becomes
+     an OI-bias continue arrow (leading signal) instead of consolidation. */
   function classify(last, ctx, cfg) {
     cfg = cfg || {};
     const revColor = '#ff9100';
     const nearPct = cfg.nearPct != null ? cfg.nearPct : 0.006;
     if (!last || !ctx) return { kind: 'consolidation', arrow: null, label: 'Consolidation Liquidity Grabbing Phase', color: '#ffc107', ctx };
+    const oi = ctx.oi || {};
+    const net = oi.net || 0;       /* sup - res: <0 call-heavy overhead, >0 put-heavy below */
+    const box = oi.box || 0;       /* min(res,sup): both OI camps heavy near spot => squeeze */
+    const boxFloor = cfg.oiBoxFloor != null ? cfg.oiBoxFloor : 0.30;
+    const balMax = cfg.oiBalMax != null ? cfg.oiBalMax : 0.45;
+    const consScoreT = cfg.consScoreT != null ? cfg.consScoreT : 0.22;
+    const breakTh = cfg.oiBreakTh != null ? cfg.oiBreakTh : 0.5;
+    const squeeze = box >= boxFloor && Math.abs(net) <= balMax;
+    const plainCons = { kind: 'consolidation', arrow: null, label: 'Consolidation Liquidity Grabbing Phase', color: '#ffc107', ctx, net, box };
+    const pinCons = { kind: 'consolidation', arrow: null, label: 'Consolidation · OI squeeze (CE & PE walls both sides)', color: '#ffc107', ctx, net, box };
+    const bias = (dir) => {
+      const upB = dir === 'up';
+      return {
+        kind: 'continue', arrow: dir,
+        label: upB ? 'OI Bias UP (put OI heavy below)' : 'OI Bias DOWN (call OI heavy above)',
+        color: upB ? '#26c6da' : '#ff7043',
+        strength: 'weak', preview: true, net, box, ctx
+      };
+    };
+    /* EMA regime FLAT: consolidation UNLESS the per-strike OI build is strongly
+       one-sided (net passes the break threshold on either side -> an OI-bias
+       leading arrow) or both camps are balanced-heavy (OI pinch -> still
+       consolidation, that is the squeeze the phase name is about). */
     if (last.regime === 'flat') {
-      return { kind: 'consolidation', arrow: null, label: 'Consolidation Liquidity Grabbing Phase', color: '#ffc107', ctx };
+      if (!squeeze && net >= breakTh) return bias('up');
+      if (!squeeze && net <= -breakTh) return bias('down');
+      return squeeze ? pinCons : plainCons;
     }
     const up = last.regime === 'up';
     const regSign = up ? 1 : -1;
     /* Weights of the fused components (always add to 1). */
-    const wAgr = cfg.wAgr != null ? cfg.wAgr : 0.5;   /* all price methods (EMA ladder, supertrend, close vs EMA) */
-    const wVol = cfg.wVol != null ? cfg.wVol : 0.3;   /* volume increasing / decreasing */
-    const wPcr = cfg.wPcr != null ? cfg.wPcr : 0.2;   /* PCR level change + call/put-wall lean */
+    const wAgr = cfg.wAgr != null ? cfg.wAgr : 0.40;  /* all price methods (EMA ladder, supertrend, close vs EMA) */
+    const wVol = cfg.wVol != null ? cfg.wVol : 0.25;  /* volume increasing / decreasing */
+    const wPcr = cfg.wPcr != null ? cfg.wPcr : 0.20;  /* PCR level change + call/put-wall lean */
+    const wOi = cfg.wOi != null ? cfg.wOi : 0.15;     /* per-strike CE vs PE OI at the current price */
     const spot = ctx.spot || last.close || 0;
     /* Combined trend score in [-1,1]; positive always means "supports the
        current regime direction", negative means it is being fought. */
@@ -443,7 +523,8 @@
          add it to the wall check below, not to the running score, so a plain
          low pcr mid-range does not veto the move. */
     }
-    const score = wAgr * agr + wVol * vol + wPcr * pcr;
+    const oiDir = net * regSign;   /* net<0 + up-regime = the call wall overhead is capping the rally */
+    const score = wAgr * agr + wVol * vol + wPcr * pcr + wOi * oiDir;
     const strongT = cfg.strongT != null ? cfg.strongT : 0.18;
     const weakT = cfg.weakT != null ? cfg.weakT : -0.15;
     const strong = score >= strongT;
@@ -464,17 +545,23 @@
         const wallArg = hit.chg > 0;                       /* fresh OI building AT the wall */
         const extreme = up ? ctx.pcrLevel === 1 : ctx.pcrLevel === -1; /* call-heavy above / put-heavy below */
         if (wallArg || extreme || score <= weakT || (up ? ctx.pcrDir < -0.4 : ctx.pcrDir > 0.4)) {
-          reversal = { kind: 'reversal', arrow: up ? 'down' : 'up', label: 'Reversal', color: revColor, wall: hit, ctx };
+          const strikeTxt = Math.round(hit.strike * 100) / 100;
+          reversal = { kind: 'reversal', arrow: up ? 'down' : 'up', label: 'Reversal @ ' + strikeTxt, color: revColor, wall: hit, ctx };
         }
       }
     }
     if (reversal) return reversal;
+    /* OI pinch: the price is parked between heavy call OI above AND heavy put
+       OI below (both legs built near spot) and the fused score has no
+       directional conviction -> consolidation even if the short EMA still
+       leans one way. This is the OI-based consolidation detection. */
+    if (squeeze && Math.abs(score) < consScoreT) return pinCons;
     const label = strong ? 'Trend Continue' : (weak ? 'Trend Continue (weak)' : 'Trend Continue');
     return {
       kind: 'continue', arrow: up ? 'up' : 'down', label,
       color: strong ? dirColor : (weak ? 'rgba(255,255,255,0.35)' : dimColor),
       strength: strong ? 'strong' : (weak ? 'weak' : 'normal'),
-      score, agr, vol, pcr, ctx
+      score, agr, vol, pcr, oiDir, net, box, ctx
     };
   }
 
@@ -740,14 +827,14 @@
     const infoText = trendInfoText(st);
     if (st.kind === 'consolidation') {
       mk.push({ time: t, position: 'belowBar', shape: 'circle', color: st.color, text: '◀' });
-      mk.push({ time: t, position: 'aboveBar', shape: 'circle', color: st.color, text: 'Consolidation Liquidity Grabbing Phase' + (infoText ? ' | ' + infoText : '') });
+      mk.push({ time: t, position: 'aboveBar', shape: 'circle', color: st.color, text: st.label || 'Consolidation Liquidity Grabbing Phase' + (infoText ? ' | ' + infoText : '') });
     } else {
       mk.push({
         time: t,
         position: up ? 'belowBar' : 'aboveBar',
         shape: up ? 'arrowUp' : 'arrowDown',
         color: st.color,
-        text: st.kind === 'reversal' ? 'Reversal Point' : (st.strength === 'weak' ? 'Trend Continue (weak)' : 'Trend Continue')
+        text: st.label || (st.kind === 'reversal' ? 'Reversal Point' : (st.strength === 'weak' ? 'Trend Continue (weak)' : 'Trend Continue'))
       });
       if (infoText) {
         mk.push({
@@ -797,6 +884,10 @@
       parts.push('Vol ' + (vd > 0 ? 'rising' : (vd < 0 ? 'falling' : 'flat')));
       if (st.agr != null) parts.push('Price ' + (st.agr > 0 ? '+' : '') + st.agr.toFixed(2));
       if (st.score != null) parts.push('Score ' + (st.score > 0 ? '+' : '') + st.score.toFixed(2));
+      const oi2 = ctx.oi;
+      if (oi2 && (Math.abs(oi2.net || 0) >= 0.05 || (oi2.box || 0) >= 0.2)) {
+        parts.push('OI sup ' + ((oi2.sup || 0) >= 0.99 ? '1' : (oi2.sup || 0).toFixed(2)) + '/res ' + ((oi2.res || 0) >= 0.99 ? '1' : (oi2.res || 0).toFixed(2)));
+      }
       return parts.join(' | ');
     } catch (e) { return ''; }
   }
@@ -827,9 +918,9 @@
       const ctx = st.ctx || {};
       let head;
       if (st.kind === 'consolidation') {
-        head = '· CONSOLIDATION · OI squeeze, no clear trend';
+        head = '· ' + (st.label || 'CONSOLIDATION');
       } else if (st.kind === 'reversal') {
-        head = (st.arrow === 'up' ? '↑' : '↓') + ' REVERSAL POINT (OI wall)';
+        head = (st.arrow === 'up' ? '↑' : '↓') + ' ' + (st.label || 'REVERSAL POINT (OI wall)');
       } else {
         const arrow = st.arrow === 'up' ? '↑' : '↓';
         head = arrow + ' ' + (st.arrow === 'up' ? 'UP' : 'DOWN') + ' · ' + st.label + (st.strength ? ' (' + st.strength + ')' : '');
@@ -846,6 +937,10 @@
       }
       const vd = ctx.vol ? ctx.vol.dir : 0;
       parts.push('Vol ' + (vd > 0 ? 'rising' : (vd < 0 ? 'falling' : 'flat')));
+      const oi2 = ctx.oi;
+      if (oi2 && (Math.abs(oi2.net || 0) >= 0.05 || (oi2.box || 0) >= 0.2)) {
+        parts.push('OI sup ' + ((oi2.sup || 0) >= 0.99 ? '1' : (oi2.sup || 0).toFixed(2)) + '/res ' + ((oi2.res || 0) >= 0.99 ? '1' : (oi2.res || 0).toFixed(2)));
+      }
       el.innerHTML = '';
       el.appendChild(h);
       const s = document.createElement('span');
