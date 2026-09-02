@@ -4312,6 +4312,11 @@ window.createAutoExperiment = function (suffix) {
           refSlPct: refSlPct,
           refTrailSlPct: refTrailSlPct,
           filters: filterNames,
+          /* True only for the pure indicator-filter strategies of the "All
+             indicators/filters together (strict AND)" mode: used below to keep
+             EVERY selected symbol's outcome instead of dropping unprofitable
+             ones (a strict AND rarely proves profitable on every symbol). */
+          strictFilter: isFilterTpl,
           metrics: m,
           score,
           verdict: verdict(score),
@@ -4928,13 +4933,27 @@ window.createAutoExperiment = function (suffix) {
 
     // Rank, then drop anything that did not prove profitable in backtest.
     all.sort((a, b) => b.score - a.score);
-    // A profitable strategy needs at least 2 closed trades and a positive net
-    // return. Relax progressively so the engine always surfaces its best
-    // candidates instead of showing an empty list.
-    let profitable = all.filter(r => r.metrics && r.metrics.trades >= 2 && r.metrics.totalReturn > 0);
-    if (!profitable.length) profitable = all.filter(r => r.metrics && r.metrics.totalReturn > 0);
+    /* Strict "all indicators & filters together" mode reports EVERY selected
+       symbol's outcome. The strict run has only ONE strategy per side (its
+       entry = every selected filter ANDed), so the normal "drop unprofitable
+       strategies" pass would remove most of the selected universe (a strict AND
+       rarely produces 2+ profitable trades on every symbol at once) and the run
+       would look like it backtested a single symbol. Keep every symbol's
+       result - profitable or not - so the full per-symbol picture is visible
+       and the user ticks which ones to send to Paper Trade. */
+    const strictFilterRun = all.some(r => r && r.strictFilter === true);
+    let profitable;
     let degenerate = false;
-    if (!profitable.length) { profitable = all; degenerate = true; }
+    if (strictFilterRun) {
+      profitable = all;
+    } else {
+      // A profitable strategy needs at least 2 closed trades and a positive net
+      // return. Relax progressively so the engine always surfaces its best
+      // candidates instead of showing an empty list.
+      profitable = all.filter(r => r.metrics && r.metrics.trades >= 2 && r.metrics.totalReturn > 0);
+      if (!profitable.length) profitable = all.filter(r => r.metrics && r.metrics.totalReturn > 0);
+      if (!profitable.length) { profitable = all; degenerate = true; }
+    }
 
     // Cap the top TEMPLATES per symbol (not the top results) so per-strike
     // backtests keep EVERY selected strike of every kept strategy. The old cap
