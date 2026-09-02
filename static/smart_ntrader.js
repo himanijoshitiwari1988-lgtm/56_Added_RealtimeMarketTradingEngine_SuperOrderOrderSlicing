@@ -1114,6 +1114,9 @@
 
     var TF_SECS = { '1min': 60, '2min': 120, '3min': 180, '4min': 240, '5min': 300, '10min': 600, '15min': 900, '30min': 1800, '1hour': 3600, '4hour': 14400 };
     var BBSET_KEY = 'ntrBbpSettings';
+    /* BB%b can go below 0 / above 1 (price below lower / above upper band), so
+       alert levels are allowed in this wider range instead of just 0-3. */
+    var ALERT_MIN = -3, ALERT_MAX = 3;
 
     function defaultAlertCfg() {
       return {
@@ -1128,13 +1131,13 @@
         if (j && j.bull) {
           def.bull.enabled = !!j.bull.enabled;
           def.bull.cond = (j.bull.cond === 'crossed_below') ? 'crossed_below' : 'crossed_above';
-          def.bull.value = (Number(j.bull.value) >= 0 && Number(j.bull.value) <= 3) ? Number(j.bull.value) : 0.8;
+          def.bull.value = (Number(j.bull.value) >= ALERT_MIN && Number(j.bull.value) <= ALERT_MAX) ? Number(j.bull.value) : 0.8;
           def.bull.side = (j.bull.side === 'PE') ? 'PE' : 'CE';
         }
         if (j && j.bear) {
           def.bear.enabled = !!j.bear.enabled;
           def.bear.cond = (j.bear.cond === 'crossed_above') ? 'crossed_above' : 'crossed_below';
-          def.bear.value = (Number(j.bear.value) >= 0 && Number(j.bear.value) <= 3) ? Number(j.bear.value) : 0.2;
+          def.bear.value = (Number(j.bear.value) >= ALERT_MIN && Number(j.bear.value) <= ALERT_MAX) ? Number(j.bear.value) : 0.2;
           def.bear.side = (j.bear.side === 'CE') ? 'CE' : 'PE';
         }
       } catch (e) {}
@@ -1150,7 +1153,7 @@
         s = (c && c[k]) ? c[k] : {};
         out[k].enabled = !!s.enabled;
         out[k].cond = (s.cond === 'crossed_below') ? 'crossed_below' : 'crossed_above';
-        out[k].value = (Number(s.value) >= 0 && Number(s.value) <= 3) ? Number(s.value) : base[k].value;
+        out[k].value = (Number(s.value) >= ALERT_MIN && Number(s.value) <= ALERT_MAX) ? Number(s.value) : base[k].value;
         out[k].side = (s.side === 'PE' || s.side === 'CE') ? s.side : base[k].side;
       }
       return out;
@@ -1346,7 +1349,7 @@
         if (!show) { if (el) el.style.display = 'none'; continue; }
         var y = null;
         if (bbSeries.priceToCoordinate) {
-          try { y = bbSeries.priceToCoordinate(Math.min(3, Math.max(0, v))); } catch (e) {}
+          try { y = bbSeries.priceToCoordinate(Math.min(ALERT_MAX, Math.max(ALERT_MIN, v))); } catch (e) {}
         }
         if (y == null || !isFinite(y)) { if (el) el.style.display = 'none'; continue; }
         if (!el) {
@@ -1379,7 +1382,7 @@
         try { val = bbSeries.coordinateToPrice(yrel); } catch (e) {}
       }
       if (val == null || !isFinite(val)) return;
-      cfg.value = Math.round(Math.min(3, Math.max(0, val)) * 1000) / 1000;
+      cfg.value = Math.round(Math.min(ALERT_MAX, Math.max(ALERT_MIN, val)) * 1000) / 1000;
       var el = _ovLines[_ovDrag.key];
       if (el) {
         var h = _paneHost.clientHeight || _paneHost.offsetHeight || 110;
@@ -1720,9 +1723,9 @@
       styleAlertSel(cond);
       ctl.appendChild(cond);
       var val = document.createElement('input');
-      val.type = 'number'; val.step = '0.05'; val.min = '0'; val.max = '3';
+      val.type = 'number'; val.step = '0.05'; val.min = String(ALERT_MIN); val.max = String(ALERT_MAX);
       val.value = cfg.value;
-      val.title = 'BB%b value (0-3)';
+      val.title = 'BB%b value (' + ALERT_MIN + ' to ' + ALERT_MAX + ')';
       val.style.cssText = 'width:56px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px';
       ctl.appendChild(val);
       var ar = document.createElement('span');
@@ -1766,13 +1769,18 @@
       cond.onchange = function () { cfg.cond = cond.value; persist(); };
       val.onchange = function () {
         var v = parseFloat(val.value);
-        if (isNaN(v) || v < 0) { val.value = cfg.value; return; }
-        cfg.value = Math.min(3, Math.max(0, v));
+        if (isNaN(v)) { val.value = cfg.value; return; }
+        cfg.value = Math.min(ALERT_MAX, Math.max(ALERT_MIN, v));
+        if (val.value !== String(cfg.value)) val.value = String(cfg.value);
         persist();
       };
       val.addEventListener('input', function () {
         var v = parseFloat(val.value);
-        if (!isNaN(v) && v >= 0) { cfg.value = Math.min(3, v); saveDraftCfg(); refreshAlertStatus(); }
+        if (!isNaN(v)) {
+          cfg.value = Math.min(ALERT_MAX, Math.max(ALERT_MIN, v));
+          saveDraftCfg();
+          refreshAlertStatus();
+        }
       });
       side.onchange = function () { cfg.side = side.value; syncDisabled(); persist(); };
       syncDisabled();
