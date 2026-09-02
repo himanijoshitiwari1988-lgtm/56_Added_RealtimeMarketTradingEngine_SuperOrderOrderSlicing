@@ -567,6 +567,39 @@
 
   const Pure = { emaArr, smaArr, atrArr, stSeries, volTrendOf, contextOf, levelData, oiRows, regimeLine, classify };
 
+  /* Register the OI Trend direction line as an evaluable indicator (id
+     'oitrend') on the shared IndChart.IND registry. Its compute reuses
+     regimeLine() - the exact series the OI Trend overlay draws - so the AST /
+     AE engines can gate entries on the SAME line the user sees on the
+     candlestick chart: bullish when the OI Trend line is increasing upward,
+     bearish when it is increasing downward. Registering on the IND map (not
+     the IND_LIST menu) keeps the standalone OI Trend toggle the only visual
+     path, while the engine filter evaluation resolves it identically. */
+  function registerOitInd() {
+    try {
+      const ind = IC() && IC().IND;
+      if (!ind || ind.oitrend) return;
+      ind.oitrend = {
+        id: 'oitrend', name: 'OI Trend', fullName: 'OI Trend direction line', cat: 'OI', type: 'overlay',
+        inputs: [
+          { key: 'fast', label: 'Fast EMA length', def: 9, min: 1, max: 100, step: 1 },
+          { key: 'slow', label: 'Slow EMA length', def: 21, min: 2, max: 200, step: 1 },
+          { key: 'enterK', label: 'Enter ATR mult', def: 0.45, min: 0.05, max: 2, step: 0.05 },
+          { key: 'exitK', label: 'Exit ATR mult', def: 0.12, min: 0.02, max: 1, step: 0.02 }
+        ],
+        style: [
+          { key: 'color', label: 'Color', def: '#26c6da' },
+          { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+        ],
+        compute(c, o) {
+          const R = regimeLine(c, o || {});
+          return [{ type: 'line', color: (o && o.color) || '#26c6da', lineWidth: (o && o.lineWidth) || 2, data: R.data }];
+        }
+      };
+    } catch (e) {}
+  }
+  registerOitInd();
+
   /* ------------------------- runtime glue ------------------------------- */
   const CFG = {
     refreshMs: 60000,        /* auto chain refresh when healthy */

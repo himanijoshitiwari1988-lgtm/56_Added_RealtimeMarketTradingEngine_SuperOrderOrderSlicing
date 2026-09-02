@@ -1263,6 +1263,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSmf" onchange="AISmartTrading.onFiltersInput()"> Smart Money Flow bullish (SMF above signal)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line rising + volume increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullAsr" onchange="AISmartTrading.onFiltersInput()"> Support gap widening (price rising away from support)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be increasing upward"><input type="checkbox" id="astFilterBullOit" onchange="AISmartTrading.onFiltersInput()"> OI Trend increasing upward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullBbCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above BB middle band (upper+lower expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPcCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above price channel middle line</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 crossed above EMA 21</label>
@@ -1319,6 +1320,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSmf" onchange="AISmartTrading.onFiltersInput()"> Smart Money Flow bearish (SMF below signal)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line falling + volume increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearAsr" onchange="AISmartTrading.onFiltersInput()"> Resistance gap widening (price falling away below resistance)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be increasing downward"><input type="checkbox" id="astFilterBearOit" onchange="AISmartTrading.onFiltersInput()"> OI Trend increasing downward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearBbCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below BB middle band (upper+lower expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPcCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below price channel middle line</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 crossed below EMA 21</label>
@@ -1818,6 +1820,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSmf" onchange="AutoExperiment.onFiltersInput()"> Smart Money Flow bullish (SMF above signal)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullVl" onchange="AutoExperiment.onFiltersInput()"> Volume Line rising + volume increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullAsr" onchange="AutoExperiment.onFiltersInput()"> Support gap widening (price rising away from support)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be increasing upward"><input type="checkbox" id="aeFilterBullOit" onchange="AutoExperiment.onFiltersInput()"> OI Trend increasing upward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullBbCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above BB middle band (upper+lower expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPcCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above price channel middle line</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 crossed above EMA 21</label>
@@ -1874,6 +1877,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSmf" onchange="AutoExperiment.onFiltersInput()"> Smart Money Flow bearish (SMF below signal)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearVl" onchange="AutoExperiment.onFiltersInput()"> Volume Line falling + volume increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearAsr" onchange="AutoExperiment.onFiltersInput()"> Resistance gap widening (price falling away below resistance)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be increasing downward"><input type="checkbox" id="aeFilterBearOit" onchange="AutoExperiment.onFiltersInput()"> OI Trend increasing downward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearBbCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below BB middle band (upper+lower expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPcCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below price channel middle line</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 crossed below EMA 21</label>
@@ -2383,7 +2387,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
 </div>
 
 <script src="/static/indicators.js?v=52"></script>
-<script src="/static/oitrend.js?v=3"></script>
+<script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
 
@@ -5855,10 +5859,10 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/strategies.js?v=69"></script>
 <script src="/static/papertrade.js?v=30"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=132"></script>
+<script src="/static/autoexperiment.v13.js?v=133"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=121"></script>
+<script src="/static/aismart.js?v=122"></script>
 <script src="/static/paperrun.js?v=22"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
 <script src="/static/hft_pool.js?v=6"></script>
