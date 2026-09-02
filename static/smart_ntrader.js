@@ -1094,7 +1094,12 @@
     var noteEl = null;
     var _tf = '5min';
     var ALERT_CFG_KEY = 'ntrBbpAlertCfg';
+    var ALERT_DRAFT_KEY = 'ntrBbpAlertDraft';
+    /* alertCfg = ARMED (engine/lines wahi use karta hai). draftCfg = popover ke
+       edit box me chal rahi values; sirf "Set Alert & Execute Trade" dabane par
+       hi draft LOCK hokar alertCfg me replace hota hai. */
     var alertCfg = null;
+    var draftCfg = null;
     var _bbPrev = null;
     var _lastFireAt = { bull: 0, bear: 0 };
     var _paneHost = null;
@@ -1136,6 +1141,35 @@
     }
     function saveAlertCfg() {
       try { localStorage.setItem(ALERT_CFG_KEY, JSON.stringify(alertCfg || {})); } catch (e) {}
+    }
+    function cloneAlertCfg(c) {
+      var base = defaultAlertCfg();
+      var out = { bull: {}, bear: {} }, k, s;
+      for (k in out) {
+        s = (c && c[k]) ? c[k] : {};
+        out[k].enabled = !!s.enabled;
+        out[k].cond = (s.cond === 'crossed_below') ? 'crossed_below' : 'crossed_above';
+        out[k].value = (Number(s.value) >= 0 && Number(s.value) <= 3) ? Number(s.value) : base[k].value;
+        out[k].side = (s.side === 'PE' || s.side === 'CE') ? s.side : base[k].side;
+      }
+      return out;
+    }
+    function alertsEqual(a, b) {
+      if (!a || !b) return false;
+      return a.bull.enabled === b.bull.enabled && a.bull.cond === b.bull.cond &&
+        Number(a.bull.value) === Number(b.bull.value) && a.bull.side === b.bull.side &&
+        a.bear.enabled === b.bear.enabled && a.bear.cond === b.bear.cond &&
+        Number(a.bear.value) === Number(b.bear.value) && a.bear.side === b.bear.side;
+    }
+    function loadDraftCfg() {
+      try {
+        var j = JSON.parse(localStorage.getItem(ALERT_DRAFT_KEY) || 'null');
+        if (j && j.bull) return cloneAlertCfg(j);
+      } catch (e) {}
+      return null;
+    }
+    function saveDraftCfg() {
+      try { localStorage.setItem(ALERT_DRAFT_KEY, JSON.stringify(draftCfg || {})); } catch (e) {}
     }
 
     function fmtV(v) {
@@ -1311,7 +1345,11 @@
       saveAlertCfg();
     }
     function onPanePointerUp() {
-      if (_ovDrag) { _ovDrag = null; saveAlertCfg(); }
+      if (_ovDrag) {
+        _ovDrag = null;
+        saveAlertCfg();
+        if (draftCfg) { draftCfg = cloneAlertCfg(alertCfg); saveDraftCfg(); refreshAlertStatus(); }
+      }
     }
     function renderBbp() {
       if (!bbSeries || !candles.length) return;
@@ -1461,11 +1499,19 @@
     function renderAlertBox() {
       var box = document.getElementById('ntrBbpAlertBox');
       if (!box) return;
+      if (!draftCfg) draftCfg = cloneAlertCfg(alertCfg || {});
       box.innerHTML = '';
+      var hdr = document.createElement('div');
+      hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px';
       var title = document.createElement('div');
       title.textContent = 'BB%b Alert -> Auto Trade';
-      title.style.cssText = 'font-size:9px;color:#ffb300;text-transform:uppercase;margin-bottom:4px';
-      box.appendChild(title);
+      title.style.cssText = 'font-size:9px;color:#ffb300;text-transform:uppercase;letter-spacing:.3px';
+      hdr.appendChild(title);
+      var chip = document.createElement('span');
+      chip.id = 'ntrBbpAlertStatus';
+      chip.textContent = '--';
+      hdr.appendChild(chip);
+      box.appendChild(hdr);
       var rows = [
         { key: 'bull', label: 'BULLISH', color: '#00d4aa' },
         { key: 'bear', label: 'BEARISH', color: '#ff4d6a' }
@@ -1479,16 +1525,76 @@
           box.appendChild(or);
         }
       }
+      var sum = document.createElement('div');
+      sum.id = 'ntrBbpAlertActive';
+      sum.style.cssText = 'font-size:8px;color:#99a;margin-top:5px;line-height:1.4;word-break:break-all';
+      box.appendChild(sum);
+      var setBtn = document.createElement('button');
+      setBtn.textContent = '\u2713 Set Alert & Execute Trade';
+      setBtn.style.cssText = 'width:100%;margin-top:6px;background:#00d4aa;color:#0b0b1a;border:none;border-radius:3px;padding:6px 8px;font-size:10px;font-weight:800;letter-spacing:.3px;cursor:pointer;text-transform:uppercase';
+      setBtn.onclick = setArmedAlert;
+      box.appendChild(setBtn);
       var note = document.createElement('div');
-      note.textContent = 'NIFTY BB%b level cross kare to auto trade: BULLISH row (NIFTY BULL) -> BUY CE, BEARISH row (NIFTY BEAR) -> BUY PE. NIFTY Trend Follow ON par sirf matching side fire hoti hai; engine RUNNING hona zaroori hai.';
+      note.textContent = 'BULLISH row (NIFTY BULL) -> BUY CE, BEARISH row (NIFTY BEAR) -> BUY PE. Trend Follow ON par sirf matching side fire hoti hai; engine RUNNING hona zaroori hai.';
       note.style.cssText = 'font-size:9px;color:#888;margin-top:6px;border-top:1px solid #1e1e40;padding-top:4px';
       box.appendChild(note);
+      var hint = document.createElement('div');
+      hint.textContent = 'Yahan kiye gaye changes sirf draft hain. SET dabane par hi alert LOCK hokar final hota hai aur trades us level ke crossing par shuru ho jaate hain; tab tak purana SET alert hi trade karta rahega.';
+      hint.style.cssText = 'font-size:8px;color:#666;margin-top:3px;line-height:1.4';
+      box.appendChild(hint);
+      refreshAlertStatus();
+    }
+    /* Lock/draft indicator in the popover header + the active-armed summary.
+       Green SET & EXECUTING = draft == armed (engine isliye chalta hai); amber
+       CHANGED = box me badlaav hua par SET abhi nahi dabaya (old active hai). */
+    function refreshAlertStatus() {
+      var chip = document.getElementById('ntrBbpAlertStatus');
+      var sum = document.getElementById('ntrBbpAlertActive');
+      if (!chip) return;
+      if (!draftCfg || !alertCfg) return;
+      var locked = alertsEqual(draftCfg, alertCfg);
+      var hasDraft = draftCfg.bull.enabled || draftCfg.bear.enabled;
+      var hasArm = alertCfg.bull.enabled || alertCfg.bear.enabled;
+      function fmtRows(cfgObj) {
+        var out = [], i;
+        for (i = 0; i < ALERT_ROW_DEFS.length; i++) {
+          var r = ALERT_ROW_DEFS[i];
+          var c = cfgObj ? cfgObj[r.key] : null;
+          if (c && c.enabled) out.push((r.key === 'bull' ? 'BULL' : 'BEAR') + ' ' + (c.cond === 'crossed_below' ? 'below' : 'above') + ' ' + (isFinite(Number(c.value)) ? Number(c.value).toFixed(2) : '--') + ' -> ' + (c.side === 'PE' ? 'BUY PE' : 'BUY CE'));
+        }
+        return out.length ? out.join('  |  ') : 'none';
+      }
+      if (sum) sum.innerHTML = 'ACTIVE: ' + fmtRows(alertCfg) + '<br>BOX: ' + fmtRows(draftCfg);
+      var txt, fg, bg;
+      if (!hasDraft) { txt = 'NO ALERT'; fg = '#888'; bg = 'transparent'; }
+      else if (locked) { txt = hasArm ? 'SET & EXECUTING' : 'SET (rows OFF)'; fg = '#0b0b1a'; bg = hasArm ? '#00d4aa' : 'transparent'; if (!hasArm) fg = '#888'; }
+      else { txt = 'CHANGED - SET NAHI'; fg = '#0b0b1a'; bg = '#ffb300'; }
+      chip.textContent = txt;
+      chip.style.cssText = 'font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;letter-spacing:.3px;white-space:nowrap;color:' + fg + ';background:' + bg + ';border:1px solid ' + (bg === 'transparent' ? '#2d2d50' : bg);
+    }
+    /* Copy the popover draft into the armed config: old alert is replaced by
+       the new one, then trades fire from the fresh levels immediately. */
+    function setArmedAlert() {
+      if (!draftCfg) return;
+      var k, i;
+      for (k in draftCfg) { var r = draftCfg[k]; if (r && isNaN(Number(r.value))) r.value = 0; }
+      alertCfg = cloneAlertCfg(draftCfg);
+      saveAlertCfg();
+      saveDraftCfg();
+      applyAlertLines();
+      var note = [];
+      for (i = 0; i < ALERT_ROW_DEFS.length; i++) {
+        var d = ALERT_ROW_DEFS[i], c = alertCfg[d.key];
+        if (c && c.enabled) note.push((d.key === 'bull' ? 'BULL' : 'BEAR') + ' ' + (c.cond === 'crossed_below' ? 'crossed below' : 'crossed above') + ' ' + Number(c.value).toFixed(2) + ' -> ' + (c.side === 'PE' ? 'BUY PE' : 'BUY CE'));
+      }
+      toast('BB%b Alert SET & LOCKED' + (note.length ? ': ' + note.join('  |  ') : ' (rows sab OFF)') + '. Ab level-crossing par trades execute honge.');
+      renderAlertBox();
     }
     function styleAlertSel(s) {
       s.style.cssText = 'background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 2px;font-size:9px;max-width:150px';
     }
     function buildAlertRow(box, meta, idx) {
-      var cfg = alertCfg[meta.key];
+      var cfg = draftCfg[meta.key];
       var wrap = document.createElement('div');
       wrap.style.cssText = 'border:1px solid ' + meta.color + ';border-radius:3px;padding:4px 6px';
       var ctl = document.createElement('div');
@@ -1547,7 +1653,7 @@
       ctl.appendChild(tip);
       wrap.appendChild(ctl);
       box.appendChild(wrap);
-      function persist() { saveAlertCfg(); applyAlertLines(); }
+      function persist() { saveDraftCfg(); refreshAlertStatus(); }
       function syncDisabled() {
         var on = en.checked;
         cond.disabled = !on; val.disabled = !on; side.disabled = !on;
@@ -1568,7 +1674,7 @@
       };
       val.addEventListener('input', function () {
         var v = parseFloat(val.value);
-        if (!isNaN(v) && v >= 0) { cfg.value = Math.min(3, v); saveAlertCfg(); applyAlertLines(); }
+        if (!isNaN(v) && v >= 0) { cfg.value = Math.min(3, v); saveDraftCfg(); refreshAlertStatus(); }
       });
       side.onchange = function () { cfg.side = side.value; syncDisabled(); persist(); };
       syncDisabled();
@@ -1718,6 +1824,8 @@
       if (gear) gear.addEventListener('click', toggleSettings);
       settings = defaultSettings();
       alertCfg = loadAlertCfg();
+      draftCfg = loadDraftCfg();
+      if (!draftCfg) draftCfg = cloneAlertCfg(alertCfg);
       ensureChart();
       applyAlertLines();
       refresh();
