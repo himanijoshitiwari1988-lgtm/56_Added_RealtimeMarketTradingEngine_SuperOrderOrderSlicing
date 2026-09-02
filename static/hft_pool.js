@@ -25,6 +25,18 @@
 
   var CANDLE_TTL = 60 * 1000;
   var BAR_GRACE_MS = 150 * 1000;
+  /* Server-cooldown backoff. The server returns 503 ("rate limited") for up to
+     ~30s while Dhan rejects the chart surface; every cold (uncached) key that
+     the pool retries during that window just adds to the flood and keeps the
+     cooldown re-armed. When the server says it is rate limited, the pool stops
+     issuing ANY /api/candles request for a few seconds and serves its stale
+     snapshots / empty arrays, so the gate can actually clear. */
+  var RL_BACKOFF_MS = 8000;
+  var rlUntil = 0;
+
+  function serverRateLimited() {
+    return Date.now() < rlUntil;
+  }
 
   var store = {};
   var subs = [];
@@ -70,11 +82,22 @@
         force: 1,
         period_days: days || null
       })
-    }).then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (d && d.status === 'success' && Array.isArray(d.data) && d.data.length) return d.data;
-        return null;
-      });
+    }).then(function (r) {
+      /* Any non-OK candle response during a busy window arms the shared
+         backoff so the pool does not keep re-firing the same keys while Dhan
+         is rejecting us (each retry re-arms the server cooldown and freezes
+         /api/candles for the whole app). */
+      if (r.status === 429 || r.status === 503 || r.status >= 500) {
+        rlUntil = Date.now() + RL_BACKOFF_MS;
+      }
+      return r.json();
+    }).then(function (d) {
+      if (d && d.status === 'success' && Array.isArray(d.data) && d.data.length) return d.data;
+      if (d && d.status === 'error' && /rate ?limit/i.test(String(d.message || ''))) {
+        rlUntil = Date.now() + RL_BACKOFF_MS;
+      }
+      return null;
+    });
   }
 
   function fireBar() {
@@ -94,6 +117,14 @@
     if (e && e.promise) return e.promise;
     if (!e) {
       e = store[k] = { candles: null, at: 0, lastBar: 0, promise: null };
+    }
+    /* While the server is in its Dhan rate-limit cooldown, serve whatever we
+       already have (fresh or stale) and skip the fetch entirely - issuing the
+       request now would only get a 503 and, for a cold key, a 503 storm that
+       keeps the cooldown alive. A stale snapshot is far better for the engines
+       than a flood of failures. */
+    if (serverRateLimited()) {
+      return Promise.resolve(e.candles || []);
     }
     var p = fetchCandles(symbol, tf, days).then(function (arr) {
       var cur = store[k] || (store[k] = { candles: null, at: 0, lastBar: 0, promise: null });

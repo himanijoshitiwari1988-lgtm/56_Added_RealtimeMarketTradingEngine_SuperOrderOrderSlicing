@@ -133,6 +133,32 @@ def _mark_oc_rate_limited():
             _OC_COOLDOWN_UNTIL = now + _OC_COOLDOWN_SEC
 
 
+# ---- Per-surface quote cooldown ----
+# Dhan rate-limits /marketfeed/quote at ~1 req/sec independently of the chart
+# and option-chain surfaces. Background quote polling (watchlist prev-close
+# re-seed, REST fallback when the WS feed stalls) can trip that limit and Dhan
+# answers with an empty-bodied failure (code=None). Those empty-body errors must
+# NOT arm the GLOBAL 30s cooldown - otherwise a harmless quote poll ~every 20s
+# freezes /api/candles for 30s each time and the chart / strikes keep flashing
+# 503 even though the chart surface itself is fine. Back the quote surface off
+# on its own, exactly like the option-chain cooldown above.
+_QUOTE_COOLDOWN_UNTIL = 0.0
+_QUOTE_COOLDOWN_SEC = 30.0
+_QUOTE_LOCK = threading.Lock()
+
+
+def quote_rate_limited():
+    return time.time() < _QUOTE_COOLDOWN_UNTIL
+
+
+def _mark_quote_rate_limited():
+    global _QUOTE_COOLDOWN_UNTIL
+    now = time.time()
+    with _QUOTE_LOCK:
+        if now >= _QUOTE_COOLDOWN_UNTIL:
+            _QUOTE_COOLDOWN_UNTIL = now + _QUOTE_COOLDOWN_SEC
+
+
 # ---- Daily historical endpoint cooldown ----
 # Dhan's /charts/historical (daily) endpoint can start returning DH-905
 # Input_Exception for every request. Retrying it every 0.5s from the daily
@@ -286,15 +312,22 @@ def _unwrap_sdk_response(result, surface="global"):
     status = result.get("status", "")
     if status != "success":
         remarks = result.get("remarks", "Unknown error")
+        # Dhan rate-limits each surface independently. A 429 on one surface
+        # (option chain 1/3s, quote 1/s) must only back that surface off -
+        # never black out the candle endpoints that render the chart. Only the
+        # chart/historical surface failures arm the global gate.
+        if surface == "quote":
+            # The quote surface is independent of charts. Empty-bodied / 429
+            # quote failures only back the quote polling off - they must never
+            # freeze /api/candles for the whole app (which is what re-arming
+            # the global gate on every watchlist re-seed did).
+            arm = _mark_quote_rate_limited
+        else:
+            arm = _mark_oc_rate_limited if surface == "oc" else _mark_rate_limited
         if isinstance(remarks, dict):
             code = remarks.get("error_code")
             error_type = remarks.get("error_type")
             error_message = remarks.get("error_message")
-            # Dhan rate-limits the Option Chain surface (1 req/3s) independently
-            # of the chart/data surface (5 req/s). A 429 on the option-chain
-            # surface must only back that surface off - never black out the
-            # candle endpoints that render the chart.
-            arm = _mark_oc_rate_limited if surface == "oc" else _mark_rate_limited
             if code in ("DH-904", "805") or error_type == "Rate_Limit":
                 arm()
             if code == "DH-906" or error_message == "Invalid Token":
@@ -324,7 +357,15 @@ def _unwrap_sdk_response(result, surface="global"):
             logger.error("Dhan API error: code=%s type=%s msg=%s [caller=%s]",
                          code, error_type, error_message, caller)
         else:
+            # Dhan returned a non-JSON / empty response body (the SDK surfaces
+            # it as a JSON decode failure such as "Expecting value: line 1
+            # column 1 (char 0)"). This is the empty-bodied rate-limit response
+            # that _unwrap_sdk_response normally detects by code=None. It must
+            # arm the cooldown too, otherwise callers treat it as a generic
+            # error and keep hammering the endpoint - which is what made the
+            # auto-strategy run report "every symbol was skipped".
             logger.error("Dhan API error: %s", str(remarks))
+            arm()
         return None
     if _AUTH_ERROR:
         _mark_auth_error(None)
@@ -523,8 +564,14 @@ class DataFetcher:
     def fetch_market_quotes_by_segment(self, securities):
         if not self._broker.is_connected:
             raise ValueError("Broker not connected")
+        # Skip the call entirely while the quote surface is in its own cooldown.
+        # Backing off here (instead of firing and getting an empty-body rejection)
+        # keeps the quote-scoped cooldown from being needlessly re-armed and lets
+        # it clear, exactly like the OC cooldown short-circuits expiry fetch.
+        if quote_rate_limited():
+            raise ValueError("Rate limited - Dhan quote API temporarily unavailable")
         result = _serialized_call("quote", self._broker.dhan.quote_data, securities)
-        outer = _unwrap_sdk_response(result)
+        outer = _unwrap_sdk_response(result, surface="quote")
         out = {}
         if not isinstance(outer, dict):
             return out

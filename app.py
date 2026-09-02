@@ -20,7 +20,7 @@ from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
 
 from broker import DhanBroker
-from data_fetcher import DataFetcher, TIMEFRAME_CONFIG, _unwrap_sdk_response, rate_limit_cooldown_active, rate_limit_cooldown_remaining, _throttle, auth_error, _market_open_now, oc_rate_limited
+from data_fetcher import DataFetcher, TIMEFRAME_CONFIG, _unwrap_sdk_response, rate_limit_cooldown_active, rate_limit_cooldown_remaining, _throttle, auth_error, _market_open_now, oc_rate_limited, quote_rate_limited
 from dhanhq.marketfeed import MarketFeed
 from werkzeug.serving import ThreadedWSGIServer, WSGIRequestHandler
 
@@ -624,6 +624,8 @@ def _fetch_split_quotes():
     segments (e.g. NIFTY 50 and ABB both have id 13); a flat {id: quote} dict
     would silently show one symbol's data under another's key."""
     if not _QUOTE_SECURITIES:
+        return {}
+    if quote_rate_limited():
         return {}
     try:
         return fetcher.fetch_market_quotes_by_segment(_QUOTE_SECURITIES)

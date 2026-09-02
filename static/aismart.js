@@ -27,7 +27,12 @@ window.createAISmartTrading = function (suffix) {
 
   const AST_KEY = 'algodhan_aismart_v1' + suffix;
   const SAVED_KEY = 'algodhan_strategies_v1';
-  const POLL_MS = 300;
+  /* Poll cadence. 300ms hammered Dhan's chart API into rate-limit cooldown
+     (36% of /api/candles calls returned 503), starving the engines of candles
+     so trades never placed. 1000ms keeps entry response near-instant (signals
+     land on closed candles, not on poll frequency) while cutting request load
+     ~3x so the feed stays out of the rate-limit window. */
+  const POLL_MS = 1000;
   const MAX_LOG = 60;
 
   /* The AST engine is a single always-on engine that mirrors its positions into
@@ -102,6 +107,16 @@ window.createAISmartTrading = function (suffix) {
   const _contractsCache = new Map();
   const _CONTRACTS_CACHE_MS = 120 * 1000;
   const _CACHE_MAX = 3000;
+  /* Reload-survival snapshot of resolved option chains + picked strikes. A page
+     reload wipes these in-memory maps, so right after a reload every symbol
+     would re-resolve its chain against Dhan in one cold-start burst (503 storm,
+     rate-limit cooldown) and the "Picked Strikes" panel + strategies would sit
+     empty while the cooldown lasts. The snapshot is persisted (throttled) and
+     restored on boot so reloads keep serving the last-known strikes/contracts
+     instead of hammering the chain API again. */
+  const _PICK_PERSIST_KEY = AST_KEY + ':strikes';
+  const _PICK_PERSIST_MAX = 250;
+  let _pickPersistTimer = 0;
   /* Premium-chart candle fallback: set per instrument when its run-in option
      premium chart has no candles. While set, the strategy evaluates its
      indicators on the underlying/spot chart AND executes on the underlying so
@@ -155,6 +170,53 @@ window.createAISmartTrading = function (suffix) {
   function _cacheSet(map, key, value) {
     if (map.size > _CACHE_MAX) map.clear();
     map.set(key, value);
+  }
+
+  function _persistPickedSnapshot() {
+    try {
+      const picked = [];
+      _pickedStrikes.forEach((rec, key) => {
+        if (!rec || !rec.symbol || !rec.contracts || !rec.contracts.length) return;
+        picked.push({ key: key, symbol: rec.symbol, contracts: rec.contracts, at: rec.at || 0 });
+      });
+      const cache = [];
+      _contractsCache.forEach((rec, key) => {
+        if (!rec || !rec.contracts || !rec.contracts.length) return;
+        cache.push({ key: key, contracts: rec.contracts, at: rec.at || 0 });
+      });
+      const snap = { v: 1, at: Date.now(), picked: picked.slice(-_PICK_PERSIST_MAX), cache: cache.slice(-(_PICK_PERSIST_MAX * 2)) };
+      localStorage.setItem(_PICK_PERSIST_KEY, JSON.stringify(snap));
+    } catch (e) {}
+  }
+  /* Throttled persistence: chains resolve on engine ticks (up to ~1/s per
+     symbol), so persist at most every few seconds instead of on every set. */
+  function _schedulePickedPersist() {
+    if (_pickPersistTimer) return;
+    _pickPersistTimer = setTimeout(() => {
+      _pickPersistTimer = 0;
+      _persistPickedSnapshot();
+    }, 2500);
+  }
+  function _restorePickedSnapshot() {
+    try {
+      const snap = JSON.parse(localStorage.getItem(_PICK_PERSIST_KEY) || 'null');
+      if (!snap) return;
+      const now = Date.now();
+      const MIN_AGE = 0;                 // never serve chains newer than this (ms)
+      const MAX_AGE = _CONTRACTS_CACHE_MS * 3;  // 6min hard cap on snapshot reuse
+      (snap.cache || []).forEach(e => {
+        if (!e || !e.contracts || !e.contracts.length) return;
+        const age = now - (e.at || 0);
+        if (age > MAX_AGE || age < MIN_AGE) return;
+        _cacheSet(_contractsCache, e.key, { at: e.at || now, contracts: e.contracts });
+      });
+      (snap.picked || []).forEach(e => {
+        if (!e || !e.symbol || !e.contracts || !e.contracts.length) return;
+        const age = now - (e.at || 0);
+        if (age > MAX_AGE || age < MIN_AGE) return;
+        _pickedStrikes.set(e.key, { symbol: e.symbol, contracts: e.contracts, at: e.at || now });
+      });
+    } catch (e) {}
   }
 
   /* ---------------- name lookups ---------------- */
@@ -1103,6 +1165,11 @@ window.createAISmartTrading = function (suffix) {
   }
 
   let state = load();
+  /* Restore the last-known resolved chains / picked strikes so a page reload
+     does not wipe them: strategies keep trading their resolved instruments and
+     the Picked Strikes panel stays populated without a cold-start burst against
+     Dhan's chain API. */
+  _restorePickedSnapshot();
 
   function load() {
     try {
@@ -2800,6 +2867,7 @@ window.createAISmartTrading = function (suffix) {
     const hit = _contractsCache.get(cacheKey);
     if (hit && (Date.now() - hit.at) < _CONTRACTS_CACHE_MS && hit.contracts) {
       _pickedStrikes.set(_pickedKey(symbol), { symbol: symbol, contracts: hit.contracts, at: Date.now() });
+      _schedulePickedPersist();
       return hit.contracts;
     }
     /* Inside the rate-limit backoff window: do NOT touch /api/auto_strikes.
@@ -2809,6 +2877,7 @@ window.createAISmartTrading = function (suffix) {
     if (chainRateLimited(symbol)) {
       if (hit && hit.contracts) {
         _pickedStrikes.set(_pickedKey(symbol), { symbol: symbol, contracts: hit.contracts, at: Date.now() });
+        _schedulePickedPersist();
         return hit.contracts;
       }
       return null;
@@ -2854,6 +2923,7 @@ window.createAISmartTrading = function (suffix) {
         log('Option chain rate-limited for ' + displayName(symbol) + ' - backing off ~' + _CHAIN_RL_SEC + 's', 'warn');
         if (hit && hit.contracts) {
           _pickedStrikes.set(_pickedKey(symbol), { symbol: symbol, contracts: hit.contracts, at: Date.now() });
+          _schedulePickedPersist();
           return hit.contracts;
         }
         return null;
@@ -2893,6 +2963,7 @@ window.createAISmartTrading = function (suffix) {
       }
       _cacheSet(_contractsCache, cacheKey, { at: Date.now(), contracts: filtered });
       _pickedStrikes.set(_pickedKey(symbol), { symbol: symbol, contracts: filtered, at: Date.now() });
+      _schedulePickedPersist();
       return filtered;
     } catch (e) { return null; }
   }
@@ -4248,8 +4319,11 @@ window.createAISmartTrading = function (suffix) {
   /* Keep the NIFTY ensemble-trend status and the BB%B live values on screen
      even when no strategies are being ticked. niftyBias() is rate-limited by
      its own 60s cache, so this only re-fetches candles at most once a minute
-     while the displayed reading refreshes on every poll. */
+     while the displayed reading refreshes on every poll. The fetch is skipped
+     entirely while the engine is OFF (the status stays on the last reading) so
+     an idle AST tab never consumes the shared Dhan chart rate-limit budget. */
   function refreshNiftyStatus() {
+    if (state.enabled !== true) return;
     niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); _lastNiftyDir = niftyOperativeDir(b); } });
   }
 
@@ -5655,6 +5729,19 @@ window.createAISmartTrading = function (suffix) {
     return live;
   }
 
+  /* Soft-close grace: reconcile only DROPS a mirror entry after the live
+     paper bucket has been missing / foreign for a sustained number of polls.
+     A page reload, WS reconnect or a paper-engine re-key can make a bucket
+     vanish for 1-2 reconcile ticks while the AST trade is still genuinely open
+     - deleting on that transient gap made Running Trades blink trades out and
+     stamped a bogus "exited via stop-loss" closed record. */
+  const _POSITION_GRACE_MS = 6000;
+  let _posMissSince = {};
+
+  function _reconcileGraceExpired(k) {
+    return (_posMissSince[k] != null) && (Date.now() - _posMissSince[k]) >= _POSITION_GRACE_MS;
+  }
+
   function reconcileClosedPositions() {
     try {
       const pt = basePaper();
@@ -5665,6 +5752,10 @@ window.createAISmartTrading = function (suffix) {
         const live = autoPositions[k];
         if (!live) {
           const p = state.positions[k];
+          if (_posMissSince[k] == null) _posMissSince[k] = Date.now();
+          /* Grace window: keep the mirror row - the bucket may come back after
+             a reload/reconnect. Only close when it has stayed missing. */
+          if (!_reconcileGraceExpired(k)) return;
           delete state.positions[k];
           if (p && p.strategyName) {
             recordClosedPosition(p);
@@ -5676,11 +5767,14 @@ window.createAISmartTrading = function (suffix) {
            When another engine took over this symbol bucket, drop the stale
            mirror entry instead of syncing its data in. */
         if (!astOwnedLive(autoPositions, k)) {
+          if (_posMissSince[k] == null) _posMissSince[k] = Date.now();
+          if (!_reconcileGraceExpired(k)) return;
           const p = state.positions[k];
           delete state.positions[k];
           if (p) log('"' + p.strategyName + '" on ' + (live.symbol || k) + ' taken over by another engine - removed from AST running list', 'warn');
           return;
         }
+        _posMissSince[k] = null;   // live & AST-owned again -> clear grace
         const p = state.positions[k];
         p.qty = live.qty;
         p.entryPrice = live.entryPrice;
@@ -5700,10 +5794,16 @@ window.createAISmartTrading = function (suffix) {
     const host = $id('astRunningBody');
     if (!host) return;
     /* Final ownership filter (belt and suspenders on top of the reconcile
-       guard): only mirror entries backed by a live AST-owned bucket render. */
+       guard): only mirror entries backed by a live AST-owned bucket render,
+       EXCEPT mirror entries still inside the soft-close grace window (bucket
+       temporarily missing/foreign after a reload/reconnect) - those keep
+       rendering so Running Trades does not blink trades out. */
     const pt2 = basePaper();
     const openPositions = Object.keys(state.positions)
-      .filter(k => !!astOwnedLive(pt2 ? pt2.getState().autoPositions : null, k))
+      .filter(k => {
+        if (!!astOwnedLive(pt2 ? pt2.getState().autoPositions : null, k)) return true;
+        return !_reconcileGraceExpired(k);
+      })
       .map(k => state.positions[k]);
     if (!openPositions.length) {
       host.innerHTML = '<tr><td colspan="8" style="color:#666;font-size:10px;padding:6px 8px">No AI Smart positions open. Tick at least one saved strategy and toggle AI Smart Trading ON.</td></tr>';

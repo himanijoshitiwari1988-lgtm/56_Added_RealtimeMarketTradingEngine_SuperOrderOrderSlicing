@@ -2342,6 +2342,7 @@ window.createAutoExperiment = function (suffix) {
       autoSend: { enabled: false, tpls: [] }, // auto strategy sender: experiment runs only the user-selected saved templates and auto-sends the created strategies to the paper trade engine
       showPickedStrikes: false,
       trendConfirm: false, // when ON the bullish/bearish backtest skips symbols whose own trend does not match the selected filter side; when OFF the backtest runs on the strategy's own bullish/bearish entry signal for every symbol
+      allInOne: false, // "All indicators & filters together": entry fires ONLY when the strategy's own conditions AND every selected AST indicator filter pass together (strict AND, no N-of-M)
       groupByStrategy: true, // group results by strategy (one card per strategy across all backtested symbols)
       filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullEma9_21: false, bearEma9_21: false, bullEma21_35: false, bearEma21_35: false, bullEma35_50: false, bearEma35_50: false, bullEma50_100: false, bearEma50_100: false, bullEma100_200: false, bearEma100_200: false, bullEma200_300: false, bearEma200_300: false, bullSt10_1_2: false, bearSt10_1_2: false, bullSt10_2_3: false, bearSt10_2_3: false, bullSt1CloseCrossAbove: false, bearSt1CloseCrossBelow: false, bullVwapCloseCrossAbove: false, bearVwapCloseCrossBelow: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false }, // Bullish/Bearish section masters + trend/cross/volume/fake-breakout/reversal/pane gates + per-side research-stream scopes
       niftyEntry: { enabled: false, dir: 'bullish', zone: 'above_upper' }, // trade-entry NIFTY condition (execute only when NIFTY matches)
@@ -5253,6 +5254,15 @@ window.createAutoExperiment = function (suffix) {
      live entry path and by the "both" run-in dual-confirmation path. */
   function entryFireState(r, candles) {
     const last = candles.length - 1;
+    /* "All indicators & filters together" mode: the strategy's own conditions
+       AND every selected AST indicator filter must ALL pass together on the same
+       bar (strict AND, no N-of-M). Evaluated through the AST engine so both
+       engines read identical chart/pool values. OFF = the old default entry. */
+    const allTogether = state.allInOne === true && window.AISmartTrading &&
+      typeof window.AISmartTrading.strictEntryOk === 'function';
+    if (allTogether) {
+      return !!window.AISmartTrading.strictEntryOk(r, candles, last);
+    }
     return evalCondAll(r.entry, last, candles) &&
       (r.entryExtra && r.entryExtra.length
         ? evalCondNof(r.entryExtra, (r.entryThreshold != null && r.entryThreshold >= 1) ? r.entryThreshold : r.entryExtra.length, last, candles)
@@ -5272,6 +5282,16 @@ window.createAutoExperiment = function (suffix) {
      its own 60s cache, so this only re-fetches candles at most once a minute
      while the displayed reading refreshes on every poll. */
   function refreshNiftyStatus() {
+    /* Only fetch NIFTY candles when a NIFTY-dependent feature is actually
+       active. With the engine off and no NIFTY trend / entry / exit gate
+       enabled, skip the fetch entirely so the AE poll never hits /api/candles
+       on its own (it shares the Dhan chart rate-limit budget with the AST
+       engine's live tick). */
+    const niftyOn = state.enabled === true ||
+      (state.niftyTrend && state.niftyTrend.enabled) ||
+      (state.niftyEntry && state.niftyEntry.enabled) ||
+      (state.niftyExit && state.niftyExit.enabled);
+    if (!niftyOn) return;
     niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); _lastNiftyDir = b.dir; } });
   }
 
@@ -6313,6 +6333,8 @@ window.createAutoExperiment = function (suffix) {
     if (t) { t.textContent = state.enabled ? 'Auto Strategy: ON' : 'Auto Strategy: OFF'; t.style.background = state.enabled ? '#00d4aa' : '#e67e22'; }
     const rm = $id('aeRunManualToggle');
     if (rm) rm.checked = !!state.runManual;
+    const allInOne = $id('aeAllInOne');
+    if (allInOne) allInOne.checked = state.allInOne === true;
   }
 
   /* The Manual Trail % checkbox gates the manual Trail % input: when it is
@@ -6952,6 +6974,13 @@ window.createAutoExperiment = function (suffix) {
     },
     onUniversalInput() {
       readUniversal();
+    },
+    /* "All indicators & filters together" entry mode for the AE engine. */
+    onAllInOne() {
+      const el = $id('aeAllInOne');
+      state.allInOne = !!(el && el.checked);
+      save();
+      log('Entry "all indicators & filters together": ' + (state.allInOne ? 'ON (strict AND)' : 'OFF (old default)'), state.allInOne ? 'ok' : 'warn');
     },
     toggleAutoSl,
     onStrikeInput() {
