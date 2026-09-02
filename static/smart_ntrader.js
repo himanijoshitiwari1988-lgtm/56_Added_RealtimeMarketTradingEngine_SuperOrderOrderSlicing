@@ -1500,6 +1500,9 @@
       var box = document.getElementById('ntrBbpAlertBox');
       if (!box) return;
       if (!draftCfg) draftCfg = cloneAlertCfg(alertCfg || {});
+      box.style.position = 'relative';
+      box.style.zIndex = '30';
+      box.style.pointerEvents = 'auto';
       box.innerHTML = '';
       var hdr = document.createElement('div');
       hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px';
@@ -1530,8 +1533,13 @@
       sum.style.cssText = 'font-size:8px;color:#99a;margin-top:5px;line-height:1.4;word-break:break-all';
       box.appendChild(sum);
       var setBtn = document.createElement('button');
+      setBtn.type = 'button';
       setBtn.textContent = '\u2713 Set Alert & Execute Trade';
-      setBtn.style.cssText = 'width:100%;margin-top:6px;background:#00d4aa;color:#0b0b1a;border:none;border-radius:3px;padding:6px 8px;font-size:10px;font-weight:800;letter-spacing:.3px;cursor:pointer;text-transform:uppercase';
+      setBtn.style.cssText = 'position:relative;z-index:5;width:100%;margin-top:6px;background:#00d4aa;color:#0b0b1a;border:none;border-radius:3px;padding:8px 8px;font-size:11px;font-weight:800;letter-spacing:.4px;cursor:pointer;text-transform:uppercase;box-shadow:0 1px 0 rgba(255,255,255,.15) inset';
+      setBtn.addEventListener('mouseover', function () { this.style.background = '#33e0bb'; });
+      setBtn.addEventListener('mouseout', function () { this.style.background = '#00d4aa'; });
+      setBtn.addEventListener('mousedown', function () { this.style.background = '#00b893'; });
+      setBtn.addEventListener('mouseup', function () { this.style.background = '#33e0bb'; });
       setBtn.onclick = setArmedAlert;
       box.appendChild(setBtn);
       var note = document.createElement('div');

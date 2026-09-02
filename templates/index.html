@@ -2098,8 +2098,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               <button id="ntrBbpPlus" title="BB%b Alert -> Auto Trade: rows edit karo (draft), phir SET dabao - tab hi alert LOCK hokar final hota hai aur us level ke crossing par trades place ho jaati hain. SET ke baad value/row badlo to dobara SET dabana zaroori hai, warna purana alert hi trade karta hai. BULLISH (crossed above -> BUY CE when NIFTY BULL) OR BEARISH (crossed below -> BUY PE when NIFTY BEAR)." style="background:#12122a;border:1px solid #2d2d50;color:#00d4aa;border-radius:3px;padding:0 6px;font-size:12px;line-height:14px;cursor:pointer">+</button>
               <div id="ntrBbpPane" style="flex:1;height:110px"></div>
             </div>
-            <div id="ntrBbpAlertBox" style="display:none;background:#12122a;border:1px solid #1e1e40;border-radius:3px;margin-top:4px;padding:6px 8px;font-size:10px;color:#ccc"></div>
-            <div id="ntrBbpSettings" style="display:none;background:#12122a;border:1px solid #1e1e40;border-radius:3px;margin-top:4px;padding:6px 8px;font-size:10px;color:#ccc"></div>
+            <div id="ntrBbpAlertBox" style="display:none;position:relative;z-index:30;pointer-events:auto;background:#12122a;border:1px solid #1e1e40;border-radius:3px;margin-top:4px;padding:6px 8px;font-size:10px;color:#ccc"></div>
+            <div id="ntrBbpSettings" style="display:none;position:relative;z-index:30;pointer-events:auto;background:#12122a;border:1px solid #1e1e40;border-radius:3px;margin-top:4px;padding:6px 8px;font-size:10px;color:#ccc"></div>
             <div style="font-size:9px;color:#666;margin-top:4px" id="ntrChartNote">Loading NIFTY candles...</div>
           </div>
         </div>
@@ -5865,7 +5865,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/fast_live.js?v=1"></script>
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=3"></script>
-<script src="/static/smart_ntrader.js?v=54"></script>
+<script src="/static/smart_ntrader.js?v=55"></script>
 <script src="/static/backup.js?v=2"></script>
 <script>
 /* Engine instantiation for the base tabs and every duplicated tab. The cloned
