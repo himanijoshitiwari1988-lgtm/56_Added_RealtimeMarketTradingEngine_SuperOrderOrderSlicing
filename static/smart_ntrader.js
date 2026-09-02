@@ -1097,6 +1097,14 @@
     var alertCfg = null;
     var _bbPrev = null;
     var _lastFireAt = { bull: 0, bear: 0 };
+    var _paneHost = null;
+    var _ovHost = null;
+    var _ovLines = {};
+    var _ovDrag = null;
+    var ALERT_ROW_DEFS = [
+      { key: 'bull', color: '#00d4aa', label: 'BULL CE' },
+      { key: 'bear', color: '#ff4d6a', label: 'BEAR PE' }
+    ];
 
     var TF_SECS = { '1min': 60, '2min': 120, '3min': 180, '4min': 240, '5min': 300, '10min': 600, '15min': 900, '30min': 1800, '1hour': 3600, '4hour': 14400 };
     var BBSET_KEY = 'ntrBbpSettings';
@@ -1187,6 +1195,7 @@
       });
       var pHost = document.getElementById('ntrBbpPane');
       if (pHost) {
+        _paneHost = pHost;
         bbChart = LightweightCharts.createChart(pHost, chartOptions(pHost, 110));
         bbSeries = bbChart.addSeries(LightweightCharts.LineSeries, {
           color: (settings && settings.color) ? settings.color : '#ffb300',
@@ -1207,34 +1216,102 @@
       var cHost = document.getElementById('ntrChart'), pHost = document.getElementById('ntrBbpPane');
       if (candleChart && cHost && cHost.clientWidth) candleChart.applyOptions({ width: cHost.clientWidth });
       if (bbChart && pHost && pHost.clientWidth) bbChart.applyOptions({ width: pHost.clientWidth });
+      applyAlertLines();
     }
-    /* Draw the BULLISH / BEARISH alert-value guide lines on the BB%b pane
-       (removes stale ones first). Only enabled rows draw a line. */
+    function alertChipText(key) {
+      var def = null;
+      for (var i = 0; i < ALERT_ROW_DEFS.length; i++) if (ALERT_ROW_DEFS[i].key === key) def = ALERT_ROW_DEFS[i];
+      var cfg = alertCfg ? alertCfg[key] : null;
+      if (!def || !cfg) return '';
+      return def.label + '  ' + (isFinite(Number(cfg.value)) ? Number(cfg.value).toFixed(2) : '--');
+    }
+    /* DOM overlay for the BULLISH / BEARISH alert levels. Instead of static
+       dotted chart price-lines, each enabled level is a SOLID grab-bar that the
+       user can drag up/down with the mouse (smooth movement); a live value chip
+       on the line shows the exact BB%b level while dragging. Positions come from
+       bbSeries.priceToCoordinate/coordinateToPrice so the bar always sits on the
+       real %B scale even while the pane auto-scales. */
     function applyAlertLines() {
-      if (!bbSeries) return;
-      try {
-        if (bbSeries.priceLines) bbSeries.priceLines().forEach(function (pl) { try { bbSeries.removePriceLine(pl); } catch (e) {} });
-      } catch (e) {}
-      if (!alertCfg) return;
-      var rows = [
-        { key: 'bull', color: '#00d4aa', title: 'BULLISH CE alert' },
-        { key: 'bear', color: '#ff4d6a', title: 'BEARISH PE alert' }
-      ];
-      for (var i = 0; i < rows.length; i++) {
-        var r = rows[i], cfg = alertCfg[r.key];
-        if (!cfg || !cfg.enabled) continue;
-        if (!bbSeries.createPriceLine) continue;
-        try {
-          bbSeries.createPriceLine({
-            price: Number(cfg.value) || 0,
-            color: r.color,
-            lineWidth: 1,
-            lineStyle: 2,
-            axisLabelVisible: true,
-            title: r.title
-          });
-        } catch (e) {}
+      if (!bbSeries || !_paneHost) return;
+      if (!_ovHost) {
+        if (_paneHost.style.position !== 'relative') _paneHost.style.position = 'relative';
+        _ovHost = document.createElement('div');
+        _ovHost.style.cssText = 'position:absolute;left:0;right:0;top:0;bottom:0;pointer-events:none;z-index:3;overflow:hidden';
+        _paneHost.appendChild(_ovHost);
       }
+      for (var i = 0; i < ALERT_ROW_DEFS.length; i++) applyAlertRowLine(ALERT_ROW_DEFS[i]);
+    }
+    function applyAlertRowLine(def) {
+      var cfg = alertCfg ? alertCfg[def.key] : null;
+      var el = _ovLines[def.key];
+      var on = !!(cfg && cfg.enabled);
+      var y = null;
+      if (on) {
+        var v = Number(cfg.value);
+        if (isFinite(v) && bbSeries.priceToCoordinate) {
+          try { y = bbSeries.priceToCoordinate(v); } catch (e) {}
+        }
+        if (y == null || !isFinite(y)) on = false;
+      }
+      if (!on) { if (el) el.style.display = 'none'; return; }
+      if (!el) {
+        el = document.createElement('div');
+        el.dataset.key = def.key;
+        el.style.cssText = 'position:absolute;left:0;right:0;height:4px;margin-top:-2px;cursor:ns-resize;pointer-events:auto;border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.45)';
+        el.style.background = def.color;
+        var chip = document.createElement('span');
+        chip.style.cssText = 'position:absolute;top:-11px;left:6px;padding:1px 5px;font-size:9px;line-height:12px;border-radius:3px;color:#0b0b1a;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.6)';
+        chip.style.background = def.color;
+        el.appendChild(chip);
+        el.addEventListener('pointerdown', function (ev) {
+          if (ev.button !== undefined && ev.button !== 0) return;
+          var c = alertCfg ? alertCfg[this.dataset.key] : null;
+          if (!c || !c.enabled) return;
+          _ovDrag = { key: this.dataset.key };
+          if (_ovHost && _ovHost.setPointerCapture) { try { _ovHost.setPointerCapture(ev.pointerId); } catch (err) {} }
+          try { this.style.border = '1px solid #fff'; } catch (err) {}
+          ev.preventDefault();
+          ev.stopPropagation();
+        });
+        _ovLines[def.key] = el;
+        _ovHost.appendChild(el);
+      }
+      var h = _paneHost.clientHeight || _paneHost.offsetHeight || 110;
+      el.style.top = Math.max(0, Math.min(h - 4, y - 2)) + 'px';
+      var ch = el.firstChild;
+      if (ch) {
+        ch.style.top = (y < 20) ? '5px' : '-11px';
+        ch.textContent = alertChipText(def.key);
+      }
+      el.style.display = 'block';
+      el.title = 'Drag to set the ' + def.label + ' BB%b alert level';
+    }
+    function onPanePointerMove(ev) {
+      if (!_ovDrag || !bbSeries || !_paneHost) return;
+      var cfg = alertCfg ? alertCfg[_ovDrag.key] : null;
+      if (!cfg) return;
+      var r = _paneHost.getBoundingClientRect();
+      var yrel = ev.clientY - r.top;
+      var val = null;
+      if (bbSeries.coordinateToPrice) {
+        try { val = bbSeries.coordinateToPrice(yrel); } catch (e) {}
+      }
+      if (val == null || !isFinite(val)) return;
+      cfg.value = Math.round(Math.min(3, Math.max(0, val)) * 1000) / 1000;
+      var el = _ovLines[_ovDrag.key];
+      if (el) {
+        var h = _paneHost.clientHeight || _paneHost.offsetHeight || 110;
+        el.style.top = Math.max(0, Math.min(h - 4, yrel - 2)) + 'px';
+        var ch = el.firstChild;
+        if (ch) {
+          ch.style.top = (yrel < 20) ? '5px' : '-11px';
+          ch.textContent = alertChipText(_ovDrag.key);
+        }
+      }
+      saveAlertCfg();
+    }
+    function onPanePointerUp() {
+      if (_ovDrag) { _ovDrag = null; saveAlertCfg(); }
     }
     function renderBbp() {
       if (!bbSeries || !candles.length) return;
@@ -1621,6 +1698,7 @@
           setText('ntrChartBb', 'BB%b ' + fmtV(lt.last));
         }
       }
+      if (!_ovDrag) applyAlertLines();
     }
     function toggle() {
       var wrap = document.getElementById('ntrChartWrap');
@@ -1646,6 +1724,8 @@
       setInterval(function () { if (state.visible) onTick(); }, POLL_MS);
       setInterval(refresh, 20000);
       window.addEventListener('resize', resize);
+      window.addEventListener('pointermove', onPanePointerMove);
+      window.addEventListener('pointerup', onPanePointerUp);
     }
     function onTfChange() {
       candles = [];
