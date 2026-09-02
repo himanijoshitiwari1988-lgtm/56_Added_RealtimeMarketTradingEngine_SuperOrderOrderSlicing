@@ -1093,15 +1093,42 @@
     var settings = null;
     var noteEl = null;
     var _tf = '5min';
-    var alertLines = [];
-    var alertAt = {};
-    var tradeAt = {};
-    var alertSeq = 0;
-    var _alertInputVal = '';
+    var ALERT_CFG_KEY = 'ntrBbpAlertCfg';
+    var alertCfg = null;
+    var _bbPrev = null;
+    var _lastFireAt = { bull: 0, bear: 0 };
 
     var TF_SECS = { '1min': 60, '2min': 120, '3min': 180, '4min': 240, '5min': 300, '10min': 600, '15min': 900, '30min': 1800, '1hour': 3600, '4hour': 14400 };
-    var ALERT_COLORS = ['#ff5252', '#26a69a', '#7ad7ff', '#ff9800', '#b39ddb', '#ff6b6b', '#ffb300', '#66ccff'];
     var BBSET_KEY = 'ntrBbpSettings';
+
+    function defaultAlertCfg() {
+      return {
+        bull: { enabled: false, cond: 'crossed_above', value: 0.8, side: 'CE' },
+        bear: { enabled: false, cond: 'crossed_below', value: 0.2, side: 'PE' }
+      };
+    }
+    function loadAlertCfg() {
+      var def = defaultAlertCfg();
+      try {
+        var j = JSON.parse(localStorage.getItem(ALERT_CFG_KEY) || 'null');
+        if (j && j.bull) {
+          def.bull.enabled = !!j.bull.enabled;
+          def.bull.cond = (j.bull.cond === 'crossed_below') ? 'crossed_below' : 'crossed_above';
+          def.bull.value = (Number(j.bull.value) >= 0 && Number(j.bull.value) <= 3) ? Number(j.bull.value) : 0.8;
+          def.bull.side = (j.bull.side === 'PE') ? 'PE' : 'CE';
+        }
+        if (j && j.bear) {
+          def.bear.enabled = !!j.bear.enabled;
+          def.bear.cond = (j.bear.cond === 'crossed_above') ? 'crossed_above' : 'crossed_below';
+          def.bear.value = (Number(j.bear.value) >= 0 && Number(j.bear.value) <= 3) ? Number(j.bear.value) : 0.2;
+          def.bear.side = (j.bear.side === 'CE') ? 'CE' : 'PE';
+        }
+      } catch (e) {}
+      return def;
+    }
+    function saveAlertCfg() {
+      try { localStorage.setItem(ALERT_CFG_KEY, JSON.stringify(alertCfg || {})); } catch (e) {}
+    }
 
     function fmtV(v) {
       if (v == null || isNaN(v)) return '--';
@@ -1181,23 +1208,30 @@
       if (candleChart && cHost && cHost.clientWidth) candleChart.applyOptions({ width: cHost.clientWidth });
       if (bbChart && pHost && pHost.clientWidth) bbChart.applyOptions({ width: pHost.clientWidth });
     }
-    /* Draw all user draw-line alerts on the BB%b pane (removes stale ones first). */
+    /* Draw the BULLISH / BEARISH alert-value guide lines on the BB%b pane
+       (removes stale ones first). Only enabled rows draw a line. */
     function applyAlertLines() {
       if (!bbSeries) return;
       try {
         if (bbSeries.priceLines) bbSeries.priceLines().forEach(function (pl) { try { bbSeries.removePriceLine(pl); } catch (e) {} });
       } catch (e) {}
-      for (var i = 0; i < alertLines.length; i++) {
-        var ln = alertLines[i];
+      if (!alertCfg) return;
+      var rows = [
+        { key: 'bull', color: '#00d4aa', title: 'BULLISH CE alert' },
+        { key: 'bear', color: '#ff4d6a', title: 'BEARISH PE alert' }
+      ];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i], cfg = alertCfg[r.key];
+        if (!cfg || !cfg.enabled) continue;
         if (!bbSeries.createPriceLine) continue;
         try {
           bbSeries.createPriceLine({
-            price: Number(ln.price) || 0,
-            color: ln.color,
+            price: Number(cfg.value) || 0,
+            color: r.color,
             lineWidth: 1,
             lineStyle: 2,
             axisLabelVisible: true,
-            title: 'BB%b ' + ln.price
+            title: r.title
           });
         } catch (e) {}
       }
@@ -1239,6 +1273,7 @@
         /* private copy: local in-progress bar pushes must never mutate the
            shared HftPool cached array that the engine's state.series reads */
         candles = arr.slice();
+        _bbPrev = null;
         if (!ensureChart() || !candleSeries) return;
         renderCandles();
         renderBbp();
@@ -1266,38 +1301,33 @@
         setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 200);
       }, 3500);
     }
-    /* Every user draw-line fires a toast when live BB%b crosses its value.
-       Rate-limited per line to one alert per 2s. Alerts with trade execution
-       enabled additionally fire trades on the selected side (cooldown 60s). */
-    function checkAlertLines(prev, last) {
-      if (!alertLines.length || prev == null || last == null || isNaN(prev) || isNaN(last)) return;
-      var now = Date.now();
-      for (var i = 0; i < alertLines.length; i++) {
-        var ln = alertLines[i];
-        var price = Number(ln.price);
-        if (!isFinite(price)) continue;
-        var up = prev < price && last >= price;
-        var dn = prev > price && last <= price;
-        if (!up && !dn) continue;
-        if (alertAt[ln.id] && now - alertAt[ln.id] < 2000) continue;
-        alertAt[ln.id] = now;
-        toast('NIFTY BB%b ' + (up ? 'CROSSED ABOVE' : 'CROSSED BELOW') + ' ' + fmtV(price) + '  ->  ' + fmtV(last));
-        if (ln.trade && ln.trade.enabled) {
-          if (!tradeAt[ln.id] || now - tradeAt[ln.id] >= 60000) {
-            tradeAt[ln.id] = now;
-            fireAlertTrade(ln);
-          }
-        }
+    /* Real-time alert evaluation on every live BB%b sample. Two fixed rows -
+       BULLISH and BEARISH (joined with OR). Each row fires once per crossing
+       edge (armed when BB%b sits on the non-fire side), so a row never
+       double-fires while BB%b stays beyond its level. */
+    function checkAlertTick(prev, last) {
+      if (!alertCfg || prev == null || last == null || isNaN(prev) || isNaN(last)) return;
+      var keys = ['bull', 'bear'];
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var cfg = alertCfg[k];
+        if (!cfg || !cfg.enabled) continue;
+        var v = Number(cfg.value);
+        if (!isFinite(v)) continue;
+        var fired = (cfg.cond === 'crossed_below') ? (prev > v && last <= v) : (prev < v && last >= v);
+        if (!fired) continue;
+        if (Date.now() - _lastFireAt[k] < 5000) continue;
+        _lastFireAt[k] = Date.now();
+        toast('NIFTY BB%b ' + ((cfg.cond === 'crossed_below') ? 'CROSSED BELOW' : 'CROSSED ABOVE') + ' ' + fmtV(v) + '  ->  ' + fmtV(last) + (k === 'bull' ? '  [BULLISH]' : '  [BEARISH]'));
+        fireAlertTrade(k, cfg);
       }
     }
     /* Targets for an alert-triggered trade. 'bull' -> active bullish stocks,
-       'bear' -> active bearish stocks, 'auto' -> whichever side NIFTY's trend
-       is on right now (bullish when NIFTY is bullish, bearish when bearish). */
+       'bear' -> active bearish stocks. */
     function alertTradeTargets(mode) {
       var sideCls = null;
       if (mode === 'bull') sideCls = 'BULL';
       else if (mode === 'bear') sideCls = 'BEAR';
-      else if (mode === 'auto') sideCls = niftyOperative();
       if (!sideCls) return [];
       var out = [];
       for (var i = 0; i < state.stocks.length; i++) {
@@ -1306,11 +1336,27 @@
       }
       return out;
     }
-    function fireAlertTrade(ln) {
-      var mode = (ln.trade && ln.trade.mode) || 'auto';
-      var targets = alertTradeTargets(mode);
-      if (!targets.length) return;
-      var side = (mode === 'bear' || (mode === 'auto' && niftyOperative() === 'BEAR')) ? 'PE' : 'CE';
+    /* Execute a BB%b alert trade: NIFTY bullish -> BUY CE (bullish stocks),
+       NIFTY bearish -> BUY PE (bearish stocks). The row's own "side" dropdown
+       acts as a filter - a bullish-CE row only fires while NIFTY is BULL, a
+       bearish-PE row only while NIFTY is BEAR (no EMA-cross signal involved).
+       When the Trend Following toggle is OFF the row's own side still gates,
+       but the matching NIFTY regime is no longer required. */
+    function fireAlertTrade(k, cfg) {
+      if (!cfg || !cfg.enabled) return;
+      if (!state.running) { toast('BB%b alert: engine RUNNING nahi hai'); return; }
+      var op = niftyOperative();
+      var execSide = (cfg.side === 'PE') ? 'PE' : 'CE';
+      if (state.trend.enabled) {
+        if (op !== 'BULL' && op !== 'BEAR') { toast('BB%b alert @ ' + fmtV(cfg.value) + ': NIFTY trend clear nahi (BULL/BEAR)'); return; }
+        var want = (op === 'BULL') ? 'CE' : 'PE';
+        if (execSide !== want) return;
+      }
+      var targets = alertTradeTargets(execSide === 'CE' ? 'bull' : 'bear');
+      if (!targets.length) {
+        toast('BB%b alert @ ' + fmtV(cfg.value) + ': koi enabled ' + (execSide === 'CE' ? 'bullish (CE)' : 'bearish (PE)') + ' stock nahi');
+        return;
+      }
       /* Max-trades cap (Max trades / Auto trades): Auto = unlimited; Max =
          fill only the remaining open-position slots, skip when reached. */
       var remaining = tradeCapRemaining();
@@ -1322,12 +1368,12 @@
       if (remaining < targets.length) targets = targets.slice(0, remaining);
       for (var i = 0; i < targets.length; i++) {
         var st = targets[i];
-        st.status = 'BB%b alert ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish');
-        try { resolveAndEnter(st, side, null); } catch (e) {}
+        st.status = 'BB%b alert ' + fmtV(cfg.value) + ' -> ' + (execSide === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish');
+        try { resolveAndEnter(st, execSide, null); } catch (e) {}
       }
-      toast('BB%b trade alert @ ' + fmtV(ln.price) + ' -> ' + (side === 'CE' ? 'BUY CE bullish picks' : 'BUY PE bearish picks') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
+      toast('BB%b trade alert @ ' + fmtV(cfg.value) + ' -> ' + (execSide === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
     }
-    /* "+" button popover: list the pane's alert lines (with remove) + add input. */
+    /* "+" button popover: the BULLISH ... OR ... BEARISH alert auto-trade form. */
     function toggleAlertBox() {
       var box = document.getElementById('ntrBbpAlertBox');
       if (!box) return;
@@ -1340,138 +1386,115 @@
       if (!box) return;
       box.innerHTML = '';
       var title = document.createElement('div');
-      title.textContent = 'BB%b alert lines (draw-line crosses)';
+      title.textContent = 'BB%b Alert -> Auto Trade';
       title.style.cssText = 'font-size:9px;color:#ffb300;text-transform:uppercase;margin-bottom:4px';
       box.appendChild(title);
-      var list = document.createElement('div');
-      list.style.cssText = 'display:flex;flex-direction:column;gap:3px;margin-bottom:6px';
-      for (var i = 0; i < alertLines.length; i++) {
-        (function (ln) {
-          var wrap = document.createElement('div');
-          wrap.style.cssText = 'border:1px solid #1e1e40;border-radius:3px;padding:3px 6px';
-          var row = document.createElement('div');
-          row.style.cssText = 'display:flex;align-items:center;gap:6px';
-          var dot = document.createElement('span');
-          dot.style.cssText = 'width:8px;height:8px;border-radius:50%;background:' + ln.color + ';display:inline-block';
-          var val = document.createElement('span');
-          val.textContent = fmtV(ln.price);
-          val.style.color = '#ddd';
-          var rm = document.createElement('button');
-          rm.textContent = '✕';
-          rm.title = 'Remove line ' + ln.price;
-          rm.style.cssText = 'background:none;border:none;color:#888;cursor:pointer;padding:0 2px;font-size:10px';
-          rm.onmouseover = function () { rm.style.color = '#ff5252'; };
-          rm.onmouseout = function () { rm.style.color = '#888'; };
-          rm.onclick = function () { removeAlertLine(ln.id); };
-          row.appendChild(dot); row.appendChild(val); row.appendChild(rm);
-          wrap.appendChild(row);
-          /* Trade-execution controls for this line */
-          var trow = document.createElement('div');
-          trow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:2px;padding-left:14px';
-          var cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.checked = !!(ln.trade && ln.trade.enabled);
-          cb.style.cssText = 'width:11px;height:11px;accent-color:#00d4aa;cursor:pointer';
-          cb.title = 'When BB%b crosses this line, execute a trade';
-          cb.onchange = function () {
-            ln.trade = ln.trade || { enabled: false, mode: 'auto' };
-            ln.trade.enabled = cb.checked;
-            sel.disabled = !cb.checked;
-          };
-          var cbl = document.createElement('label');
-          cbl.textContent = 'Set this alert to execute trade';
-          cbl.style.cssText = 'flex:1;color:#aaa;cursor:pointer';
-          cbl.onclick = function () { cb.checked = !cb.checked; cb.onchange(); };
-          var sel = document.createElement('select');
-          var opts = [
-            ['auto', 'Auto - per NIFTY trend'],
-            ['bull', 'Bullish stocks (BUY)'],
-            ['bear', 'Bearish stocks (BUY PE)']
-          ];
-          var curMode = (ln.trade && ln.trade.mode) || 'auto';
-          for (var oi = 0; oi < opts.length; oi++) {
-            var op = document.createElement('option');
-            op.value = opts[oi][0]; op.textContent = opts[oi][1];
-            if (opts[oi][0] === curMode) op.selected = true;
-            sel.appendChild(op);
-          }
-          sel.disabled = !cb.checked;
-          sel.style.cssText = 'background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 2px;font-size:9px;max-width:170px';
-          sel.onchange = function () {
-            ln.trade = ln.trade || { enabled: false, mode: 'auto' };
-            ln.trade.mode = sel.value;
-          };
-          trow.appendChild(cb); trow.appendChild(cbl); trow.appendChild(sel);
-          wrap.appendChild(trow);
-          list.appendChild(wrap);
-        })(alertLines[i]);
+      var rows = [
+        { key: 'bull', label: 'BULLISH', color: '#00d4aa' },
+        { key: 'bear', label: 'BEARISH', color: '#ff4d6a' }
+      ];
+      for (var i = 0; i < rows.length; i++) {
+        buildAlertRow(box, rows[i], i);
+        if (i === 0) {
+          var or = document.createElement('div');
+          or.textContent = 'OR';
+          or.style.cssText = 'font-size:9px;color:#ffb300;text-transform:uppercase;text-align:center;margin:2px 0;letter-spacing:1px';
+          box.appendChild(or);
+        }
       }
-      box.appendChild(list);
-      var quickRow = document.createElement('div');
-      quickRow.style.cssText = 'display:flex;gap:4px;margin-bottom:6px';
-      var last = (window.IndChart && IndChart.computeLastTwo) ? IndChart.computeLastTwo('bbpct', settings, 'v0', candles) : null;
-      var lastVal = (last && last.last != null && !isNaN(last.last)) ? fmtV(last.last) : '0.5';
-      /* Quick-add buttons: add a bullish (BUY CE) alert and a bearish (BUY PE)
-         alert side-by-side, so both conditions can be armed together. Each
-         quick alert pre-arms trade execution on its own side. All trades are
-         BUY-side only (buy the CE contract for bullish, buy the PE contract
-         for bearish) - no SELL/short orders exist in this engine. */
-      var quickBtn = function (label, mode, color) {
-        var b = document.createElement('button');
-        b.textContent = label;
-        b.title = 'Add a BB%b alert for the ' + (mode === 'bull' ? 'BULLISH' : 'BEARISH') + ' side (executes trades on this side when crossed)';
-        b.style.cssText = 'flex:1;background:#12122a;border:1px solid ' + color + ';color:' + color + ';border-radius:3px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer';
-        b.onmouseover = function () { b.style.background = color; b.style.color = '#0b0b1a'; };
-        b.onmouseout = function () { b.style.background = '#12122a'; b.style.color = color; };
-        b.onclick = function () {
-          var v = parseFloat(_alertInputVal || inp.value);
-          if (isNaN(v)) v = parseFloat(lastVal);
-          if (isNaN(v)) { inp.focus(); return; }
-          addAlertLine(v, mode);
-        };
-        return b;
-      };
-      quickRow.appendChild(quickBtn('+ BULLISH alert (BUY CE)', 'bull', '#00d4aa'));
-      quickRow.appendChild(quickBtn('+ BEARISH alert (BUY PE)', 'bear', '#ff4d6a'));
-      box.appendChild(quickRow);
-      var addRow = document.createElement('div');
-      addRow.style.cssText = 'display:flex;gap:4px';
-      var inp = document.createElement('input');
-      inp.type = 'number'; inp.step = '0.05';
-      inp.style.cssText = 'flex:1;min-width:0;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px';
-      inp.value = (_alertInputVal !== '') ? _alertInputVal : lastVal;
-      inp.placeholder = 'Value (e.g. 0.5, 1.0)';
-      inp.addEventListener('input', function () { _alertInputVal = inp.value; });
-      var btn = document.createElement('button');
-      btn.textContent = '+ Add';
-      btn.style.cssText = 'background:#00d4aa;color:#0b0b1a;border:none;border-radius:3px;padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer';
-      btn.onclick = function () {
-        var v = parseFloat(inp.value);
-        if (isNaN(v)) { inp.focus(); return; }
-        addAlertLine(v);
-      };
-      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') btn.onclick(); });
-      addRow.appendChild(inp); addRow.appendChild(btn);
-      box.appendChild(addRow);
+      var note = document.createElement('div');
+      note.textContent = 'NIFTY BB%b level cross kare to auto trade: BULLISH row (NIFTY BULL) -> BUY CE, BEARISH row (NIFTY BEAR) -> BUY PE. NIFTY Trend Follow ON par sirf matching side fire hoti hai; engine RUNNING hona zaroori hai.';
+      note.style.cssText = 'font-size:9px;color:#888;margin-top:6px;border-top:1px solid #1e1e40;padding-top:4px';
+      box.appendChild(note);
     }
-    function addAlertLine(price, mode) {
-      mode = (mode === 'bull' || mode === 'bear') ? mode : (mode || 'auto');
-      /* Multiple alerts at the SAME price are allowed (e.g. one bullish and one
-         bearish draw-line on the same value) - each line is a separate alert
-         with its own trade side, so no duplicate-price rejection. */
-      alertLines.push({
-        id: 'al' + (alertSeq++),
-        price: price,
-        color: ALERT_COLORS[alertLines.length % ALERT_COLORS.length],
-        trade: mode === 'auto' ? { enabled: false, mode: 'auto' } : { enabled: true, mode: mode }
+    function styleAlertSel(s) {
+      s.style.cssText = 'background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 2px;font-size:9px;max-width:150px';
+    }
+    function buildAlertRow(box, meta, idx) {
+      var cfg = alertCfg[meta.key];
+      var wrap = document.createElement('div');
+      wrap.style.cssText = 'border:1px solid ' + meta.color + ';border-radius:3px;padding:4px 6px';
+      var ctl = document.createElement('div');
+      ctl.style.cssText = 'display:flex;align-items:center;gap:5px;flex-wrap:wrap';
+      var en = document.createElement('input');
+      en.type = 'checkbox';
+      en.checked = !!cfg.enabled;
+      en.style.cssText = 'width:12px;height:12px;accent-color:' + meta.color + ';cursor:pointer';
+      var enl = document.createElement('label');
+      enl.textContent = meta.label;
+      enl.style.cssText = 'font-size:10px;font-weight:700;color:' + meta.color + ';cursor:pointer;white-space:nowrap';
+      ctl.appendChild(en); ctl.appendChild(enl);
+      var when = document.createElement('span');
+      when.textContent = 'when BB%b';
+      when.style.cssText = 'font-size:9px;color:#888;white-space:nowrap';
+      ctl.appendChild(when);
+      var cond = document.createElement('select');
+      ['crossed_above', 'crossed_below'].forEach(function (c) {
+        var o = document.createElement('option');
+        o.value = c;
+        o.textContent = (c === 'crossed_above') ? 'crossed above' : 'crossed below';
+        if (c === cfg.cond) o.selected = true;
+        cond.appendChild(o);
       });
-      applyAlertLines();
-      renderAlertBox();
-    }
-    function removeAlertLine(id) {
-      alertLines = alertLines.filter(function (l) { return l.id !== id; });
-      applyAlertLines();
-      renderAlertBox();
+      styleAlertSel(cond);
+      ctl.appendChild(cond);
+      var val = document.createElement('input');
+      val.type = 'number'; val.step = '0.05'; val.min = '0'; val.max = '3';
+      val.value = cfg.value;
+      val.title = 'BB%b value (0-3)';
+      val.style.cssText = 'width:56px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px';
+      ctl.appendChild(val);
+      var ar = document.createElement('span');
+      ar.textContent = '->';
+      ar.style.cssText = 'font-size:9px;color:#888';
+      ctl.appendChild(ar);
+      var trade = document.createElement('span');
+      trade.textContent = 'trade';
+      trade.style.cssText = 'font-size:9px;color:#888';
+      ctl.appendChild(trade);
+      var side = document.createElement('select');
+      var opts = [
+        ['CE', 'BUY Bullish CE'],
+        ['PE', 'BUY Bearish PE']
+      ];
+      opts.forEach(function (p) {
+        var o = document.createElement('option');
+        o.value = p[0]; o.textContent = p[1];
+        if (p[0] === cfg.side) o.selected = true;
+        side.appendChild(o);
+      });
+      styleAlertSel(side);
+      ctl.appendChild(side);
+      var tip = document.createElement('span');
+      tip.style.cssText = 'font-size:8px;color:#666;white-space:nowrap';
+      ctl.appendChild(tip);
+      wrap.appendChild(ctl);
+      box.appendChild(wrap);
+      function persist() { saveAlertCfg(); applyAlertLines(); }
+      function syncDisabled() {
+        var on = en.checked;
+        cond.disabled = !on; val.disabled = !on; side.disabled = !on;
+        wrap.style.opacity = on ? '1' : '0.55';
+        var op = niftyOperative();
+        tip.textContent = state.trend.enabled
+          ? ('NIFTY ' + (op === 'BULL' ? 'BULL' : op === 'BEAR' ? 'BEAR' : '--') + ' par ' + (cfg.side === 'CE' ? 'CE' : 'PE') + ' fire')
+          : 'Trend Follow OFF: apni side par fire';
+      }
+      en.onchange = function () { cfg.enabled = en.checked; syncDisabled(); persist(); };
+      enl.onclick = function () { en.checked = !en.checked; en.onchange(); };
+      cond.onchange = function () { cfg.cond = cond.value; persist(); };
+      val.onchange = function () {
+        var v = parseFloat(val.value);
+        if (isNaN(v) || v < 0) { val.value = cfg.value; return; }
+        cfg.value = Math.min(3, Math.max(0, v));
+        persist();
+      };
+      val.addEventListener('input', function () {
+        var v = parseFloat(val.value);
+        if (!isNaN(v) && v >= 0) { cfg.value = Math.min(3, v); saveAlertCfg(); applyAlertLines(); }
+      });
+      side.onchange = function () { cfg.side = side.value; syncDisabled(); persist(); };
+      syncDisabled();
     }
     /* Gear button: popover with the BB%b pane settings (Length, Std.dev mult,
        Color, Line width). Changes apply live to the pane and persist. */
@@ -1593,7 +1616,8 @@
         var lt = IndChart.computeLastTwo('bbpct', settings, 'v0', candles);
         if (lt.last != null && !isNaN(lt.last)) {
           try { bbSeries.update({ time: last.time, value: lt.last }); } catch (e) {}
-          checkAlertLines(lt.prev, lt.last);
+          if (_bbPrev != null && !isNaN(_bbPrev)) checkAlertTick(_bbPrev, lt.last);
+          _bbPrev = lt.last;
           setText('ntrChartBb', 'BB%b ' + fmtV(lt.last));
         }
       }
@@ -1615,7 +1639,9 @@
       var gear = document.getElementById('ntrBbpGear');
       if (gear) gear.addEventListener('click', toggleSettings);
       settings = defaultSettings();
+      alertCfg = loadAlertCfg();
       ensureChart();
+      applyAlertLines();
       refresh();
       setInterval(function () { if (state.visible) onTick(); }, POLL_MS);
       setInterval(refresh, 20000);
@@ -1623,6 +1649,7 @@
     }
     function onTfChange() {
       candles = [];
+      _bbPrev = null;
       refresh();
     }
     return { init: init, onTick: onTick, onTfChange: onTfChange, refresh: refresh, resize: resize };
@@ -1905,7 +1932,6 @@
       var act = actives[a];
       var k = symKey(act.sym);
       ensureCandles(act.sym, state.stockTf, k, TREND_REFRESH_MS);
-      var ind = indicators(state.series[k]);
       var posKey = 'ntd:' + act.sym.name;
       var pos = posAt(posKey);
       act.inPos = !!pos;
@@ -1914,21 +1940,11 @@
       if (pos && !isCommodity(act.sym) && niftyTrend.reversal.indexOf(act.cls === 'BULL' ? 'BEARISH' : 'BULLISH') !== -1) {
         exitPosition(act);
       }
-      var side = decideEntry(act, ind, niftyTrend);
-      if (side && !act.inPos && !tradeCapReached()) {
-        var lb = lastBarTime(state.series[k]);
-        if (lb && lb !== act.firedBar) {
-          /* Set Condition hard gate on ENTRY EXECUTION: a trade on the picked
-             strike only fires while this stock's side passes its condition
-             row. Read once per stock - single boolean, no allocation. */
-          if (state.condition.enabled && !condAllows(act.cls)) {
-            act.status = 'cond blocked';
-            continue;
-          }
-          act.firedBar = lb;
-          resolveAndEnter(act, side, niftyTrend);
-        }
-      }
+      /* Entries are BB%b-alert driven ONLY (no per-stock EMA-cross auto
+         entries). decideEntry() is intentionally not called here: the armed
+         BULLISH/BEARISH alert rows in the BB%b Alert -> Auto Trade box place
+         CE (NIFTY BULL) / PE (NIFTY BEAR) trades themselves when the level
+         crosses. Position management (SL/TP/trail/overall SL) still runs. */
     }
 
     /* Trade-close tracking: when a position disappears without our exitPosition

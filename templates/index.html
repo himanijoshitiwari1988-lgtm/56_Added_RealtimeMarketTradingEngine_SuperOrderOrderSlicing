@@ -2016,7 +2016,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <label style="font-size:10px;color:#00d4aa;display:flex;align-items:center;gap:4px;border-left:1px solid #2d2d50;padding-left:10px" title="Place every BUY F&O entry as an automatic LIMIT order. The system computes the best marketable limit price - crossing the best ask plus a safety buffer - so the order is fulfilled ~100% of the time and is always ABOVE the current price. OFF = market order at the live price."><input type="checkbox" id="ntrLimitOrder"> BUY F&amp;O Limit Order (auto)</label>
           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">NIFTY TF <select id="ntrNiftyTf" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"><option value="1min">1min</option><option value="5min" selected>5min</option><option value="15min">15min</option></select></label>
           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px">Stock TF <select id="ntrStockTf" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px"><option value="1min">1min</option><option value="5min" selected>5min</option><option value="15min">15min</option></select></label>
-          <span style="font-size:9px;color:#666">BUY-only · NIFTY trend + BB%B filter · trades stock option premiums (CE bullish / PE bearish) · BB%B zone gates entries · exits via SL/trail-TP + optional SL-hunt guard</span>
+          <span style="font-size:9px;color:#666">BUY-only · entries via BB%b Alert -> Auto Trade (BULLISH OR BEARISH level crosses; NIFTY BULL -> CE, NIFTY BEAR -> PE) · exits via SL/trail-TP + optional SL-hunt guard</span>
         </div>
         <div style="display:flex;align-items:center;gap:10px;padding:5px 8px;border-bottom:1px solid #1e1e40;flex-wrap:wrap">
           <b style="font-size:10px;color:#66ccff">Set Condition:</b>
@@ -2095,7 +2095,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
               <span style="font-size:9px;color:#ffb300">BB%b pane</span>
               <button id="ntrBbpGear" title="BB%b settings: Length, Std.dev mult, Color, Line width." style="background:#12122a;border:1px solid #2d2d50;color:#00d4aa;border-radius:3px;padding:1px 6px;font-size:11px;line-height:14px;cursor:pointer"><svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg></button>
-              <button id="ntrBbpPlus" title="Add a draw-line alert to the BB%b pane. Each line fires an alert when BB%b crosses its value." style="background:#12122a;border:1px solid #2d2d50;color:#00d4aa;border-radius:3px;padding:0 6px;font-size:12px;line-height:14px;cursor:pointer">+</button>
+              <button id="ntrBbpPlus" title="BB%b Alert -> Auto Trade: set BULLISH (crossed above -> BUY CE when NIFTY BULL) OR BEARISH (crossed below -> BUY PE when NIFTY BEAR) alert values. When live BB%b crosses a level the engine auto-places trades - no EMA-cross signal." style="background:#12122a;border:1px solid #2d2d50;color:#00d4aa;border-radius:3px;padding:0 6px;font-size:12px;line-height:14px;cursor:pointer">+</button>
               <div id="ntrBbpPane" style="flex:1;height:110px"></div>
             </div>
             <div id="ntrBbpAlertBox" style="display:none;background:#12122a;border:1px solid #1e1e40;border-radius:3px;margin-top:4px;padding:6px 8px;font-size:10px;color:#ccc"></div>
@@ -5865,7 +5865,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/fast_live.js?v=1"></script>
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=3"></script>
-<script src="/static/smart_ntrader.js?v=51"></script>
+<script src="/static/smart_ntrader.js?v=52"></script>
 <script src="/static/backup.js?v=2"></script>
 <script>
 /* Engine instantiation for the base tabs and every duplicated tab. The cloned
