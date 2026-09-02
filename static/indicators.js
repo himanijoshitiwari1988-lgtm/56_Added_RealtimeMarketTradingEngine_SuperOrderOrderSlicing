@@ -1118,6 +1118,11 @@
   let fetchFn = null;
   let currentReadingIndex = -1;
   let userPanning = false; /* true while the user is dragging/panning the chart */
+  /* Dedicated overlay series owned by the OI Trend / Levels overlay
+     (oitrend.js). Kept separate from the user-added IND indicators and from
+     the trading-level lines so neither engine disturbs them and it self-heals
+     after every rebuild / symbol switch. */
+  let dirSeries = null;    /* the EMA-like trend-state line series on main chart */
 
   const trimNum = (n, d) => {
     if (n == null || isNaN(n)) return '--';
@@ -1331,6 +1336,8 @@
     /* Any overlay trade lines point at the destroyed series; drop them so the
        next syncTradeChartLines cycle redraws on the fresh candle series. */
     if (window.IndChart) window.IndChart._tradeLines = {};
+    dirSeries = null;
+    _ocLines = {};
     cw.innerHTML = '';
     const host = document.getElementById('ind-panes');
     if (host) host.innerHTML = '';
@@ -2159,6 +2166,8 @@
         }
       } catch (e) {}
       this._tradeLines = {};
+      this._ocLines = {};
+      dirSeries = null;
       setData();
       if (fit && chart) fitToRecent();
       if (realtimeOn) startRealtime();
@@ -2326,6 +2335,84 @@
         try { candleSeries.removePriceLine(this._tradeLines[id].line); } catch (e) {}
       }
       this._tradeLines = {};
+    },
+    /* ---- OI Trend / Levels overlay support (owned by static/oitrend.js) ----
+       Same price-line diffing pattern as setTradeLines but on its own registry
+       so the trading-level lines and the option-chain level lines never wipe
+       each other on the shared candle series. */
+    _ocLines: {},
+    setOcLevelLines(lines) {
+      if (!candleSeries) return;
+      const next = {};
+      for (const id in lines) {
+        const lvl = lines[id];
+        if (!lvl || !(lvl.price > 0)) continue;
+        const same = this._ocLines[id];
+        if (same && Math.abs(same.price - lvl.price) < 0.0000001 && same.color === lvl.color && same.title === lvl.title && same.style === lvl.style) {
+          next[id] = same;
+          continue;
+        }
+        try {
+          if (same) candleSeries.removePriceLine(same.line);
+        } catch (e) {}
+        try {
+          const line = candleSeries.createPriceLine({
+            price: lvl.price,
+            color: lvl.color || '#f0c000',
+            lineWidth: lvl.lineWidth != null ? lvl.lineWidth : 1,
+            lineStyle: lvl.style != null ? lvl.style : 2,
+            axisLabelVisible: true,
+            title: lvl.title || ''
+          });
+          next[id] = { price: lvl.price, color: lvl.color || '#f0c000', title: lvl.title || '', style: lvl.style != null ? lvl.style : 2, line };
+        } catch (e) {}
+      }
+      for (const id in this._ocLines) {
+        if (!(id in next)) {
+          try { candleSeries.removePriceLine(this._ocLines[id].line); } catch (e) {}
+        }
+      }
+      this._ocLines = next;
+    },
+    clearOcLevelLines() {
+      for (const id in this._ocLines) {
+        try { candleSeries.removePriceLine(this._ocLines[id].line); } catch (e) {}
+      }
+      this._ocLines = {};
+    },
+    /* Dedicated EMA-like direction-state line series (created lazily on the
+       main chart). It is recreated whenever a rebuild nulls dirSeries, so the
+       caller just re-pushes data each cycle and it self-heals. */
+    setDirSeries(data, opts) {
+      if (!chart || !candleSeries) return;
+      if (!data || !data.length) { this.clearDirOverlay(); return; }
+      try {
+        if (!dirSeries) {
+          dirSeries = chart.addSeries(LightweightCharts.LineSeries, {
+            color: (opts && opts.color) || '#22e08a',
+            lineWidth: (opts && opts.lineWidth) || 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false
+          });
+        }
+        if (opts && opts.color) dirSeries.applyOptions({ color: opts.color });
+        if (opts && opts.lineWidth) dirSeries.applyOptions({ lineWidth: opts.lineWidth });
+        dirSeries.setData(data);
+      } catch (e) {}
+    },
+    setDirMarkers(mk) {
+      if (!dirSeries) return;
+      try { dirSeries.setMarkers(mk || []); } catch (e) {}
+    },
+    clearDirOverlay() {
+      try {
+        if (dirSeries) {
+          if (chart && chart.removeSeries) chart.removeSeries(dirSeries);
+          else if (dirSeries.remove) dirSeries.remove();
+        }
+      } catch (e) {}
+      dirSeries = null;
     },
     getDeployedIndicators() {
       return indicators.map(i => ({

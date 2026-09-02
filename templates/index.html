@@ -545,6 +545,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <span style="flex:1"></span>
           <span id="barCountdown" title="Time to current bar close" style="font-size:11px;color:#00d4aa;font-weight:700;font-variant-numeric:tabular-nums;background:#0d3b2e;border:1px solid #0f4a38;border-radius:3px;padding:2px 8px">--:--</span>
           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px"><input type="checkbox" id="rtToggle" onchange="onRealtimeToggle(this.checked)" checked> Realtime</label>
+          <label style="font-size:10px;color:#c8a0ff;display:flex;align-items:center;gap:4px" title="OI Trend + Levels: OI support/resistance (CE/PE walls), Max Pain, PCR, expected range, and a trend-state line computed by combining the EMA/price methods with volume increasing/decreasing and PCR (no separate filter)."><input type="checkbox" id="oiTrendToggle" onchange="OITrend.setEnabled(this.checked)"> OI Trend</label>
           <button class="btn-action warn" onclick="IndChart.removeAll()" style="padding:3px 12px;font-size:10px;width:auto;margin:0">Remove Indicators</button>
           <button class="btn-action" onclick="loadChart()" style="padding:3px 12px;font-size:10px;width:auto;margin:0">Refresh Chart</button>
         </div>
@@ -1274,6 +1275,21 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt1CloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed below close (close crossed above ST)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVwapCloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above VWAP</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 above EMA 21 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 above EMA 35 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma35_50" onchange="AISmartTrading.onFiltersInput()"> EMA 35 above EMA 50 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma50_100" onchange="AISmartTrading.onFiltersInput()"> EMA 50 above EMA 100 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma100_200" onchange="AISmartTrading.onFiltersInput()"> EMA 100 above EMA 200 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 above EMA 300 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) above Supertrend(10,2) (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) above Supertrend(10,3) (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseSt" onchange="AISmartTrading.onFiltersInput()"> Close above Supertrend (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseVwap" onchange="AISmartTrading.onFiltersInput()"> Close above VWAP (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetPaneCross" onchange="AISmartTrading.onFiltersInput()"> Pane crossed line pair still above (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCross" onchange="AISmartTrading.onFiltersInput()"> Crossed-above indicator pair still above (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close above BB middle (level, bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close above PC middle line (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullCandle" onchange="AISmartTrading.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullElliott" onchange="AISmartTrading.onFiltersInput()"> Elliott Wave</label>
@@ -1315,6 +1331,21 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt1CloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed above close (close crossed below ST)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVwapCloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below VWAP</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 below EMA 21 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 below EMA 35 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma35_50" onchange="AISmartTrading.onFiltersInput()"> EMA 35 below EMA 50 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma50_100" onchange="AISmartTrading.onFiltersInput()"> EMA 50 below EMA 100 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma100_200" onchange="AISmartTrading.onFiltersInput()"> EMA 100 below EMA 200 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 below EMA 300 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) below Supertrend(10,2) (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) below Supertrend(10,3) (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseSt" onchange="AISmartTrading.onFiltersInput()"> Close below Supertrend (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseVwap" onchange="AISmartTrading.onFiltersInput()"> Close below VWAP (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetPaneCross" onchange="AISmartTrading.onFiltersInput()"> Pane crossed line pair still below (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCross" onchange="AISmartTrading.onFiltersInput()"> Crossed-below indicator pair still below (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close below BB middle (level, bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close below PC middle line (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearCandle" onchange="AISmartTrading.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearElliott" onchange="AISmartTrading.onFiltersInput()"> Elliott Wave</label>
@@ -1799,6 +1830,21 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt1CloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed below close (close crossed above ST)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullVwapCloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above VWAP</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 above EMA 21 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 above EMA 35 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma35_50" onchange="AutoExperiment.onFiltersInput()"> EMA 35 above EMA 50 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma50_100" onchange="AutoExperiment.onFiltersInput()"> EMA 50 above EMA 100 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma100_200" onchange="AutoExperiment.onFiltersInput()"> EMA 100 above EMA 200 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma200_300" onchange="AutoExperiment.onFiltersInput()"> EMA 200 above EMA 300 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetSt10_1_2" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,1) above Supertrend(10,2) (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) above Supertrend(10,3) (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseSt" onchange="AutoExperiment.onFiltersInput()"> Close above Supertrend (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseVwap" onchange="AutoExperiment.onFiltersInput()"> Close above VWAP (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetPaneCross" onchange="AutoExperiment.onFiltersInput()"> Pane crossed line pair still above (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCross" onchange="AutoExperiment.onFiltersInput()"> Crossed-above indicator pair still above (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close above BB middle (level, bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close above PC middle line (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullCandle" onchange="AutoExperiment.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullElliott" onchange="AutoExperiment.onFiltersInput()"> Elliott Wave</label>
@@ -1840,6 +1886,21 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt1CloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed above close (close crossed below ST)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearVwapCloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below VWAP</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 below EMA 21 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 below EMA 35 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma35_50" onchange="AutoExperiment.onFiltersInput()"> EMA 35 below EMA 50 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma50_100" onchange="AutoExperiment.onFiltersInput()"> EMA 50 below EMA 100 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma100_200" onchange="AutoExperiment.onFiltersInput()"> EMA 100 below EMA 200 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma200_300" onchange="AutoExperiment.onFiltersInput()"> EMA 200 below EMA 300 (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetSt10_1_2" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,1) below Supertrend(10,2) (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) below Supertrend(10,3) (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseSt" onchange="AutoExperiment.onFiltersInput()"> Close below Supertrend (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseVwap" onchange="AutoExperiment.onFiltersInput()"> Close below VWAP (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetPaneCross" onchange="AutoExperiment.onFiltersInput()"> Pane crossed line pair still below (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCross" onchange="AutoExperiment.onFiltersInput()"> Crossed-below indicator pair still below (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close below BB middle (level, bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close below PC middle line (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearCandle" onchange="AutoExperiment.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearElliott" onchange="AutoExperiment.onFiltersInput()"> Elliott Wave</label>
@@ -2321,7 +2382,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=49"></script>
+<script src="/static/indicators.js?v=50"></script>
+<script src="/static/oitrend.js?v=1"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
 
@@ -3623,6 +3685,11 @@ function renderQuotes(){
   if(window.AutoExperiment && AutoExperiment.renderMoversList) AutoExperiment.renderMoversList();
   const st = document.getElementById("status");
   if(st) st.textContent = "Connected | " + updated + " instruments live";
+  /* OI Trend + Levels overlay recompute rides the same throttled render cycle
+     (~250ms): the trend arrow is re-evaluated against every live tick's patch
+     of the forming candle, so it can flip BEFORE the candle closes. Cheap:
+     identical candle signature -> no recompute. */
+  if(window.OITrend && OITrend.onTick){ try { OITrend.onTick(); } catch(e){} }
 }
 
 function pollQuotes(){
@@ -5788,10 +5855,10 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/strategies.js?v=69"></script>
 <script src="/static/papertrade.js?v=30"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=128"></script>
+<script src="/static/autoexperiment.v13.js?v=129"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=120"></script>
+<script src="/static/aismart.js?v=121"></script>
 <script src="/static/paperrun.js?v=22"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
 <script src="/static/hft_pool.js?v=5"></script>
