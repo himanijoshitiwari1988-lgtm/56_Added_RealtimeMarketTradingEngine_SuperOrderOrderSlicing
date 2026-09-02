@@ -1122,7 +1122,7 @@
      (oitrend.js). Kept separate from the user-added IND indicators and from
      the trading-level lines so neither engine disturbs them and it self-heals
      after every rebuild / symbol switch. */
-  let dirSeries = null;    /* the EMA-like trend-state line series on main chart */
+   let dirSeries = null;    /* the EMA-like trend-state line series on main chart */
 
   const trimNum = (n, d) => {
     if (n == null || isNaN(n)) return '--';
@@ -1336,8 +1336,8 @@
     /* Any overlay trade lines point at the destroyed series; drop them so the
        next syncTradeChartLines cycle redraws on the fresh candle series. */
     if (window.IndChart) window.IndChart._tradeLines = {};
+    if (window.IndChart) window.IndChart._ocLines = {};
     dirSeries = null;
-    _ocLines = {};
     cw.innerHTML = '';
     const host = document.getElementById('ind-panes');
     if (host) host.innerHTML = '';
