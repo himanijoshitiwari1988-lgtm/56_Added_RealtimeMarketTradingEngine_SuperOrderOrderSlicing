@@ -2232,6 +2232,9 @@ window.createAISmartTrading = function (suffix) {
   let _trendScanAt = 0;
   let _trendScanDir = null;
   let _trendScanCache = null;
+  /* Per-symbol throttle for the "dropped below threshold" removal note (the
+     note must not spam the log every tick while the symbol is unqualified). */
+  let _trendDropLogAt = {};
 
   function _resetTrendScan() {
     _trendScanAt = 0;
@@ -2697,6 +2700,29 @@ window.createAISmartTrading = function (suffix) {
     if (!n) return null;
     if (n.overall === 'BULL') return (n.current === 'BEAR') ? null : 'bullish';
     if (n.overall === 'BEAR') return (n.current === 'BULL') ? null : 'bearish';
+    return null;
+  }
+
+  /* Trend-following PICK direction - deliberately FASTER than niftyOperativeDir.
+     The market entry/exit gates stay on the slow, conservative OVERALL (EMA50)
+     regime so a counter-trend bounce can't fire a gate. But the NIFTY
+     trend-following STOCK picker must follow the trend the market is turning
+     INTO, otherwise a live reversal keeps it buying the OLD side's stocks
+     (e.g. NIFTY reverses up while trend mode is still picking the bearish
+     losers). So the picker follows the CURRENT (EMA9/21) momentum layer first:
+        - CURRENT BULL/BEAR (EMA9 crossed + slope confirms) -> pick that side
+          immediately (this is exactly the "trend has reversed" signal);
+        - CURRENT FLAT -> fall back to the OVERALL regime so a flat short-term
+          momentum never starves the pick set (overall RANGE -> no bias).
+     CURRENT only turns BULL after EMA9 rises above EMA21 and is still rising,
+     so shallow pullbacks inside an established trend leave CURRENT BULL (or
+     FLAT) and the picker never churns to the wrong side. */
+  function niftyPickDir(n) {
+    if (!n) return null;
+    if (n.current === 'BULL') return 'bullish';
+    if (n.current === 'BEAR') return 'bearish';
+    if (n.overall === 'BULL') return 'bullish';
+    if (n.overall === 'BEAR') return 'bearish';
     return null;
   }
 
@@ -3992,13 +4018,17 @@ window.createAISmartTrading = function (suffix) {
       // picker can build its F&O stock set from the current NIFTY direction.
       const nifty = await niftyBias();
       updateNiftyBiasStatus(nifty);
-      if (nifty) _lastNiftyDir = niftyOperativeDir(nifty);
+      if (nifty) _lastNiftyDir = niftyPickDir(nifty);
 
-      // NIFTY trend-following immediate removal: while trend mode is on, any open
-      // position this engine owns whose symbol is a trend-followed F&O stock that
-      // has dropped below the daily change% threshold is force-exited right away
-      // (not waiting for the next 60s scan) so it stops being traded immediately.
-      if (state.niftyTrend && state.niftyTrend.enabled) {
+      // NIFTY trend-following per-tick removal: a picked F&O stock whose daily
+      // change% has dropped below the threshold (or no longer moves on the
+      // active NIFTY side) leaves the active pick set immediately (it stops
+      // getting NEW entries because the universe below no longer resolves it).
+      // Any position ALREADY OPEN on that symbol is deliberately NOT force-
+      // exited: it keeps running and is closed by its own stop-loss / trail /
+      // take-profit (managed every quote tick by the paper engine), so a live
+      // NIFTY reversal or stock drop never cuts a running trade short.
+      if (state.niftyTrend && state.niftyTrend.enabled && state.positions) {
         const tDir = nifty ? niftyOperativeDir(nifty) : null;
         if (tDir === 'bullish' || tDir === 'bearish') {
           const nt = state.niftyTrend;
@@ -4008,7 +4038,7 @@ window.createAISmartTrading = function (suffix) {
           if (nt.includeIndices && Array.isArray(nt.indices)) {
             nt.indices.forEach(s => { idxSet[String(s.id) + ':' + (s.exch || '')] = true; });
           }
-          const dropKeys = Object.keys(state.positions).filter(k => {
+          const notQualify = Object.keys(state.positions).filter(k => {
             const p = state.positions[k];
             if (!p) return false;
             if (p.symbolExch === 'IDX_I' || idxSet[k] || idxSet[String(p.symbolId) + ':' + (p.symbolExch || '')]) return false;
@@ -4019,16 +4049,14 @@ window.createAISmartTrading = function (suffix) {
             if (tDir === 'bullish') return pct < tThresh;
             return pct > -tThresh;
           });
-          if (dropKeys.length) {
-            dropKeys.forEach(k => {
-              if (pt && pt.autoExit) pt.autoExit(k);
-              if (paper) { if (paper.dropTrailEngine) paper.dropTrailEngine(k); if (paper.dropAiTrailEngine) paper.dropAiTrailEngine(k); }
-              if (state.positions[k]) recordClosedPosition(state.positions[k]);
-              delete state.positions[k];
-            });
-            log('NIFTY trend-following: dropped ' + dropKeys.length + ' position(s) below ' + tThresh + '% daily change (NIFTY ' + tDir + ')', 'warn');
-            save();
-          }
+          notQualify.forEach(k => {
+            const now = Date.now();
+            if (_trendDropLogAt[k] != null && (now - _trendDropLogAt[k]) < 5 * 60 * 1000) return;
+            _trendDropLogAt[k] = now;
+            const p = state.positions[k];
+            const nm = (p && (p.instrumentName || p.symbol)) || k;
+            log('NIFTY trend-following: ' + nm + ' no longer qualifies (needs ' + (tDir === 'bullish' ? '>= +' : '<= -') + tThresh + '% daily, NIFTY ' + tDir + ') - stopped from NEW entries; its open trade continues to its SL/TP', 'warn');
+          });
         }
       }
 
@@ -4324,7 +4352,7 @@ window.createAISmartTrading = function (suffix) {
      an idle AST tab never consumes the shared Dhan chart rate-limit budget. */
   function refreshNiftyStatus() {
     if (state.enabled !== true) return;
-    niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); _lastNiftyDir = niftyOperativeDir(b); } });
+    niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); _lastNiftyDir = niftyPickDir(b); } });
   }
 
   /* ---------------- log ---------------- */
