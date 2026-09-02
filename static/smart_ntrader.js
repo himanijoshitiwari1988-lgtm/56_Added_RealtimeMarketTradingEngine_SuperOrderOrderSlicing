@@ -1105,6 +1105,7 @@
     var _paneHost = null;
     var _ovHost = null;
     var _ovLines = {};
+    var _ovGhost = {};
     var _ovDrag = null;
     var ALERT_ROW_DEFS = [
       { key: 'bull', color: '#00d4aa', label: 'BULL CE' },
@@ -1319,6 +1320,53 @@
       }
       el.style.display = 'block';
       el.title = 'Drag to set the ' + def.label + ' BB%b alert level';
+    }
+    /* Dashed DRAFT preview lines. While the popover's number/value fields are
+       edited the draft differs from the ARMED alertCfg - these dashed lines
+       (same row colours, marked "(box)") show exactly where each edited level
+       will sit on the BB%b scale, moving live as you type/step the input. The
+       solid lines (engine value) only move when Set Alert & Execute Trade is
+       pressed, so the preview never misleads about what actually trades. */
+    function renderAlertDraftGhosts() {
+      if (!bbSeries || !_paneHost) return;
+      if (!_ovHost) { try { applyAlertLines(); } catch (e) {} }
+      if (!_ovHost) return;
+      for (var i = 0; i < ALERT_ROW_DEFS.length; i++) {
+        var def = ALERT_ROW_DEFS[i];
+        var arm = alertCfg ? alertCfg[def.key] : null;
+        var dr = draftCfg ? draftCfg[def.key] : null;
+        var show = false, v = null;
+        if (dr && dr.enabled) {
+          var nv = Number(dr.value);
+          if (isFinite(nv)) {
+            if (!arm || !arm.enabled || Number(arm.value) !== nv) { show = true; v = nv; }
+          }
+        }
+        var el = _ovGhost[def.key];
+        if (!show) { if (el) el.style.display = 'none'; continue; }
+        var y = null;
+        if (bbSeries.priceToCoordinate) {
+          try { y = bbSeries.priceToCoordinate(Math.min(3, Math.max(0, v))); } catch (e) {}
+        }
+        if (y == null || !isFinite(y)) { if (el) el.style.display = 'none'; continue; }
+        if (!el) {
+          el = document.createElement('div');
+          el.dataset.key = def.key;
+          el.style.cssText = 'position:absolute;left:0;right:0;height:2px;margin-top:-1px;pointer-events:none;z-index:1;opacity:.85';
+          el.style.background = 'repeating-linear-gradient(90deg,' + def.color + ' 0 6px, transparent 6px 10px)';
+          var ch = document.createElement('span');
+          ch.style.cssText = 'position:absolute;top:-9px;left:6px;padding:1px 5px;font-size:9px;line-height:12px;border-radius:3px;color:#0b0b1a;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.6)';
+          ch.style.background = def.color;
+          el.appendChild(ch);
+          _ovGhost[def.key] = el;
+          _ovHost.appendChild(el);
+        }
+        var h = _paneHost.clientHeight || _paneHost.offsetHeight || 110;
+        el.style.top = Math.max(0, Math.min(h - 4, y - 2)) + 'px';
+        var ch = el.firstChild;
+        if (ch) ch.textContent = def.label + ' ' + (isFinite(v) ? Number(v).toFixed(2) : '--') + ' (box)';
+        el.style.display = 'block';
+      }
     }
     function onPanePointerMove(ev) {
       if (!_ovDrag || !bbSeries || !_paneHost) return;
@@ -1588,7 +1636,7 @@
       note.style.cssText = 'font-size:9px;color:#888;margin-top:6px;border-top:1px solid #1e1e40;padding-top:4px';
       box.appendChild(note);
       var hint = document.createElement('div');
-      hint.textContent = 'Yahan kiye gaye changes sirf draft hain. SET dabane par hi alert LOCK hokar final hota hai aur trades us level ke crossing par shuru ho jaate hain; tab tak purana SET alert hi trade karta rahega.';
+      hint.textContent = 'Number/row me badlaav karte hi pane par dashed preview line (us value par, "(box)" chip ke saath) turant khisakti hai. Solid line = engine ka active (SET) level, woh sirf SET dabane par is nayi value par move hoti hai; tab tak trades purane level par hi chalti hain.';
       hint.style.cssText = 'font-size:8px;color:#666;margin-top:3px;line-height:1.4';
       box.appendChild(hint);
       refreshAlertStatus();
@@ -1620,6 +1668,7 @@
       else { txt = 'CHANGED - SET NAHI'; fg = '#0b0b1a'; bg = '#ffb300'; }
       chip.textContent = txt;
       chip.style.cssText = 'font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;letter-spacing:.3px;white-space:nowrap;color:' + fg + ';background:' + bg + ';border:1px solid ' + (bg === 'transparent' ? '#2d2d50' : bg);
+      renderAlertDraftGhosts();
     }
     /* Copy the popover draft into the armed config: old alert is replaced by
        the new one, then trades fire from the fresh levels immediately. */
@@ -1883,6 +1932,7 @@
       if (!draftCfg) draftCfg = cloneAlertCfg(alertCfg);
       ensureChart();
       applyAlertLines();
+      renderAlertDraftGhosts();
       refresh();
       setInterval(function () { if (state.visible) onTick(); }, POLL_MS);
       setInterval(refresh, 20000);
