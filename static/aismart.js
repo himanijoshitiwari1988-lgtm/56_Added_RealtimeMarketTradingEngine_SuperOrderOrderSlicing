@@ -6812,6 +6812,7 @@ window.createAISmartTrading = function (suffix) {
      instead of lagging behind the multi-second poll tick. */
   api.refreshLiveRunning = function () {
     renderRunning();
+    renderClosed();
     renderSummary();
   };
 

@@ -624,20 +624,46 @@ window.createPaperRun = function (suffix) {
      contracts (async) on every quote tick. The key folds in the symbols the
      strategy trades on so the cache refreshes when the symbol set changes. */
   let _chartCache = {};
+  /* Resolved chart list per cache key. Keeping the resolved lists (not just
+     promises) lets re-renders paint the chart rows synchronously. */
+  let _chartLists = {};
+  /* Last successfully shown chart list per strategy. When a fresh resolve is
+     needed (first load / engine re-pick / cache-key change) the OLD strikes
+     stay visible until the new set resolves, so the rows never flash empty. */
+  let _lastListByStrat = {};
+
+  function _stratKey(s) { return String(s.engine) + ':' + String(s.id); }
+
+  function _stratChartList(s) { return _lastListByStrat[_stratKey(s)] || null; }
 
   function chartCacheKey(s) {
     let key = String(s.engine) + ':' + String(s.id) + ':' +
       strategySymbols(s).map(x => (x && x.id != null ? String(x.id) : '') + ':' + (x && (x.exch || ''))).join(',');
     /* AI Smart chart rows come from the engine's live picked strikes; fold a
-       fingerprint of them into the key so the cache refreshes when the engine
-       resolves new/extra premium contracts for the same symbol set. */
-    if (s.engine === 'ast' && window.AISmartTrading && AISmartTrading.pickedStrikes) {
+       fingerprint of THE STRATEGY'S OWN symbols into the key so the cache
+       refreshes when the engine resolves new/extra premium contracts for the
+       symbols this strategy actually trades. Folding every engine-wide pick
+       in made an unrelated symbol's re-pick invalidate every strategy's cache
+       at once, which is what made whole lists of strikes blink out together. */
+    if (s.engine === 'ast' && window.AISmartTrading && AISmartTrading.pickedStrikesFor) {
       try {
-        const ps = AISmartTrading.pickedStrikes();
-        key += ':' + ps.map(r => (r.key || '') + ':' + ((r.contracts || []).length)).join(',');
+        const syms = strategySymbols(s);
+        for (const sym of syms) {
+          if (!sym || sym.id == null) continue;
+          const rec = AISmartTrading.pickedStrikesFor(sym);
+          if (rec && rec.contracts) key += ':' + String(sym.id) + ':' + rec.contracts.length;
+        }
       } catch (e) {}
     }
     return key;
+  }
+
+  function _fillChartRows(s, chartList) {
+    const sub = $id('pr-charts-' + safeId(s.id) + '-' + safeId(s.engine));
+    if (!sub) return;
+    const l = chartList || [];
+    sub.innerHTML = l.map((c, i) => chartRowHTML(s, c, i)).join('') || '';
+    if (l.length) _lastListByStrat[_stratKey(s)] = l;
   }
 
   async function renderStrategies() {
@@ -648,23 +674,34 @@ window.createPaperRun = function (suffix) {
       host.innerHTML = emptyHTML('No running strategies. Toggle AI Smart Trading ON in the Paper Trade tab to start strategies.');
       return;
     }
-    const rows = [];
-    for (const s of list) {
-      const ck = chartCacheKey(s);
-      if (!_chartCache[ck]) {
-        _chartCache[ck] = chartsForStrategy(s);
+    const items = list.map(s => ({ s: s, ck: chartCacheKey(s) }));
+    host.innerHTML = items.map(({ s }) => strategyRowHTML(s)).join('');
+    for (const { s, ck } of items) {
+      const resolved = _chartLists[ck];
+      if (resolved) {
+        _fillChartRows(s, resolved);
+        continue;
       }
-      rows.push(strategyRowHTML(s));
-    }
-    host.innerHTML = rows.join('');
-    for (const s of list) {
-      const ck = chartCacheKey(s);
-      let chartList = null;
-      try { chartList = await _chartCache[ck]; }
-      catch (e) { delete _chartCache[ck]; }   /* drop a rejected promise so it refetches */
-      const sub = $id('pr-charts-' + safeId(s.id) + '-' + safeId(s.engine));
-      if (sub) {
-        sub.innerHTML = (chartList || []).map((c, i) => chartRowHTML(s, c, i)).join('') || '';
+      /* No resolved charts for this cache key yet. Keep the strategy's last
+         shown strikes visible while the new resolve is in flight so a re-pick
+         never blanks the list, then swap in the fresh set when it lands. */
+      const prev = _stratChartList(s);
+      if (prev && prev.length) _fillChartRows(s, prev);
+      if (!_chartCache[ck]) {
+        _chartCache[ck] = chartsForStrategy(s).then((chartList) => {
+          const l = chartList || [];
+          _chartLists[ck] = l;
+          _fillChartRows(s, l);
+          return l;
+        }, () => {
+          /* drop a rejected promise so it refetches next render */
+          delete _chartCache[ck];
+        });
+      } else {
+        _chartCache[ck].then(() => {
+          const l = _chartLists[ck];
+          if (l) _fillChartRows(s, l);
+        });
       }
     }
   }
@@ -727,6 +764,8 @@ window.createPaperRun = function (suffix) {
         if (AISmartTrading.stopPosition) { try { AISmartTrading.stopPosition(s.id); } catch (e) {} }
       }
       _chartCache = {};
+      _chartLists = {};
+      _lastListByStrat = {};
       render(true);
     },
 
@@ -757,6 +796,8 @@ window.createPaperRun = function (suffix) {
         else { if (AISmartTrading.selectNone) AISmartTrading.selectNone(); if (AISmartTrading.stopAll) AISmartTrading.stopAll(); }
       }
       _chartCache = {};
+      _chartLists = {};
+      _lastListByStrat = {};
       render(true);
     },
 
