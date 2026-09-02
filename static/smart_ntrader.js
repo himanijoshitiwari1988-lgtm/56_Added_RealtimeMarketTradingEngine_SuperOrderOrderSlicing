@@ -1488,21 +1488,62 @@
       }
       toast('BB%b trade alert @ ' + fmtV(cfg.value) + ' -> ' + (execSide === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
     }
-    /* "+" button popover: the BULLISH ... OR ... BEARISH alert auto-trade form. */
+    /* "+" button popover: the BULLISH ... OR ... BEARISH alert auto-trade form.
+       The popover is rendered as a FIXED overlay anchored under the "+" button
+       (never in-flow), so no card height / overflow clipping can hide or block
+       its controls - the Set button is always reachable and clickable. */
+    function hideFloatBoxes() {
+      var a = document.getElementById('ntrBbpAlertBox');
+      var s = document.getElementById('ntrBbpSettings');
+      if (a) a.style.display = 'none';
+      if (s) s.style.display = 'none';
+    }
+    function floatBox(box, anchorId) {
+      var anchor = document.getElementById(anchorId);
+      if (!anchor) return;
+      var r = anchor.getBoundingClientRect();
+      var vw = document.documentElement.clientWidth || window.innerWidth || 800;
+      var vh = document.documentElement.clientHeight || window.innerHeight || 600;
+      var w = Math.min(380, Math.max(280, vw - 16));
+      var left = Math.max(4, Math.min(r.left, vw - w - 4));
+      var top = r.bottom + 6;
+      var maxH = Math.max(180, vh - top - 12);
+      box.style.display = 'block';
+      box.style.position = 'fixed';
+      box.style.zIndex = '1200';
+      box.style.left = left + 'px';
+      box.style.top = top + 'px';
+      box.style.width = w + 'px';
+      box.style.maxHeight = maxH + 'px';
+      box.style.overflowY = 'auto';
+      box.style.pointerEvents = 'auto';
+    }
     function toggleAlertBox() {
       var box = document.getElementById('ntrBbpAlertBox');
       if (!box) return;
       var opening = box.style.display === 'none';
-      box.style.display = opening ? '' : 'none';
-      if (opening) renderAlertBox();
+      if (opening) {
+        hideFloatBoxes();
+        if (!draftCfg) draftCfg = cloneAlertCfg(alertCfg || {});
+        renderAlertBox();
+        floatBox(box, 'ntrBbpPlus');
+      } else {
+        box.style.display = 'none';
+      }
+    }
+    function onDocPointerDown(ev) {
+      var a = document.getElementById('ntrBbpAlertBox');
+      var s = document.getElementById('ntrBbpSettings');
+      if (!a && !s) return;
+      var open = (a && a.style.display !== 'none') || (s && s.style.display !== 'none');
+      if (!open) return;
+      if (ev.target && ev.target.closest && ev.target.closest('#ntrBbpAlertBox,#ntrBbpSettings,#ntrBbpPlus,#ntrBbpGear')) return;
+      hideFloatBoxes();
     }
     function renderAlertBox() {
       var box = document.getElementById('ntrBbpAlertBox');
       if (!box) return;
       if (!draftCfg) draftCfg = cloneAlertCfg(alertCfg || {});
-      box.style.position = 'relative';
-      box.style.zIndex = '30';
-      box.style.pointerEvents = 'auto';
       box.innerHTML = '';
       var hdr = document.createElement('div');
       hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px';
@@ -1688,13 +1729,19 @@
       syncDisabled();
     }
     /* Gear button: popover with the BB%b pane settings (Length, Std.dev mult,
-       Color, Line width). Changes apply live to the pane and persist. */
+       Color, Line width). Rendered as a fixed overlay under the gear icon.
+       Changes apply live to the pane and persist. */
     function toggleSettings() {
       var box = document.getElementById('ntrBbpSettings');
       if (!box) return;
       var opening = box.style.display === 'none';
-      box.style.display = opening ? '' : 'none';
-      if (opening) renderSettingsForm();
+      if (opening) {
+        hideFloatBoxes();
+        renderSettingsForm();
+        floatBox(box, 'ntrBbpGear');
+      } else {
+        box.style.display = 'none';
+      }
     }
     function renderSettingsForm() {
       var box = document.getElementById('ntrBbpSettings');
@@ -1842,6 +1889,9 @@
       window.addEventListener('resize', resize);
       window.addEventListener('pointermove', onPanePointerMove);
       window.addEventListener('pointerup', onPanePointerUp);
+      document.addEventListener('pointerdown', onDocPointerDown, true);
+      window.addEventListener('scroll', hideFloatBoxes);
+      window.addEventListener('resize', hideFloatBoxes);
     }
     function onTfChange() {
       candles = [];
