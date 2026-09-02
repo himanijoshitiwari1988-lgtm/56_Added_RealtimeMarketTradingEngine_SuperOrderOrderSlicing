@@ -2405,7 +2405,16 @@
       if (!dirSeries) return;
       try { dirSeries.setMarkers(mk || []); } catch (e) {}
     },
+    /* Trend arrows + labels anchored to the ACTUAL candle bars (the main
+       candle series) so they are always visible next to the candles instead of
+       being drawn on the thin EMA state line where they were easy to miss /
+       clipped at the right edge. Nothing else sets markers on the candle
+       series, so this owns them and rebuilds clear them via clearDirOverlay. */
+    setCandleMarkers(mk) {
+      try { if (candleSeries && candleSeries.setMarkers) candleSeries.setMarkers(mk || []); } catch (e) {}
+    },
     clearDirOverlay() {
+      try { if (candleSeries && candleSeries.setMarkers) candleSeries.setMarkers([]); } catch (e) {}
       try {
         if (dirSeries) {
           if (chart && chart.removeSeries) chart.removeSeries(dirSeries);

@@ -502,6 +502,8 @@
   let _lastSig = null;        /* last candle signature drawn */
   let _lastLvlDraw = null;    /* last time OC level lines were (re)computed */
   let _lastState = null;
+  let _prevKind = null;
+  let _legEl = null;          /* trend-state legend chip over the chart */
 
   function docEl(id) { try { return document.getElementById(id); } catch (e) { return null; } }
   function ocExpiry() {
@@ -593,6 +595,10 @@
     if (!sym) return;
     const isOpt = /^OPT/.test(sym.inst || '');
     _chartKind = isOpt ? 'opt' : 'spot';
+    if (_prevKind !== null && _prevKind !== _chartKind) {
+      _lastSig = null; _lastState = null; _lastLvlDraw = null;
+    }
+    _prevKind = _chartKind;
     if (isOpt) {
       /* A premium option chart anchors its chain through the option's own
          ocId/ocExch (the UNDERLYING SID the strike was opened from) - that way
@@ -604,6 +610,7 @@
       if (ocId == null) { _under = null; _chain = null; return; }
       const key = String(ocId) + '|' + ocExch;
       if (!_under || _under.key !== key) {
+        _lastSig = null; _lastState = null; _lastLvlDraw = null;
         _under = {
           key, id: sym.id, exch: sym.exch, inst: sym.inst, name: sym.name,
           ocId, ocExch
@@ -615,6 +622,7 @@
     }
     const key = (sym.ocId || sym.id) + '|' + (sym.ocExch || sym.exch);
     if (!_under || _under.key !== key) {
+      _lastSig = null; _lastState = null; _lastLvlDraw = null;
       _under = {
         key, id: sym.id, exch: sym.exch, inst: sym.inst, name: sym.name,
         ocId: sym.ocId, ocExch: sym.ocExch
@@ -771,7 +779,8 @@
         });
       }
     } catch (e) {}
-    IC().setDirMarkers(mk);
+    const setMk = (IC().setCandleMarkers || IC().setDirMarkers || null);
+    if (setMk) { try { setMk.call(IC(), mk); } catch (e) {} }
   }
   /* Compact "why" line showing that volume up/down + PCR feed the state. */
   function trendInfoText(st) {
@@ -790,6 +799,61 @@
       if (st.score != null) parts.push('Score ' + (st.score > 0 ? '+' : '') + st.score.toFixed(2));
       return parts.join(' | ');
     } catch (e) { return ''; }
+  }
+
+  /* ---- Always-visible trend-state legend (the arrow + the reversal / trend
+     continue / consolidation TEXT that the user asked for). It is a DOM chip
+     overlaid on the chart so it can never be hidden behind candles or clipped
+     at the right edge like tiny series markers were. ---- */
+  function ensureLegend() {
+    if (_legEl && _legEl.isConnected) return _legEl;
+    const cont = docEl('chart-container');
+    if (!cont) return null;
+    try {
+      const el = document.createElement('div');
+      el.id = 'oiTrendLegend';
+      el.style.cssText = 'position:absolute;left:10px;top:8px;z-index:5;pointer-events:none;font:600 11px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:rgba(10,10,28,0.8);border:1px solid rgba(120,120,200,0.4);border-radius:6px;padding:4px 10px;color:#e0e0ff;white-space:nowrap;display:none;';
+      cont.appendChild(el);
+      _legEl = el;
+      return el;
+    } catch (e) { return null; }
+  }
+  function hideLegend() { if (_legEl) { try { _legEl.style.display = 'none'; } catch (e) {} } }
+  function paintLegend(st) {
+    const el = ensureLegend();
+    if (!el) return;
+    if (!enabled || _chartKind !== 'spot' || !st) { hideLegend(); return; }
+    try {
+      const ctx = st.ctx || {};
+      let head;
+      if (st.kind === 'consolidation') {
+        head = '· CONSOLIDATION · OI squeeze, no clear trend';
+      } else if (st.kind === 'reversal') {
+        head = (st.arrow === 'up' ? '↑' : '↓') + ' REVERSAL POINT (OI wall)';
+      } else {
+        const arrow = st.arrow === 'up' ? '↑' : '↓';
+        head = arrow + ' ' + (st.arrow === 'up' ? 'UP' : 'DOWN') + ' · ' + st.label + (st.strength ? ' (' + st.strength + ')' : '');
+      }
+      const h = document.createElement('span');
+      h.style.cssText = 'font-weight:700;color:' + (st.color || '#e0e0ff') + ';';
+      h.appendChild(document.createTextNode(head));
+      const parts = [];
+      if (st.score != null) parts.push('Score ' + (st.score > 0 ? '+' : '') + st.score.toFixed(2));
+      if (ctx.pcr != null) {
+        let p = 'PCR ' + ctx.pcr.toFixed(2);
+        if (ctx.pcrChg != null && isFinite(ctx.pcrChg)) p += ' (' + (ctx.pcrChg < 0 ? '' : '+') + ctx.pcrChg.toFixed(2) + ')';
+        parts.push(p);
+      }
+      const vd = ctx.vol ? ctx.vol.dir : 0;
+      parts.push('Vol ' + (vd > 0 ? 'rising' : (vd < 0 ? 'falling' : 'flat')));
+      el.innerHTML = '';
+      el.appendChild(h);
+      const s = document.createElement('span');
+      s.style.cssText = 'color:#9fa8da;margin-left:10px;';
+      s.appendChild(document.createTextNode(parts.join('  ·  ')));
+      el.appendChild(s);
+      el.style.display = 'block';
+    } catch (e) { hideLegend(); }
   }
 
   /* ----- option-strike ordered OI strip (premium option charts only) -----
@@ -986,6 +1050,7 @@
         try { if (IC().clearDirOverlay) IC().clearDirOverlay(); if (IC().clearOcLevelLines) IC().clearOcLevelLines(); } catch (e) {}
       }
       _wasOpt = true;
+      hideLegend();
       drawStrip();
       return;
     }
@@ -993,6 +1058,7 @@
     _wasOpt = false;
     drawDir();
     drawLevels();
+    paintLegend(_lastState ? _lastState.st : null);
   }
   function setEnabled(on) {
     enabled = !!on;
@@ -1002,7 +1068,9 @@
       if (IC() && IC().clearDirOverlay) IC().clearDirOverlay();
       if (IC() && IC().clearOcLevelLines) IC().clearOcLevelLines();
       hideStrip();
+      hideLegend();
       _lastSig = null;
+      _lastState = null;
       return;
     }
     _chain = null;
