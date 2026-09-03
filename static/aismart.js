@@ -3582,8 +3582,25 @@ window.createAISmartTrading = function (suffix) {
     if (day !== state.tradeCountDay) {
       state.tradeCountDay = day;
       state.tradeCounts = {};
+      clearFiredSignals();
     }
   }
+
+  /* One-trade-per-signal latch: once a strategy+instrument signal has fired an
+     entry, that same (still-true) condition may not fire another trade. The
+     latch is released ONLY after an evaluation cycle observes the condition
+     FALSE (the signal resets), so a stop-loss exit followed by an instant re-
+     buy on the same persistent condition (the APLAPOLLO 2140 PE 24x churn) is
+     blocked: each fresh condition-meeting arms exactly ONE new trade. An open
+     position owned by the key keeps the latch armed while it is held, so a
+     signal flip during the hold can never re-arm a re-entry at the exit moment
+     - a released latch requires the signal to be observed false AFTER the close
+     before a new meeting may trade again. */
+  let _signalFired = {};
+  function clearFiredSignals() { _signalFired = {}; }
+  function firedSignal(key) { return _signalFired[key] === true; }
+  function armFiredSignal(key) { _signalFired[key] = true; }
+  function releaseFiredSignal(key) { if (_signalFired[key] === true) delete _signalFired[key]; }
 
   /* AI auto-trades decision (cached per newest candle). */
   const _aiTradesCache = { sig: '', dec: null };
@@ -3893,7 +3910,15 @@ window.createAISmartTrading = function (suffix) {
           const entryOk = mtf
             ? evalEntryMtfLive(working, candles, trendTf ? hftCandlesFor(instr, trendTf, SE) : null, key)
             : evalEntryLive(working, candles, key);
-          if (!entryOk) continue;
+          if (!entryOk) {
+            /* Signal reset observed while no position is held: release the
+               one-trade-per-signal latch so the NEXT fresh meeting can arm. */
+            releaseFiredSignal(key);
+            continue;
+          }
+          /* One-trade-per-signal: this still-true condition already fired its
+             trade - no re-entry until the signal resets and meets again. */
+          if (firedSignal(key)) continue;
           const side = 'BUY';
           let lotSize = u.lotSize != null ? Number(u.lotSize) : null;
           if (lotSize == null && pt.lotSizeFor) lotSize = pt.lotSizeFor(tradeTargets[0]);
@@ -3963,6 +3988,7 @@ window.createAISmartTrading = function (suffix) {
           if (placedLegs) {
             state.tradeCounts[s.id] = (state.tradeCounts[s.id] || 0) + 1;
             setSettingsFor(s.id);
+            armFiredSignal(key);
           }
         }
       }
@@ -4478,6 +4504,11 @@ window.createAISmartTrading = function (suffix) {
             if (!open) continue;
             anyOpen = true;
             if (String(open.autoKey || '') !== key) continue; /* owned by another engine / manual trade */
+            /* An open position on this instrument means this signal episode has
+               already been used - keep the one-trade-per-signal latch armed so a
+               stop/TP exit cannot be followed by an instant re-buy while the
+               same condition is still true. */
+            armFiredSignal(key);
             /* Holding this instrument via this strategy: manage the exit. */
             const myPos = state.positions[pkey];
             const aside = open.side === 'BUY' ? 'long' : 'short';
@@ -4528,7 +4559,15 @@ window.createAISmartTrading = function (suffix) {
           if (allowed != null && (state.tradeCounts[s.id] || 0) >= allowed) { prog(s.id, 60, 'Blocked: trade limit reached'); bump(instr, 'limit'); continue; }
 
           const entryOk = mtf ? evalEntryMtfLive(working, candles, trendCandles, key) : evalEntryLive(working, candles, key);
-          if (!entryOk) { prog(s.id, 70, mtf ? 'Waiting MTF confirmation' : 'Waiting entry signal'); bump(instr, 'signal'); continue; }
+          if (!entryOk) {
+            /* Signal reset observed while no position is held: release the
+               one-trade-per-signal latch so the NEXT fresh meeting can arm. */
+            releaseFiredSignal(key);
+            prog(s.id, 70, mtf ? 'Waiting MTF confirmation' : 'Waiting entry signal'); bump(instr, 'signal'); continue;
+          }
+          /* One-trade-per-signal: this still-true condition already fired its
+             trade - no re-entry until the signal resets and meets again. */
+          if (firedSignal(key)) { prog(s.id, 72, 'One trade per signal - same condition still active, waiting for a fresh signal'); bump(instr, 'signal'); continue; }
           prog(s.id, 90, 'Placing entry');
 
           const side = 'BUY'; // buy-only engine: bearish strategies analyze the bearish trend but always execute BUY
@@ -4607,6 +4646,7 @@ window.createAISmartTrading = function (suffix) {
           if (placed) {
             state.tradeCounts[s.id] = (state.tradeCounts[s.id] || 0) + 1;
             setSettingsFor(s.id);
+            armFiredSignal(key);
             prog(s.id, 100, 'Entry placed');
           }
           placedTotal += placed;
