@@ -2184,7 +2184,7 @@
       } catch (e) {}
       this._tradeLines = {};
       this._ocLines = {};
-      dirSeries = null;
+      this.clearDirOverlay();
       setData();
       if (fit && chart) fitToRecent();
       if (realtimeOn) startRealtime();

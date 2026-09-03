@@ -2408,7 +2408,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=53"></script>
+<script src="/static/indicators.js?v=56"></script>
 <script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
@@ -4138,21 +4138,29 @@ function startFeedStatusPoll(){
 
 /* Fetch /api/candles with a bounded auto-retry. The server's rate-limit
    cooldown gate returns 503 with "rate limited" for up to ~30s while Dhan
-   backs off; instead of dropping the user straight into a hard "Failed" state,
-   retry every delayMs (up to maxTries) so the chart appears by itself once the
-   gate lifts. Non-rate-limit failures go straight to onFail. */
+   backs off, and the single-flight guard returns 503 "still loading" when
+   another request for the same key is already fetching from Dhan. Instead of
+   dropping the user straight into a hard "Failed"/alert state, retry every
+   delayMs (up to maxTries) so the chart appears by itself once the gate lifts
+   / the in-flight fetch fills the cache. Honors retry_after when the server
+   sends one. Non-transient failures go straight to onFail. */
 function fetchCandlesRetry(payload, onSuccess, onRateLimit, onFail, maxTries, delayMs){
-  maxTries = maxTries || 6;
-  delayMs = delayMs || 5000;
+  maxTries = maxTries || 8;
+  delayMs = delayMs || 3000;
   let tries = 0;
   const attempt = () => {
     tries++;
     fetch("/api/candles",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
       .then(r=>r.json()).then(d=>{
         if(d && d.status==="success"){ onSuccess(d); return; }
-        if(d && d.status==="error" && /rate ?limit|busy/i.test(d.message || "") && tries < maxTries){
+        const msg = String((d && d.message) || "");
+        if(d && d.status==="error" && /rate ?limit|busy|still loading|unavailable|queue/i.test(msg) && tries < maxTries){
           if(onRateLimit) onRateLimit(tries, maxTries);
-          setTimeout(attempt, delayMs);
+          let wait = delayMs;
+          if(d.retry_after != null && isFinite(d.retry_after) && Number(d.retry_after) > 0){
+            wait = Math.min(Number(d.retry_after) * 1000, 10000);
+          }
+          setTimeout(attempt, wait);
           return;
         }
         if(onFail) onFail(d);
@@ -4191,13 +4199,14 @@ function loadChart(){
     document.getElementById("status").textContent = "Loaded "+d.data.length+" candles | "+selectedSymbol.name+" "+chartTf;
   };
   const onRateLimit = (n, total) => {
-    document.getElementById("status").textContent = "Dhan is rate-limited. Retrying ("+n+"/"+total+")...";
+    document.getElementById("status").textContent = "Chart data busy / rate-limited. Auto-retrying ("+n+"/"+total+")...";
     if(!IndChart.hasChart()){
-      container.innerHTML = '<div id="loading">Dhan chart API temporarily rate-limited. Auto-retrying ('+n+'/'+total+')...</div>';
+      container.innerHTML = '<div id="loading">Chart data still loading. Auto-retrying ('+n+'/'+total+')...</div>';
     }
   };
   const onFail = d => {
     const msg = (d && d.message) ? d.message : "Network error";
+    const transient = /rate ?limit|busy|still loading|unavailable|queue/i.test(msg);
     /* MCX options: Dhan has no intraday history, so fall back to the daily
        premium chart instead of blanking the chart with an alert. */
     if(selectedSymbol && selectedSymbol.exch === "MCX_COMM" && chartTf !== "day"){
@@ -4214,10 +4223,16 @@ function loadChart(){
       });
       return;
     }
-    alert(msg);
+    /* Transient server busy / single-flight messages that exhausted the retry
+       budget show in the status line + loading box instead of a blocking alert
+       (the chart still appears the moment the in-flight fetch fills the cache
+       / the cooldown lifts). Only hard errors pop an alert. */
+    if(!transient) alert(msg);
     document.getElementById("status").textContent = "Chart load failed: "+msg;
     if(!IndChart.hasChart()){
-      container.innerHTML = '<div id="loading">Failed: '+msg+'</div>';
+      container.innerHTML = transient
+        ? '<div id="loading">'+msg+' - click Refresh Chart to try again</div>'
+        : '<div id="loading">Failed: '+msg+'</div>';
     }
   };
   fetchCandlesRetry(
