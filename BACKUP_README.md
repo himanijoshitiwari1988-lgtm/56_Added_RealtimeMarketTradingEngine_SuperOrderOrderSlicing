@@ -1,47 +1,74 @@
-# Backup: 33_fixed_NiftyTrendFollowingLegPickerAuto
+# Backup: 38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode
 
 Complete snapshot backup of the project (working directory
-`32_Added8IndicaterFilters_FixedOptionChainIssue`).
+`36_fixed_SmartNTrader_AddedOiTrend`) pushed to
+`himanijoshitiwari1988-lgtm/38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode` (branch `main`).
 
 ## Contents
 
-- **Complete project files** — the full working tree as it exists right now
-  (committed state + all uncommitted work), including:
+- **Complete project files** — the full committed working tree as of `939d967`
+  (HEAD), including:
   - `app.py`, `main.py`, `broker.py`, `charts.py`, `data_fetcher.py`, `requirements.txt`
-  - `static/` (aismart.js, smart_ntrader.js, autoexperiment.v13.js, final_strategy.js,
-    hft_runner.js, strategy_container.js, papertrade.js, ...)
+  - `static/` (aismart.js, smart_ntrader.js, autoexperiment*.js, oitrend.js,
+    indicators.js, papertrade.js, paperrun.js, strategies.js, fast_live.js, ...)
   - `templates/index.html`
   - `CHANGELOG.md`, `HANDOFF.md`, `SESSION.md`
-- **CHANGES_COMPLETE.patch** — the complete unified diff of every uncommitted
-  change (nothing missed), generated with `git diff` against the last commit.
-- **CHANGES_SUMMARY.txt** — `git diff --stat` plus `--name-status` of the same.
+- **CHANGES_COMPLETE.patch** — the complete unified diff of every change between
+  the previous backup point `7140715` and HEAD `939d967` (nothing missed),
+  generated with `git diff 7140715 HEAD`, excluding the regenerated doc files
+  themselves.
+- **CHANGES_SUMMARY.txt** — `git diff --stat` plus `--name-status` of the same,
+  with a plain-language change description.
 
 ## Modified files (in CHANGES_COMPLETE.patch)
 
 ```
- static/aismart.js    |  95 +++++++++++++++++++++++++++++++++++++++-------------
- templates/index.html |   3 +-
- 2 files changed, 74 insertions(+), 24 deletions(-)
+ static/aismart.js            | 1261 +++++++++++++++++++++---
+ app.py                       |  156 ++-
+ data_fetcher.py              |   59 +-
+ static/autoexperiment.js     |   29 +-
+ static/autoexperiment.v13.js |  336 ++++++-
+ static/autoexperiment.v14.js | 2183 ++++++++++++++++++++++++++++++++++++++++++
+ static/fast_live.js          |  210 ++++
+ static/hft_pool.js           |  103 +-
+ static/indicators.js         |  176 +++-
+ static/oitrend.js            | 1239 ++++++++++++++++++++++++
+ static/paperrun.js           |  234 +++--
+ static/papertrade.js         |   70 +-
+ static/smart_ntrader.js      |  910 +++++++++++++-----
+ static/strategies.js         |  255 +++--
+ templates/index.html         |  444 +++++++--
+ .ai-ready/MEMORY.md          |  589 ++++++++++++
+ 16 files changed, 7475 insertions(+), 779 deletions(-)
 ```
 
-This backup includes the NIFTY trend-following / Top-Movers auto CE-PE leg
-picker fix plus the Live Data Pool enhancements:
+This backup includes (highlights of `7140715..939d967`, 23 commits):
 
-- **Auto CE-PE leg picker fix** (`contractsFor`): when NIFTY trend-following is
-  enabled the option side is pinned to the LIVE NIFTY direction for every picked
-  symbol (bearish -> PE puts, bullish -> CE calls); in Top Movers mode it is
-  pinned to the stock's own daily move (gainer -> CE, loser -> PE). The NIFTY
-  trend direction was previously never used, the running strategies' shared
-  category overrode the mover direction, and the auto-side block was skipped
-  when the "+green premium" filter was off.
-- **Data Pool — all selected strikes as separate premium readouts**: 'both'
-  run-in instruments now expand every resolved contract into its own premium
-  row (labelled `<Symbol> <strike> <CE/PE>`), instead of only the first strike.
-- **Data Pool — manual Refresh button**: `AISmartTrading.poolRefresh()` forces a
-  re-resolve of the selected universe (ignoring the 15s idle throttle) so newly
-  added premium charts / symbols / strikes and changed indicator/data values
-  appear immediately.
-- **Data Pool — live volume fallback**: the Vol column uses the forming candle's
-  volume, falling back to the live quote volume when the premium candle carries
-  none (option candles often have volume 0), so strikes with real volume never
-  show an empty column.
+- **Direct chart-based trade execution (AST indicator-filter + strategy normal
+  mode)** — an option premium chart entry trades that same leg/strike; a spot
+  chart entry resolves a single ATM option of the signal side (bullish -> CE,
+  bearish -> PE) instead of a plain underlying long. Every symbol's chain
+  collapses to one nearest-ATM CE + one PE (`firstPerSide`), so no multi-strike
+  fan-out entries (e.g. 2160 PE + 2180 PE together).
+- **NSE market-hours entry gate** — `marketSessionOpen()` (Mon-Fri IST
+  09:15-15:30) blocks every new paper entry while the exchange is closed, so
+  frozen post-close candles can no longer place losing "after-market" trades
+  that corrupt the paper PnL. Enforced in `allowedTradesFor()` (normal poll +
+  HFT scanner), `hftScan()`, and the normal entry loop. Open positions are still
+  managed to their SL/TP/trail.
+- **AI trail SL intent fix** — a typed Trail SL % on the Overall SL floor now
+  auto-enables trailing (one-time migration) so green trades lock profit; UI
+  Trail SL % default is blank (no phantom 1%).
+- **OI Trend direction filter + OI Trend & Levels overlay** — new `static/oitrend.js`
+  (OI walls, Max Pain, ATM-IV range, PCR, EMA-regime trend state, per-strike
+  CE/PE OI fuse, premium-chain OI strip); new OI Trend filter wired into AI
+  Smart Trading and Auto Experiment.
+- **Auto Experiment strict-AND indicator-filter runs** (`autoexperiment.v13.js`
+  v130-v131) plus the new `autoexperiment.v14.js` engine; strict results kept for
+  every backtested symbol.
+- **SmartNTrader BB%b alert -> auto trade overhaul** (v52-v58) — draft vs armed
+  config, Set Alert & Execute Trade lock, draggable overlay bars, dashed
+  previews, fixed popovers, negative level support, NIFTY-side-gated CE/PE fire.
+- **Rate-limit/persistence + live UI fixes** — per-surface quote cooldowns,
+  1000ms poll, reload-survival chain/pick snapshots, immediate closed-trade
+  repaint, non-blinking running-strategy rows, FastLive WS candle store.

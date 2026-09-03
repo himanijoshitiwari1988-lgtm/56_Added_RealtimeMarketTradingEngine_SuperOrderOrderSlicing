@@ -1,43 +1,103 @@
-CHANGES_SUMMARY for backup (NIFTY trend-following / Top-Movers auto CE-PE leg picker fix + Data Pool enhancements)
-Generated: 2026-08-31 UTC
-Diff of uncommitted work against commit 9049ba4
+CHANGES_SUMMARY for backup (Direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate + all work since 31-Aug backup)
+Generated: 2026-09-03 UTC
+Diff of committed work between 7140715 and HEAD (939d967)
 
- static/aismart.js    |  95 +++++++++++++++++++++++++++++++++++++++-------------
- templates/index.html |   3 +-
- 2 files changed, 74 insertions(+), 24 deletions(-)
+ static/aismart.js            | 1261 +++++++++++++++++++++---
+ app.py                       |  156 ++-
+ data_fetcher.py              |   59 +-
+ static/autoexperiment.js     |   29 +-
+ static/autoexperiment.v13.js |  336 ++++++-
+ static/autoexperiment.v14.js | 2183 ++++++++++++++++++++++++++++++++++++++++++
+ static/fast_live.js          |  210 ++++
+ static/hft_pool.js           |  103 +-
+ static/indicators.js         |  176 +++-
+ static/oitrend.js            | 1239 ++++++++++++++++++++++++
+ static/paperrun.js           |  234 +++--
+ static/papertrade.js         |   70 +-
+ static/smart_ntrader.js      |  910 +++++++++++++-----
+ static/strategies.js         |  255 +++--
+ templates/index.html         |  444 +++++++--
+ .ai-ready/MEMORY.md          |  589 ++++++++++++
+ 16 files changed, 7475 insertions(+), 779 deletions(-)
 
 --- name-status ---
+M	.ai-ready/MEMORY.md
+M	app.py
+M	data_fetcher.py
 M	static/aismart.js
+M	static/autoexperiment.js
+M	static/autoexperiment.v13.js
+A	static/autoexperiment.v14.js
+A	static/fast_live.js
+M	static/hft_pool.js
+M	static/indicators.js
+A	static/oitrend.js
+M	static/paperrun.js
+M	static/papertrade.js
+M	static/smart_ntrader.js
+M	static/strategies.js
 M	templates/index.html
 
 --- change description ---
-1) NIFTY trend-following / Top Movers auto CE-PE leg picker FIX (static/aismart.js
-   contractsFor): the engine now pins the option side to the LIVE NIFTY
-   direction when NIFTY trend-following is enabled (bearish -> PE puts only,
-   bullish -> CE calls only) for every symbol it picked, and pins it to the
-   stock's own daily move in Top Movers mode (gainer -> CE, loser -> PE).
-   Previously the NIFTY trend direction was never used (moverDirectionFor only
-   works in movers mode and trendDirectionFor read each stock's own candles),
-   strategyDirectionFor() overrode the mover direction, and the auto-side block
-   was skipped entirely when the "+green premium" filter was off. Fix reorders
-   the sources (nifty side -> mover direction -> filter direction -> strategy
-   category -> underlying trend) and extends the guard to run in NIFTY trend
-   mode.
+1) Direct chart-based execution (AST) - indicator-filter mode AND strategy
+   normal mode now trade directly on the evaluated chart. An option premium
+   chart (CE/PE) open for the strategy trades that SAME leg/strike; a spot /
+   underlying chart entry resolves a single ATM option of the signal side
+   (bullish -> CE, bearish -> PE) instead of a plain underlying long. Each
+   symbol's option chain collapses to ONE nearest-ATM contract per side (CE, PE)
+   via firstPerSide(), so no more multi-strike fan-out entries (e.g. 2160 PE +
+   2180 PE both opening). New signalSideFor() derives the leg direction from the
+   strategy category or the ticked Bullish/Bearish indicator-filter direction
+   (_filterBuilt synthetic strategy).
 
-2) Data Pool: every selected strike gets its own premium readout (poolScan):
-   'both' run-in instruments now expand ALL resolved contracts into separate
-   premium rows instead of only contracts[0]; each row is labelled
-   "<Symbol> <strike> <CE/PE>" and the Type column reads 'option'. The spot row
-   only appears when the run-in actually includes the spot chart.
+2) NSE market-hours entry gate (AST): marketSessionOpen() blocks ANY new paper
+   entry while the exchange is closed (Mon-Fri IST 09:15-15:30). After 15:30 the
+   candlestick feed freezes but stale candles + quotes kept satisfying entry
+   conditions, so the engine kept BUY-ing dead legs after market hours and those
+   phantom fills corrupted the paper PnL. Gate enforced in allowedTradesFor()
+   (shared by normal poll + HFT scanner), hftScan() early-return, and a clear
+   'Blocked: NSE market closed' progress message per strategy. Open positions
+   are untouched (still managed to SL/TP/trail).
 
-3) Data Pool: manual Refresh button (AISmartTrading.poolRefresh()): forces the
-   pool to re-resolve the selected universe right now (ignoring the 15s idle
-   throttle) so newly added premium charts / symbols / strikes and changed
-   indicator or data values show up immediately. New _poolForceResolve flag +
-   HTML button next to the Data Pool toggle.
+3) AI trail SL intent fix (AST): a typed Trail SL % on top of the Overall SL
+   floor is now treated as real intent (one-time load migration) so profitable
+   trades ratchet and lock profit instead of giving the whole run back to zero.
+   The Overall SL %/Trail SL % UI defaults were also corrected (blank box instead
+   of phantom 1%).
 
-4) Data Pool: volume fallback to the live quote (poolVolume): the Vol column
-   prefers the forming candle's volume, and when it is 0 (option premium
-   candles often carry no volume) falls back to the live quote's volume for the
-   same instrument/strike so the pool never shows an empty volume for a strike
-   that actually has volume.
+4) Indicator-filter strict runs (autoexperiment): 'All together (strict AND)'
+   now runs pure indicator-filter strategies (one per enabled side) instead of
+   ignoring the checkbox; strict results are tagged strictFilter:true and are
+   kept for every backtested symbol (the drop-unprofitable pass no longer hides
+   the strict outcome). autoexperiment.v13.js v130-v131; new autoexperiment.v14.js
+   engine added.
+
+5) OI Trend direction filter + OI Trend & Levels overlay: new static/oitrend.js
+   (v1-v3) paints OI support/resistance from CE/PE OI walls, Max Pain, ATM-IV
+   expected range, PCR and an EMA-regime trend-state line; per-strike CE vs PE OI
+   fuses into trend/consolidation detection (reversal warnings when a trend
+   presses a fresh/heavy wall, 'OI squeeze' consolidation, OI Bias arrows);
+   premium option charts get an OI-ordered strip (CE left / PE right / spot
+   centre). New OI Trend direction indicator filter added to AI Smart Trading
+   and Auto Experiment (590e66d). indicators.js v50-v52.
+
+6) SmartNTrader BB%b alert -> auto trade overhaul (v52-v58): draft-vs-armed
+   config with 'Set Alert & Execute Trade' lock button, smooth-draggable overlay
+   level bars with live value chip, dashed draft-preview lines, fixed overlay
+   popovers (Set button never clipped), negative BB%b alert levels (-3..3), and
+   NIFTY-trend-side gated CE/PE firing. Cross-and-hold (meet-style) conditions
+   added to AST + AE indicator-filter key sets with checkbox UI.
+
+7) Rate-limit + persistence (data_fetcher.py/app.py/static): per-surface quote
+   cooldown (empty-bodied/429 responses no longer arm the global 30s gate),
+   early return during quote cooldown, AST poll cadence 1000ms to cut Dhan load,
+   reload-survival snapshots of resolved chains + picked strikes, and no strike
+   dropping during Dhan rate-limit cooldown in strict runs.
+
+8) Live UI/quote-loop fixes: AST closed-trades table repaints immediately on the
+   ~250ms quote loop; PaperRun running-strategy strike rows stop blinking out on
+   async re-resolve; AST open-chart draws ENTRY/SL/TP/TRAIL/live-PnL lines on the
+   strike chart; FastLive ultrafast in-browser WS live candles added; NIFTY
+   trend-following picks the CURRENT EMA9/21 momentum direction on a reversal and
+   no longer force-exits qualifying positions that dip below the daily change%
+   threshold (they stop getting new entries only).

@@ -1,7 +1,54 @@
 # AlgoDhan Trading System — Change Log & Continuation Guide
 
-Backup target: `himanijoshitiwari1988-lgtm/39algodhan`
-Source history: `38algodhan` (previous backups: `34algodhan`, `35algodhan`, `36algodhan`, `37algodhan`, `38algodhan`)
+Backup target: `himanijoshitiwari1988-lgtm/38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`
+Source history: `36_fixed_SmartNTrader_AddedOiTrend` (earlier backups: `33algodhan`..`39algodhan`, `36_fixed_SmartNTrader_AddedOiTrend`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`)
+
+## Latest backup (2026-09-03) — direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate
+
+Full diff: `7140715..939d967` (23 commits, 16 files, +7475/-779). Complete code
+state is pushed to `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode` `main`.
+
+- **AST engine now trades directly on the evaluated chart.** An option premium
+  chart (CE/PE) entry trades that SAME chart's leg/strike; a spot/underlying
+  chart entry BUYs the single ATM option of the signal side (bullish -> CE,
+  bearish -> PE) instead of a plain underlying long. Indicator-filter mode and
+  strategy normal mode both route through it. Every symbol's chain collapses to
+  one nearest-ATM contract per side (`firstPerSide`), so multi-strike fan-out
+  entries (e.g. 2160 PE + 2180 PE together) can no longer happen.
+- **NSE market-hours entry gate.** After 15:30 IST (and before 09:15, Sat/Sun)
+  the candle feed stops, but frozen candles kept satisfying entry conditions and
+  the engine placed losing post-close trades that corrupted the paper PnL. New
+  `marketSessionOpen()` blocks every new entry while the exchange is closed -
+  enforced in `allowedTradesFor()` (shared by the normal poll AND the HFT
+  scanner), `hftScan()`, and the normal tickBody entry loop ('Blocked: NSE
+  market closed ... - no new entries'). Open positions keep being managed to
+  SL/TP/trail.
+- **AI trail SL intent fix.** A typed Trail SL % above the Overall SL floor now
+  auto-enables the trailing checkbox (one-time load migration), so profitable
+  trades ratchet instead of handing the whole run back to zero; the Overall/TAIL
+  SL % input default is blank (no phantom 1%).
+- **OI Trend direction filter + OI Trend & Levels overlay.** New `static/oitrend.js`
+  (CE/PE OI walls -> support/resistance, Max Pain, ATM-IV range, PCR, EMA-regime
+  trend state; per-strike CE-vs-PE OI fuses into trend/consolidation with
+  reversal-warning labels, OI-squeeze consolidation and OI-bias arrows; premium
+  option charts get an OI-ordered CE-left/PE-right/spot-centre strip). OI Trend
+  direction indicator filter wired into AI Smart Trading and Auto Experiment.
+  indicators.js v50-v52.
+- **Auto Experiment strict-AND runs.** 'All together (strict AND)' now really
+  runs pure indicator-filter strategies (one per enabled Bullish/Bearish side),
+  keeps every backtested symbol's strict result, and no longer drops strikes
+  during Dhan rate-limit cooldowns (v130-v131). New `autoexperiment.v14.js`
+  engine added.
+- **SmartNTrader BB%b alert -> auto trade overhaul** (v52-v58): draft-vs-armed
+  config with 'Set Alert & Execute Trade' lock, smooth-draggable overlay level
+  bars with live value chip, dashed draft previews, fixed overlay popovers (Set
+  button never clipped), negative BB%b alert levels (-3..3), NIFTY-side-gated
+  CE/PE firing; 'meet-conditions' style filter keys added to AST/AE.
+- **Rate-limit/persistence/live-UI**: per-surface quote cooldown (empty/429 no
+  longer arms the global 30s gate), 1000ms AST poll, reload-survival chain/pick
+  snapshots, AST closed-trades table repaints on the quote loop, non-blinking
+  PaperRun strike rows, FastLive WS live candles, AST open-chart ENTRY/SL/TP
+  price lines, NIFTY trend picker uses the CURRENT EMA9/21 layer on reversal.
 
 ## How to Run (development / preview)
 
