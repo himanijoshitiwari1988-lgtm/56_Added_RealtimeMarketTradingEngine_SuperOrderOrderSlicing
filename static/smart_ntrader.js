@@ -53,6 +53,36 @@
     return (window.TabEngines && window.TabEngines.papertrade) ? (window.TabEngines.papertrade.ntrader || null) : null;
   }
 
+  /* Mirror a Smart NTrader diagnostic line to the server log so alert/entry
+     failures (silent paths included) can be root-caused without a console. */
+  function diagNtr(txt) {
+    try {
+      fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ntrDiag', msg: String(txt) }] }) }).catch(function () {});
+    } catch (e) {}
+  }
+  /* Top-level toast (shares the indicator toast stack) - exitPosition etc. run
+     outside the NiftyChart module so they cannot use that module's toast(). */
+  function topToast(msg) {
+    try {
+      var box = document.getElementById('indToastBox');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'indToastBox';
+        box.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99999;display:flex;flex-direction:column;gap:6px;max-width:340px';
+        document.body.appendChild(box);
+      }
+      var t = document.createElement('div');
+      t.style.cssText = 'background:#1a1a35;border:1px solid #ff4d6a;border-left:3px solid #ff4d6a;color:#d0d0d0;padding:8px 12px;border-radius:4px;font-size:11px;box-shadow:0 4px 16px rgba(0,0,0,.5);opacity:0;transform:translateX(12px);transition:all .18s ease';
+      t.textContent = msg;
+      box.appendChild(t);
+      requestAnimationFrame(function () { t.style.opacity = '1'; t.style.transform = 'none'; });
+      setTimeout(function () {
+        t.style.opacity = '0'; t.style.transform = 'translateX(12px)';
+        setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 200);
+      }, 3500);
+    } catch (e) {}
+  }
+
   var NIFTY = { name: 'NIFTY 50', id: 13, exch: 'IDX_I', inst: 'INDEX' };
   var POLL_MS = 800;
   var TREND_REFRESH_MS = 60 * 1000;
@@ -124,6 +154,9 @@
   function loadSettings() {
     try {
       var j = JSON.parse(localStorage.getItem(LS_KEY) || '{}');
+      /* Auto-resume: if the engine was RUNNING when the page was closed, keep
+         it running after reload so trades continue without pressing Start. */
+      if (typeof j.running === 'boolean') state.running = j.running;
       if (j.bullCount != null) state.bullCount = Math.max(0, Math.min(50, Math.round(Number(j.bullCount) || 0)));
       if (j.bearCount != null) state.bearCount = Math.max(0, Math.min(50, Math.round(Number(j.bearCount) || 0)));
       else if (j.count != null) {
@@ -189,6 +222,7 @@
   function saveSettings() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
+        running: state.running,
         bullCount: state.bullCount, bearCount: state.bearCount,
         slMode: state.slMode, guardBuf: state.guardBuf,
         trailSl: state.trailSl, overallSl: state.overallSl,
@@ -742,11 +776,13 @@
       if (opt) {
         stock.opt = opt;
         stock.optAt = Date.now();
+        diagNtr('[opt-resolve] OK ' + stock.sym.name + ' ' + side + ' opt=' + ((opt && opt.name) || '--') + ' prem=' + (opt && opt.premium));
         enterWithOption(stock, side);
       } else {
         stock.status = AISmartTrading.chainRateLimited(stock.sym) ? 'chain rate-limited - retrying' : 'no option contract';
+        diagNtr('[opt-resolve] NULL ' + stock.sym.name + ' ' + side + ' -> ' + stock.status);
       }
-    }).catch(function () { delete state.optInFlight[optKey]; });
+    }).catch(function (err) { delete state.optInFlight[optKey]; diagNtr('[opt-resolve] EXC ' + stock.sym.name + ' ' + side + ': ' + ((err && err.message) || err)); });
   }
 
   function entryPlan(stock, fillRef) {
@@ -808,6 +844,7 @@
       if (lp > 0) fillTxt = lp.toFixed(2);
     }
     stock.status = ok ? ('BUY ' + sym.name + (label ? ' ' + label : '') + ' @ ' + fillTxt + (state.limitOrder.enabled ? ' LIMIT' : '')) : ('entry: ' + (ntPaper().lastAutoSkip || 'rejected'));
+    diagNtr('[entry-und] ' + sym.name + ' ok=' + ok + ' skip=' + (ntPaper() && ntPaper().lastAutoSkip || '') + ' status=' + stock.status);
     if (ok) {
       stock._trd = {
         side: 'LONG',
@@ -821,10 +858,10 @@
 
   function enterWithOption(stock, side) {
     var opt = stock.opt;
-    if (!opt || !opt.premium) return;
+    if (!opt || !opt.premium) { diagNtr('[entry-opt] no-opt-premium ' + stock.sym.name + ' ' + side); return; }
     var q = quoteForSym(opt);
     var fillRef = (q && q.ltp) ? Number(q.ltp) : Number(opt.premium);
-    if (!(fillRef > 0)) return;
+    if (!(fillRef > 0)) { diagNtr('[entry-opt] no-fill ' + stock.sym.name + ' prem=' + (opt && opt.premium)); return; }
     var plan = entryPlan(stock, fillRef);
     if (!plan) { stock.status = 'entry: margin too low for 1 lot'; return; }
     var lotsN = plan.lotsN;
@@ -852,6 +889,7 @@
       if (lp > 0) fillTxt = lp.toFixed(2);
     }
     stock.status = ok ? ('BUY ' + (opt.strike != null ? opt.strike + ' ' + opt.optionType : opt.name) + ' @ ' + fillTxt + (state.limitOrder.enabled ? ' LIMIT' : '')) : ('entry: ' + (ntPaper().lastAutoSkip || 'rejected'));
+    diagNtr('[entry-opt] ' + stock.sym.name + ' ' + side + ' ok=' + ok + ' skip=' + (ntPaper() && ntPaper().lastAutoSkip || '') + ' status=' + stock.status);
     if (ok) {
       stock._trd = {
         side: side,
@@ -868,13 +906,17 @@
   function exitPosition(stock, reason) {
     var posKey = 'ntd:' + stock.sym.name;
     if (ntPaper() && typeof ntPaper().autoExit === 'function') {
+      var before = !!posAt(posKey);
       ntPaper().autoExit(posKey);
+      var after = !!posAt(posKey);
       stock.status = reason || 'exit on reversal';
       if (stock._trd && !stock._trd.exitT) {
         stock._trd.exitT = (Date.now() / 1000);
         stock._trd.exitPx = optSeriesLast(stock);
         stock._trd.reason = reason || 'exit';
       }
+      diagNtr('[exit] ' + stock.sym.name + ' reason=' + (reason || 'reversal') + ' before=' + before + ' after=' + after);
+      if (before && !after) topToast('NTrader EXIT ' + stock.sym.name + ': ' + (reason || 'NIFTY reversal'));
     }
   }
 
@@ -948,7 +990,7 @@
     warmupStep();
   }
   function warmupStep() {
-    if (!state.running || !state.visible) { warmupQueue = null; return; }
+    if (!state.running) { warmupQueue = null; return; }
     var batch = 3;
     var taken = warmupQueue.splice(0, batch);
     for (var i = 0; i < taken.length; i++) {
@@ -1513,14 +1555,16 @@
       if (!state.running) { toast('BB%b alert: engine RUNNING nahi hai'); return; }
       var op = niftyOperative();
       var execSide = (cfg.side === 'PE') ? 'PE' : 'CE';
+      diagNtr('[alert] FIRE k=' + k + ' side=' + execSide + ' trendEnabled=' + (state.trend && state.trend.enabled) + ' niftyOp=' + op + ' val=' + cfg.value + ' running=' + state.running);
       if (state.trend.enabled) {
-        if (op !== 'BULL' && op !== 'BEAR') { toast('BB%b alert @ ' + fmtV(cfg.value) + ': NIFTY trend clear nahi (BULL/BEAR)'); return; }
+        if (op !== 'BULL' && op !== 'BEAR') { toast('BB%b alert @ ' + fmtV(cfg.value) + ': NIFTY trend clear nahi (BULL/BEAR)'); diagNtr('[alert] SKIP no-clear-op ' + op); return; }
         var want = (op === 'BULL') ? 'CE' : 'PE';
-        if (execSide !== want) return;
+        if (execSide !== want) { toast('BB%b alert skipped: NIFTY ' + op + ' me ' + execSide + ' side fire nahi (expected ' + want + ')'); diagNtr('[alert] SKIP trend-mismatch exec=' + execSide + ' want=' + want); return; }
       }
       var targets = alertTradeTargets(execSide === 'CE' ? 'bull' : 'bear');
       if (!targets.length) {
         toast('BB%b alert @ ' + fmtV(cfg.value) + ': koi enabled ' + (execSide === 'CE' ? 'bullish (CE)' : 'bearish (PE)') + ' stock nahi');
+        diagNtr('[alert] SKIP no-active-targets exec=' + execSide + ' activeN=' + state.stocks.filter(function (s) { return s.active; }).length);
         return;
       }
       /* Max-trades cap (Max trades / Auto trades): Auto = unlimited; Max =
@@ -1529,15 +1573,29 @@
       if (!isFinite(remaining)) remaining = targets.length;
       if (remaining <= 0) {
         toast('BB%b alert skipped: max trades reached');
+        diagNtr('[alert] SKIP max-trades open=' + openTradeCount() + ' cap=' + JSON.stringify(state.tradeCap));
         return;
       }
       if (remaining < targets.length) targets = targets.slice(0, remaining);
       for (var i = 0; i < targets.length; i++) {
         var st = targets[i];
         st.status = 'BB%b alert ' + fmtV(cfg.value) + ' -> ' + (execSide === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish');
-        try { resolveAndEnter(st, execSide, null); } catch (e) {}
+        try { resolveAndEnter(st, execSide, null); } catch (e) { diagNtr('[alert] enter-exc ' + st.sym.name + ': ' + e); }
       }
-      toast('BB%b trade alert @ ' + fmtV(cfg.value) + ' -> ' + (execSide === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish') + ' (' + targets.length + ' target' + (targets.length > 1 ? 's' : '') + ')');
+      diagNtr('[alert] ENTER-ATTEMPTED targets=' + targets.length + ' names=' + targets.map(function (t) { return t.sym.name; }).join(','));
+      /* Option resolution + entry run async, so verify a moment later and toast
+         the REAL outcome instead of claiming the trade opened up front. */
+      setTimeout(function () {
+        var opened = [], still = [];
+        for (var j = 0; j < targets.length; j++) {
+          var t = targets[j];
+          if (posAt('ntd:' + t.sym.name)) opened.push(t.sym.name);
+          else still.push(t.sym.name + '=' + (t.status || '--'));
+        }
+        diagNtr('[alert] RESULT opened=' + opened.join(',') + ' | failed=' + still.join(' | '));
+        if (opened.length) toast('BB%b trade OPENED (' + opened.length + '/' + targets.length + '): ' + opened.join(', '));
+        else toast('BB%b alert fired par trade OPEN nahi hui - stock status check karo (' + still.join(' | ') + ')');
+      }, 2500);
     }
     /* "+" button popover: the BULLISH ... OR ... BEARISH alert auto-trade form.
        The popover is rendered as a FIXED overlay anchored under the "+" button
@@ -2179,7 +2237,10 @@
   /* ---------------- main tick (<5ms decision core) ---------------- */
 
   function tick() {
-    if (!state.running || !state.visible) return;
+    /* Continuous engine: once RUNNING it keeps classifying + trading even when
+       the Smart NTrader app tab is not the visible one (a tab switch or browser
+       background must not pause the live algo). */
+    if (!state.running) return;
     var t0 = performance.now();
 
     var niftyKey = symKey(NIFTY);
@@ -2294,7 +2355,7 @@
   }
 
   function refreshTrendData() {
-    if (!state.running || !state.visible) return;
+    if (!state.running) return;
     var t0 = performance.now();
     try { if (typeof window.pollQuotes === 'function') window.pollQuotes(); } catch (e) {}
     var i, k;
@@ -2767,7 +2828,44 @@
     return !!(ntPaper() && ntPaper().getCharges && ntPaper().getCharges());
   }
 
+  /* Detect a paper position that vanishes from the engine WITHOUT an exit
+     being recorded (no matching closed-trade entry). Auto square-off / SL / TP /
+     trail / our own exitPosition all produce a closed record; a position that
+     disappears with none points at a raw state wipe / reset. Mirrors a diag
+     line per event so the exact trigger can be root-caused. */
+  var _seenPaperKeys = {};
+
+  function watchPaperVanish() {
+    var st = (ntPaper() && ntPaper().getState) ? ntPaper().getState() : null;
+    if (!st || !st.autoPositions) return;
+    var cur = {}, k;
+    for (k in st.autoPositions) {
+      var p = st.autoPositions[k];
+      if (p && k.indexOf('ntd:') === 0) cur[k] = { sym: p.symbol, qty: p.qty, entry: p.entryPrice };
+    }
+    for (var prev in _seenPaperKeys) {
+      if (cur[prev]) continue;
+      var was = _seenPaperKeys[prev];
+      var info = 'NO-CLOSED-RECORD';
+      if (st.closed && st.closed.length) {
+        for (var ci = 0; ci < st.closed.length; ci++) {
+          var c = st.closed[ci];
+          if ((c.autoKey && String(c.autoKey) === prev) || (!c.autoKey && was && c.symbol === was.sym)) {
+            info = 'closed reason=' + (c.reason || '--') + ' at=' + (c.at ? new Date(c.at).toTimeString().slice(0, 8) : '--');
+            break;
+          }
+        }
+      }
+      diagNtr('[vanish] ' + prev + ' sym=' + (was && was.sym) + ' qty=' + (was && was.qty) + ' -> ' + info);
+      if (info === 'NO-CLOSED-RECORD') {
+        topToast('NTrader position ' + (was ? was.sym : prev) + ' VANISHED bina close record ke - check karo');
+      }
+    }
+    _seenPaperKeys = cur;
+  }
+
   function renderPositions() {
+    watchPaperVanish();
     var st = (ntPaper() && ntPaper().getState) ? ntPaper().getState() : null;
     var tb = el('ntrRunBody');
     if (tb) {
@@ -2867,6 +2965,7 @@
     if (state.running) return;
     state.running = true;
     warmupUniverse();
+    saveSettings();
     setText('ntrToggle', 'Stop');
     var toggleBtn = el('ntrToggle');
     if (toggleBtn) { toggleBtn.textContent = 'Stop'; toggleBtn.classList.add('warn'); }
@@ -2875,6 +2974,7 @@
     if (!state.running) return;
     state.running = false;
     resetGuardAll();
+    saveSettings();
     var toggleBtn = el('ntrToggle');
     if (toggleBtn) { toggleBtn.textContent = 'Start'; toggleBtn.classList.remove('warn'); }
   }

@@ -2104,22 +2104,28 @@
     stopRealtime();
     realtimeTimer = setInterval(async () => {
       try {
+        /* Capture which chart symbol this poll is fetching for and drop the
+           result if the user switched symbols/timeframe while it was in flight
+           - otherwise a slow poll response could overwrite a freshly opened
+           premium/sidebar chart with the previous symbol's candles. */
+        const k = (typeof window.currentChartSymKey === 'function') ? window.currentChartSymKey() : '';
         const d = await fetchFn();
-        if (d && d.status === 'success' && d.data && d.data.length) {
-          const last = candles[candles.length - 1];
-          const nlast = d.data[d.data.length - 1];
-          const changed = !last || !nlast ||
-            last.time !== nlast.time ||
-            last.open !== nlast.open ||
-            last.high !== nlast.high ||
-            last.low !== nlast.low ||
-            last.close !== nlast.close ||
-            last.volume !== nlast.volume;
-          if (changed) {
-            candles = d.data;
-            setData();
-            followLatest();
-          }
+        if (!d || d.status !== 'success' || !d.data || !d.data.length) return;
+        if (k !== ((typeof window.currentChartSymKey === 'function') ? window.currentChartSymKey() : '')) return;
+        const last = candles[candles.length - 1];
+        const nlast = d.data[d.data.length - 1];
+        const changed = !last || !nlast ||
+          last.time !== nlast.time ||
+          last.open !== nlast.open ||
+          last.high !== nlast.high ||
+          last.low !== nlast.low ||
+          last.close !== nlast.close ||
+          last.volume !== nlast.volume;
+        if (changed) {
+          candles = d.data;
+          Ind.curSymKey = k;
+          setData();
+          followLatest();
         }
       } catch (e) {}
     }, realtimeInterval);
@@ -2130,6 +2136,16 @@
 
   /* ---------------- public API ---------------- */
   const Ind = window.IndChart = {
+    /* Identity of the symbol + timeframe whose candles are CURRENTLY in the
+       chart. Written on every setCandles(); the tick-patch callers compare this
+       to the selected chart symbol so a live quote can never stretch the candle
+       data of a DIFFERENT instrument (opening a premium option chart or a new
+       sidebar symbol reused the same chart instance - while the new history is
+       still loading the old symbol's candles stayed on screen and got patched
+       with the new symbol's price, drawing one giant "long forming bar" that
+       only a page reload cleared). */
+    curSymKey: '',
+    setSymbolKey(key) { this.curSymKey = key || ''; },
     init(container, fetchCandles) {
       cw = container; fetchFn = fetchCandles;
       /* Track active dragging/panning so the realtime poll never yanks the view */
@@ -2147,6 +2163,7 @@
     },
     setCandles(data, fit) {
       candles = data || [];
+      try { this.curSymKey = (typeof window.currentChartSymKey === 'function') ? window.currentChartSymKey() : ''; } catch (e) { this.curSymKey = ''; }
       /* The chart instance is reused across symbol changes (premium option
          chart opens via the OC chain icons, symbol switches, refresh) - only
          the candle DATA is swapped, the series persist. Purge every overlay the

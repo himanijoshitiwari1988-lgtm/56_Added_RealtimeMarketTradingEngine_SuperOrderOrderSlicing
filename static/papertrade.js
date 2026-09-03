@@ -1178,6 +1178,12 @@ window.createPaperTrade = function (suffix) {
       const sl = (opts.slPct != null) ? Number(opts.slPct) : slPct();
       const ftp = (opts.fixedTpPct != null) ? Number(opts.fixedTpPct) : 0;
       const slTrail = (opts.slTrailPct != null) ? Math.max(0, Number(opts.slTrailPct) || 0) : 0;
+      /* Auto-trailing-SL positions (AST default) trail by the SAME distance as
+         the fixed stop (slPct % of entry), so the badge / row shows the trail
+         % that governs the ratchet even though the paper engine consumes the
+         flag via the cushion branch (autoTrail) and never the give-back branch. */
+      const autoTrail = opts.autoTrail === true;
+      const slTrailShow = autoTrail ? Math.max(sl, slTrail) : slTrail;
       const used = marginUsed();
       if (used + qtyN * fillPx > m) {
         this.lastAutoSkip = 'Insufficient margin (needs ' + Math.round(qtyN * fillPx).toLocaleString('en-IN') + ')';
@@ -1196,7 +1202,8 @@ window.createPaperTrade = function (suffix) {
         p.entryPrice = (p.entryPrice * (p.qty - qtyN) + fillPx * qtyN) / p.qty;
         p.orderType = orderType; p.limitPrice = limitPrice;
         p.targetPct = tp; p.slPct = sl;
-        p.slTrailPct = slTrail; p.slTrailed = false;
+        p.slTrailPct = slTrailShow; p.slTrailed = false;
+        p.autoTrail = autoTrail;
         if (p.peakPrice == null) p.peakPrice = p.entryPrice;
         p.targetPrice = p.entryPrice;
         p.stopLoss = side === 'BUY' ? p.entryPrice * (1 - effectiveSlPct(sl, slTrail) / 100) : p.entryPrice * (1 + effectiveSlPct(sl, slTrail) / 100);
@@ -1214,9 +1221,9 @@ window.createPaperTrade = function (suffix) {
         peakPrice: fillPx,
         orderType: orderType, limitPrice: limitPrice,
         targetPct: tp, slPct: sl,
-        slTrailPct: slTrail, slTrailed: false,
+        slTrailPct: slTrailShow, slTrailed: false,
         targetPrice: fillPx,
-        stopLoss: side === 'BUY' ? fillPx * (1 - effectiveSlPct(sl, slTrail) / 100) : fillPx * (1 + effectiveSlPct(sl, slTrail) / 100),
+        stopLoss: side === 'BUY' ? fillPx * (1 - effectiveSlPct(sl, slTrailShow) / 100) : fillPx * (1 + effectiveSlPct(sl, slTrailShow) / 100),
         tpPct: ftp > 0 ? ftp : 0,
         tpPrice: ftp > 0 ? (side === 'BUY' ? fillPx * (1 + ftp / 100) : fillPx * (1 - ftp / 100)) : 0,
         symbol: name,
@@ -1225,6 +1232,7 @@ window.createPaperTrade = function (suffix) {
         ocId: symbol.ocId != null ? symbol.ocId : null,
         ocExch: symbol.ocExch != null ? symbol.ocExch : null,
         auto: true, autoKey: opts.key || null,
+        autoTrail: autoTrail,
         status: 'OPEN', openedAt: Date.now()
       };
       log('Auto ' + side + ' ' + name + ' ' + qtyN + ' @ ' + fmt(fillPx, 2) + (orderType === 'LIMIT' ? ' [LIMIT]' : '') + ' (trail ' + fmt(state.autoPositions[key].targetPrice, 2) + ' / SL ' + fmt(state.autoPositions[key].stopLoss, 2) + ')', side === 'BUY' ? 'buy' : 'sell');
@@ -1321,15 +1329,22 @@ window.createPaperTrade = function (suffix) {
            ratcheted level replaces the fixed entry-based SL, so the running SL
            line and the actual cut level always agree. */
         if (p.peakPrice == null || cur > p.peakPrice) p.peakPrice = cur;
-        /* Trail SL only activates once the trade is IN PROFIT (price has traded
-           above the entry). While the trade sits at/below entry the SL stays at
-           the fixed entry-based level; the ratchet must NOT pull the stop up
-           against an open loss. As soon as the price goes above entry the trail
-           is live on the very first tick. The stop then RIDES THE RUNNING
-           PROFIT (peak - entry), not the raw peak: it keeps (100 - trail%)% of
-           the peak profit and only gives back trail% of it, so the SL hugs the
-           profit and slides up behind it tick by tick. */
-        if ((p.slPct > 0 || p.slTrailPct > 0) && p.slTrailPct > 0 && p.stopLoss != null && p.peakPrice > p.entryPrice) {
+        /* AST auto-trailing stop-loss: paper engines that open with opts.autoTrail
+           (AI Smart Trading default) get a stop that locks in profit as the price
+           climbs. It activates at the FIRST profit (the trade no longer needs to
+           climb a full stop-distance cushion first): the instant the price is in
+           profit the stop jumps to AT LEAST the entry price (breakeven), so a
+           run-up can never come back and get cut by the entry-based stop (a loss).
+           Once the running profit exceeds one stop-distance cushion, the stop
+           rides the peak (peak - cushion) and keeps every paisa of profit beyond
+           the cushion. The stop only ever moves up (never down for a BUY). */
+        if (p.autoTrail && p.slPct > 0 && p.stopLoss != null && p.entryPrice > 0) {
+          const cushion = p.entryPrice * p.slPct / 100;
+          if (cushion > 0 && p.peakPrice > p.entryPrice) {
+            const ratchet = Math.max(p.peakPrice - cushion, p.entryPrice);
+            if (ratchet > p.stopLoss) { p.stopLoss = ratchet; p.slTrailed = true; }
+          }
+        } else if ((p.slPct > 0 || p.slTrailPct > 0) && p.slTrailPct > 0 && p.stopLoss != null && p.peakPrice > p.entryPrice) {
           const peakProfit = p.peakPrice - p.entryPrice;
           const ratchet = p.entryPrice + peakProfit * (1 - p.slTrailPct / 100);
           if (ratchet > p.stopLoss) { p.stopLoss = ratchet; p.slTrailed = true; }
@@ -1358,10 +1373,21 @@ window.createPaperTrade = function (suffix) {
           p.targetPrice = p.peakPrice;
         }
       } else {
-        /* Trailing stop-loss for SELL: the SL ratchets DOWN as the price
-           falls to a new low (peak + slTrailPct%), locking in profit. */
+        /* Trailing stop-loss for SELL (mirror of the BUY rule): the SL ratchets
+           DOWN as the price falls to a new low. AST auto-trailing activates at
+           the FIRST profit: the instant the price is in profit the stop jumps to
+           AT MOST the entry price (breakeven) so a rally can never come back and
+           get cut by the entry-based stop (a loss). Once the running profit
+           exceeds one cushion the stop rides the trough (peak + cushion). The
+           stop only ever moves down (never up for a SELL). */
         if (p.peakPrice == null || cur < p.peakPrice) p.peakPrice = cur;
-        if ((p.slPct > 0 || p.slTrailPct > 0) && p.slTrailPct > 0 && p.stopLoss != null && p.peakPrice < p.entryPrice) {
+        if (p.autoTrail && p.slPct > 0 && p.stopLoss != null && p.entryPrice > 0) {
+          const cushion = p.entryPrice * p.slPct / 100;
+          if (cushion > 0 && p.peakPrice < p.entryPrice) {
+            const ratchet = Math.min(p.peakPrice + cushion, p.entryPrice);
+            if (ratchet < p.stopLoss) { p.stopLoss = ratchet; p.slTrailed = true; }
+          }
+        } else if ((p.slPct > 0 || p.slTrailPct > 0) && p.slTrailPct > 0 && p.stopLoss != null && p.peakPrice < p.entryPrice) {
           const peakProfit = p.entryPrice - p.peakPrice;
           const ratchet = p.entryPrice - peakProfit * (1 - p.slTrailPct / 100);
           if (ratchet < p.stopLoss) { p.stopLoss = ratchet; p.slTrailed = true; }

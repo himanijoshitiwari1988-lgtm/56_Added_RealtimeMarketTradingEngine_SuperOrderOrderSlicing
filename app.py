@@ -2540,6 +2540,24 @@ def api_client_time():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/client_error", methods=["POST"])
+def api_client_error():
+    """TEMP DIAGNOSTIC (remove after chart-open bug fixed): persist browser
+    window.onerror / unhandledrejection reports so the 'chart does not open
+    until reload' bug can be diagnosed from the server log."""
+    data = request.get_json(silent=True) or {}
+    errs = data.get("errs") or []
+    out_path = "/tmp/opencode/client_errors.log"
+    try:
+        with open(out_path, "a") as fh:
+            fh.write("=== %s url=%s ua=%s ===\n" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data.get("url", ""), (data.get("ua") or "")[:80]))
+            for e in errs:
+                fh.write("%s | msg=%s | %s | line=%s col=%s | stack=%s\n" % (e.get("type"), e.get("msg"), e.get("src"), e.get("line"), e.get("col"), e.get("stack")))
+    except Exception:
+        pass
+    return jsonify({"status": "ok"})
+
+
 _WARMUP_SYMBOLS = [
     (13, "IDX_I", "NIFTY 50"),
     (25, "IDX_I", "BANK NIFTY"),

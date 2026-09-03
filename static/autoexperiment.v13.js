@@ -7361,8 +7361,14 @@ window.createAutoExperiment = function (suffix) {
       if (!_pollTimer) { startPoll(); loadResearch(); startResearchPoll(); }
     },
     onTabHide() {
-      stopPoll();
-      stopResearchPoll();
+      /* The BASE Auto Experiment engine stays live (research poll + auto
+         re-runs continue) when the user leaves the AE app tab, so an active
+         experiment / auto-send flow is never paused by a tab switch. Only
+         duplicated AE tab instances (a suffix exists) idle-stop while hidden. */
+      if (suffix) {
+        stopPoll();
+        stopResearchPoll();
+      }
     },
     getState() { return state; },
     /* Reusable paper-trading primitives exposed so the AI Smart Trader Engine

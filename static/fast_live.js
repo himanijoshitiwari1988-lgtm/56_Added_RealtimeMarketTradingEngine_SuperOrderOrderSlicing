@@ -135,7 +135,11 @@
 
   /* Patch the forming bar with the current live LTP so a read always returns
      the freshest price even between WS batches. Sub-microsecond; only re-slides
-     the array when the close actually moved. */
+     the array when the close actually moved. When the live quote's server
+     timestamp has already rolled into the next candle bucket (a sparsely-
+     trading option strike can go many seconds without a tick, so the tick path
+     alone would not roll the forming bar on time), the bar is rolled here too,
+     exactly like the exchange charts do at the minute boundary. */
   function patchLive(sym, e) {
     var qk = quoteKeyFor(sym);
     var qm = (typeof clientQuotes !== 'undefined' && clientQuotes) ? clientQuotes : {};
@@ -143,7 +147,21 @@
     if (!q || q.ltp == null || !e.candles.length) return;
     var ltp = Number(q.ltp);
     if (!isFinite(ltp) || ltp <= 0) return;
+    var barSec = e.barMins * 60;
     var last = e.candles[e.candles.length - 1];
+    var at = Number(q.at) || 0;
+    if (at >= 1) {
+      var curStart = Math.floor(at / barSec) * barSec;
+      if (curStart > last.time) {
+        var c2 = e.candles.slice();
+        c2.push({ time: curStart, open: ltp, high: ltp, low: ltp, close: ltp, volume: (last.volume || 0) });
+        if (c2.length > MAX_CANDLES) c2 = c2.slice(c2.length - MAX_CANDLES);
+        e.candles = c2;
+        e.lastBar = curStart;
+        e.at = Date.now();
+        return;
+      }
+    }
     if (last.close === ltp) return;
     var c = e.candles.slice();
     c[c.length - 1] = {

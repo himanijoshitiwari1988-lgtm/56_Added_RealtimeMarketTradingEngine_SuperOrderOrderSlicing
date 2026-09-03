@@ -455,6 +455,28 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
 </style>
 </head>
 <body>
+<script>
+/* TEMP DIAGNOSTIC (remove after chart-open bug fixed): report client JS errors
+   to the server so the "chart does not open until reload" bug can be diagnosed
+   from the server log without a console session. */
+(function(){
+  var q = [];
+  var send = function(){ if(!q.length) return; var b = q.splice(0); try{ fetch('/api/client_error',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({errs:b,url:location.href,ua:navigator.userAgent})}); }catch(e){} };
+  var push = function(m){ q.push(m); if(q.length>=5) send(); else setTimeout(send, 3000); };
+  var seen = {};
+  window.addEventListener('error', function(ev){
+    var key = (ev.message||'')+'@'+(ev.filename||'')+':'+(ev.lineno||0);
+    if(seen[key]) return; seen[key]=1;
+    push({type:'error', msg:ev.message||String(ev.error), src:(ev.filename||'').split('/').pop(), line:ev.lineno, col:ev.colno, stack:(ev.error&&ev.error.stack?ev.error.stack.split('\n').slice(0,8).join(' | '):'')});
+  });
+  window.addEventListener('unhandledrejection', function(ev){
+    var r = ev.reason||{}; var m = (r && (r.message||r.toString&&r.toString()))||'unhandledrejection';
+    var key='rej:'+m; if(seen[key]) return; seen[key]=1;
+    push({type:'rejection', msg:String(m), stack:(r&&r.stack?r.stack.split('\n').slice(0,8).join(' | '):'')});
+  });
+  setInterval(send, 5000);
+})();
+</script>
 <div id="app">
   <div id="header">
     <span class="logo">Dhan Algo Trading System</span>
@@ -1013,7 +1035,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px" title="Overall stop-loss: a fixed % BELOW the entry that protects the capital from a big loss. Works together with Trail SL - the trailing stop only ratchets UP behind the peak and never moves below this overall floor."><input type="checkbox" id="astManualSL" onchange="AISmartTrading.onUniversalInput()"> Overall SL</label>
             <label style="font-size:9px;color:#ccc;margin-right:8px">% <input type="number" id="astManualSLPct" value="1" min="0.01" step="0.01" title="Overall stop-loss percent below the entry, entered directly (e.g. 0.05 = 0.05%, 1 = 1%)" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ff6b6b;margin-right:8px;display:flex;align-items:center;gap:3px" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick - never below the Overall SL floor"><input type="checkbox" id="astManualTrailSL" onchange="AISmartTrading.onUniversalInput()" style="accent-color:#ff6b6b"> Trail SL</label>
-            <label style="font-size:9px;color:#ff6b6b;margin-right:8px">% <input type="number" id="astManualTrailSLPct" value="1" min="0.01" step="0.01" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick, locking in profit" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
+            <label style="font-size:9px;color:#ff6b6b;margin-right:8px">% <input type="number" id="astManualTrailSLPct" value="" placeholder="1" min="0.01" step="0.01" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick, locking in profit" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astManualTrailTP" onchange="AISmartTrading.onUniversalInput()"> Manual Trail TP</label>
             <label style="font-size:9px;color:#ccc;margin-right:8px">% <input type="number" id="astManualTrailTPPct" value="20" min="1" step="1" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astManualTP" onchange="AISmartTrading.onUniversalInput()"> Manual TP %</label>
@@ -2386,7 +2408,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=52"></script>
+<script src="/static/indicators.js?v=53"></script>
 <script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
@@ -3599,6 +3621,17 @@ function syncTradeChartLines(){
   IndChart.setTradeLines(lines);
 }
 
+/* Identity key of the chart that SHOULD currently be displayed: the selected
+   symbol + exchange + instrument type + timeframe. IndChart stores the key of
+   the candle data actually loaded (curSymKey) and the live tick patch is only
+   allowed when both match, so a quote of the newly selected instrument can never
+   corrupt the still-displayed candle data of the previously open chart. */
+function currentChartSymKey(){
+  if(typeof selectedSymbol === 'undefined' || !selectedSymbol) return "";
+  const tf = typeof chartTf !== 'undefined' ? chartTf : "";
+  return String(selectedSymbol.id) + "|" + (selectedSymbol.exch || "") + "|" + (selectedSymbol.inst || "") + "|" + tf;
+}
+
 /* Throttled full-UI redraw: dropdown, watchlist, chart P&L, the in-progress
    candle and live option-chain rows. Runs at most every ~250ms no matter how
    fast the feed pushes, so the main thread never saturates. */
@@ -3681,6 +3714,14 @@ function renderQuotes(){
     // price moves appear the instant the feed delivers them, not on the 2s poll.
     // Only live (feed/REST) quotes patch the candle; daily-fill backfill entries
     // carry a stale daily-close ltp and would draw a long fake wick.
+    // The chart instance is reused across symbols, so a quote may only patch the
+    // forming candle while the loaded candle data belongs to the SAME symbol +
+    // timeframe. After a premium option chart / sidebar symbol open the new
+    // history is still fetching (can take seconds or fail on rate-limit); patching
+    // the OLD symbol's last candle with the NEW symbol's price (e.g. index ~25000
+    // vs option premium ~250) used to draw one giant "long forming bar" that only
+    // a page reload cleared. Skip the patch until the new symbol's data arrives.
+    if(window.IndChart && IndChart.curSymKey && currentChartSymKey() !== IndChart.curSymKey) { sq = null; }
     if(sq && sq.ltp && sq.live && (serverNowSec() - (sq.at||0)) < 30 && window.IndChart && IndChart.patchLastBar){
       IndChart.patchLastBar(sq.ltp, chartTf, serverNowSec());
     }
@@ -5857,19 +5898,19 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/aitrail.js?v=2"></script>
 <script src="/static/aitrades.js?v=2"></script>
 <script src="/static/strategies.js?v=69"></script>
-<script src="/static/papertrade.js?v=30"></script>
+<script src="/static/papertrade.js?v=31"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=133"></script>
+<script src="/static/autoexperiment.v13.js?v=134"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=122"></script>
+<script src="/static/aismart.js?v=129"></script>
 <script src="/static/paperrun.js?v=22"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
 <script src="/static/hft_pool.js?v=6"></script>
-<script src="/static/fast_live.js?v=1"></script>
+<script src="/static/fast_live.js?v=2"></script>
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=3"></script>
-<script src="/static/smart_ntrader.js?v=58"></script>
+<script src="/static/smart_ntrader.js?v=62"></script>
 <script src="/static/backup.js?v=2"></script>
 <script>
 /* Engine instantiation for the base tabs and every duplicated tab. The cloned

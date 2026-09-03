@@ -1011,7 +1011,23 @@ window.createAISmartTrading = function (suffix) {
       return patternHitAt(cond.candlePatterns, i, candles);
     }
     if (cond.logic === 'volUp' || cond.logic === 'volDown') {
-      return trendAt(volumeSeries(candles), i, cond.logic === 'volUp' ? 'up' : 'down');
+      const vs = volumeSeries(candles);
+      /* No-volume-data rule: the volume-trend gate needs real traded volume to
+         say anything. When the recent window has NO volume at all (volume field
+         missing / all-zero - illiquid option contracts, or live tick-built
+         candles whose quote stream carries no cumulative volume) the gate cannot
+         be evaluated. Treat that as PASS (unable to verify) instead of FAIL, so
+         a missing volume feed can never silently block EVERY strict-AND
+         indicator-filter trade the way "FAIL ? volUp [--]" did. Only a window
+         that actually contains volume is tested for its rising/falling trend. */
+      let hasVol = false;
+      const j0 = Math.max(0, i - 6);
+      for (let j = j0; j <= i; j++) {
+        const v = vs[j];
+        if (v != null && !isNaN(v) && v > 0) { hasVol = true; break; }
+      }
+      if (!hasVol) return true;
+      return trendAt(vs, i, cond.logic === 'volUp' ? 'up' : 'down');
     }
     /* Auto Support Resistance gap gates: bullish fires when the gap between the
        candle close and the SUPPORT line keeps widening (price rising away from
@@ -1157,6 +1173,12 @@ window.createAISmartTrading = function (suffix) {
          Mutually exclusive with the normal "Run Paper Trading" mode (checked
          via the checkbox next to the run buttons). */
       filterMode: false,
+      /* Explicit run intent captured when the user presses Run Paper Trading /
+         Indicator-filters Run (or toggles Auto ON): { active, mode ('normal' |
+         'filter'), at }. Persisted so a page reload can re-arm the exact run
+         mode automatically - emulating the button press - without depending on
+         the enabled flag alone. */
+      runIntent: { active: false, mode: 'normal', at: 0 },
       niftyEntry: { enabled: false, dir: 'bullish', zone: 'above_upper' },
       niftyExit: { enabled: false, dir: 'bearish', zone: 'below_lower' },
       selected: {},
@@ -1242,6 +1264,16 @@ window.createAISmartTrading = function (suffix) {
       s.tradeIn = { index: 'premium', fno: 'premium', comm: 'spot', default: false };
     }
     if (s && typeof s.premiumOnly !== 'boolean') s.premiumOnly = false;
+    if (s) {
+      const ri = s.runIntent;
+      if (!ri || typeof ri !== 'object') {
+        s.runIntent = { active: false, mode: 'normal', at: 0 };
+      } else {
+        if (typeof ri.active !== 'boolean') ri.active = false;
+        if (ri.mode !== 'filter' && ri.mode !== 'normal') ri.mode = 'normal';
+        if (!Number.isFinite(Number(ri.at))) ri.at = 0;
+      }
+    }
     /* The Research-streams row was removed - streams are now scoped per-side
        through the Bullish/Bearish indicator filter sections, so the global
        group gate always stays all-on regardless of stale saved state. */
@@ -1254,6 +1286,19 @@ window.createAISmartTrading = function (suffix) {
       if (!Number.isFinite(Number(s.universal.manualSLPct)) || Number(s.universal.manualSLPct) <= 0) s.universal.manualSLPct = 1;
       /* Manual SL % is stored and restored verbatim (raw percent): 0.05 means
          0.05%, so a saved value is never rescaled on reload. */
+      if (typeof s.universal.manualTrailSL !== 'boolean') s.universal.manualTrailSL = false;
+      if (!Number.isFinite(Number(s.universal.manualTrailSLPct))) s.universal.manualTrailSLPct = 0;
+      else s.universal.manualTrailSLPct = Number(s.universal.manualTrailSLPct);
+      /* One-time migration: a Trail SL % typed into the box while the Overall SL
+         (the base floor) is engaged is treated as intent to trail. Before this,
+         the % was silently ignored unless the Trail SL checkbox was separately
+         ticked, so a green trade ran with no trailing stop at all and its whole
+         profit (e.g. +600) gave back to zero. Only a non-default value (>1, the
+         old fallback marker) triggers it so untouched configs stay untouched. */
+      if (!s.universal.manualTrailSL && s.universal.manualSL === true &&
+          Number(s.universal.manualTrailSLPct) > 1 && Number(s.universal.manualTrailSLPct) <= 100) {
+        s.universal.manualTrailSL = true;
+      }
       if (typeof s.universal.manualTrailTP !== 'boolean') s.universal.manualTrailTP = false;
       if (!Number.isFinite(Number(s.universal.manualTrailTPPct)) || Number(s.universal.manualTrailTPPct) <= 0) s.universal.manualTrailTPPct = 20;
       if (typeof s.universal.manualTP !== 'boolean') s.universal.manualTP = false;
@@ -1382,7 +1427,11 @@ window.createAISmartTrading = function (suffix) {
         runStrategyIn: state.runStrategyIn,
         niftyTrend: state.niftyTrend,
         showPickedStrikes: state.showPickedStrikes,
-        settingsSnapshots: state.settingsSnapshots
+        settingsSnapshots: state.settingsSnapshots,
+        filterMode: state.filterMode,
+        dataPool: state.dataPool,
+        fastData: state.fastData,
+        runIntent: state.runIntent
       }));
     } catch (e) {}
   }
@@ -2900,19 +2949,35 @@ window.createAISmartTrading = function (suffix) {
        "bearish/bullish stocks picked" set). This is the auto side-selection the
        engine is supposed to apply on top of the mover / stock trend logic. */
     const ntSide = ((state.niftyTrend && state.niftyTrend.enabled) && (_lastNiftyDir === 'bullish' || _lastNiftyDir === 'bearish')) ? _lastNiftyDir : null;
-    /* Direction-aware leg pick for the "Only +green premium strikes" filter:
-       the NIFTY trend side (when NIFTY trend-following is on) and the mover's
-       own daily move decide the side first - bullish -> only CE calls (bought),
-       bearish -> only PE puts (bought). When neither market signal is available
-       the selected bullish/bearish indicator filter decides, then the running
-       strategies' shared category, then the underlying's own trend, and only if
-       every source is unclassifiable does the user's option-type selector
-       decide the legs (the green filter still applies). An explicit optionType
-       in the per-call override (Smart NTrader pins its decided CE/PE side) wins
-       - the green filter still applies to that side's strikes, but the caller's
-       side is never overridden. */
+     /* Direction-aware leg pick for the "Only +green premium strikes" filter.
+        The leg bought must agree with the direction of the conditions that are
+        evaluated on that leg's premium chart. Precedence (see the inline
+        comment in the branch below): indicator-filters run side (filter mode),
+        NIFTY trend-following side, the running strategies' shared category, the
+        selected bullish/bearish indicator filter, the symbol's own daily move,
+        then the underlying's own trend. Only if every source is unclassifiable
+        does the user's option-type selector decide the legs (the green filter
+        still applies). An explicit optionType in the per-call override (Smart
+        NTrader pins its decided CE/PE side) wins - the green filter still
+        applies to that side's strikes, but the caller's side is never
+        overridden. */
     if ((onlyPos || moverDirectionFor(symbol) != null || ntSide) && (!so || !so.optionType)) {
-      const dir = ntSide || moverDirectionFor(symbol) || activeFilterDirection() || strategyDirectionFor() || await trendDirectionFor(symbol);
+      /* Leg side precedence. The conditions a strategy/filter evaluates are
+         measured on the premium chart of the leg being bought, so the leg must
+         agree with the DIRECTION those conditions express - otherwise a bullish
+         condition judged against a PE premium (whose price mirrors the
+         underlying) fires and the engine buys the OPPOSITE leg, entering trades
+         whose chart never shows the ticked condition:
+           - Indicator-filters run mode: the Bullish/Bearish filters the user
+             ticked DEFINE this run's direction -> that side wins first.
+           - NIFTY trend-following side (when that universe engine is on).
+           - The unanimous category of the running strategies (a single
+             bullish/bearish strategy set only ever trades its own side).
+           - Only when NO directional choice is expressed does the symbol's own
+             daily move auto-pick the leg (top-gainers->CE / top-losers->PE). */
+      const dir = state.filterMode
+        ? (activeFilterDirection() || ntSide || moverDirectionFor(symbol) || await trendDirectionFor(symbol))
+        : (ntSide || strategyDirectionFor() || activeFilterDirection() || moverDirectionFor(symbol) || await trendDirectionFor(symbol));
       if (dir === 'bullish') ot = 'CE';
       else if (dir === 'bearish') ot = 'PE';
     }
@@ -3059,6 +3124,35 @@ window.createAISmartTrading = function (suffix) {
     } catch (e) { return null; }
   }
 
+  /* One trade per symbol, directly on the chart that is actually traded:
+     collapse a resolved chain down to the SINGLE nearest-ATM contract per
+     option side (CE, PE). Before this, a symbol fanned out into every strike of
+     the chain (e.g. 2160 PE + 2180 PE together) and the engine opened several
+     legs per symbol. Chain rows arrive nearest-to-farthest, so the first CE and
+     first PE row are the ATM strikes. */
+  function firstPerSide(contracts) {
+    const seen = {};
+    const out = [];
+    (contracts || []).forEach(c => {
+      const t = c.optionType === 'PE' ? 'PE' : 'CE';
+      if (seen[t]) return;
+      seen[t] = true;
+      out.push(c);
+    });
+    return out;
+  }
+
+  /* The direction the current entry signal expresses, used to pick the leg
+     (CE for bullish / PE for bearish) when executing straight on the chart.
+     Normal strategies carry their own category. The Indicator-filters run is a
+     synthetic strategy whose cat is always 'bullish', so its real direction
+     comes from the ticked Bullish/Bearish filters. */
+  function signalSideFor(s) {
+    if (s && s._filterBuilt) return activeFilterDirection();
+    const cat = s && s.cat;
+    return cat === 'bearish' ? 'bearish' : (cat === 'bullish' ? 'bullish' : null);
+  }
+
   async function resolveInstruments(side) {
     const syms = experimentSymbols();
     if (!syms.length) return [];
@@ -3077,7 +3171,7 @@ window.createAISmartTrading = function (suffix) {
         let contracts = null;
         try { contracts = await contractsFor(sym, spot, { optionType: side }); } catch (e) { contracts = null; }
         if (contracts && contracts.length) {
-          for (const c of contracts) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
+          for (const c of firstPerSide(contracts)) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
         } else {
           log('No ' + side + ' option contracts for ' + displayName(sym) + ' - skipping (Run Strategy In ' + side + ')', 'warn');
         }
@@ -3105,7 +3199,7 @@ window.createAISmartTrading = function (suffix) {
         continue;
       }
       if (contracts && contracts.length) {
-        for (const c of contracts) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
+        for (const c of firstPerSide(contracts)) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
       } else {
         // No option contracts resolved (chain unavailable/rate-limited, or the
         // "Only +green premium strikes" filter removed every strike in a red
@@ -3179,14 +3273,40 @@ window.createAISmartTrading = function (suffix) {
   async function executionSymbolsFor(instr, s) {
     const sym = instr.symbol;
     if (!sym) return [];
+    const tiMode = tradeInMode(sym);
+    /* Execute directly on the chart's own side: when the run chart is the
+       underlying/spot (or fell back to it because the premium chart had no
+       candles) and the entry signal carries a direction, the paper BUY goes to
+       that direction's single ATM option (bullish -> CE, bearish -> PE) instead
+       of buying the plain underlying - so a bearish chart signal buys the PE,
+       never a long on the spot. Falls back to the spot symbol when no direction
+       is known, the symbol has no options (commodity / SIM), or the chain is
+       rate-limited. */
+    const sideOpt = async () => {
+      const side = signalSideFor(s);
+      if (side !== 'bullish' && side !== 'bearish') return [];
+      if (isCommodity(sym) || isSimSymbol(sym)) return [];
+      try {
+        const spot = spotLtpFor(sym);
+        const contracts = await contractsFor(sym, spot, { optionType: side === 'bearish' ? 'PE' : 'CE' });
+        const c = (contracts && contracts.length) ? contracts[0] : null;
+        if (!c) return [];
+        return [{ id: Number(c.sid), exch: optionExch(sym), inst: optionInst(sym), name: (sym.name || sym.id) + ' ' + c.strike + ' ' + c.optionType, strike: c.strike, optionType: c.optionType, premium: c.premium }];
+      } catch (e) { return []; }
+    };
     // Premium-chart candle fallback active: the run-in premium chart has no
     // candles so the strategy evaluates on the underlying chart - execute on
     // the underlying as well so the trade is never skipped. Premium-only mode
     // overrides this: execution stays on the premium chart only, never the
     // underlying.
-    if (!state.premiumOnly && _candleFbk[instrumentId(instr)]) return [sym];
-    const tiMode = tradeInMode(sym);
-    if (tiMode === 'spot') return [sym];
+    if (!state.premiumOnly && _candleFbk[instrumentId(instr)]) {
+      const o = await sideOpt();
+      return o.length ? o : [sym];
+    }
+    if (tiMode === 'spot') {
+      const o = await sideOpt();
+      return o.length ? o : [sym];
+    }
     if (instr.kind === 'option') {
       const optSym = { id: Number(instr.sid), exch: optionExch(sym), inst: optionInst(sym), name: (instr.symbol.name || instr.symbol.id) + ' ' + instr.strike + ' ' + instr.optionType, strike: instr.strike, optionType: instr.optionType, premium: instr.premium };
       return tiMode === 'both' ? [sym, optSym] : [optSym];
@@ -3243,16 +3363,73 @@ window.createAISmartTrading = function (suffix) {
   }
 
   async function candlesForInstrument(instr, tf) {
+    /* REAL-TIME candle source for live strategy/filter evaluation - the REST
+       /api/candles pool is NOT consulted here. During Dhan's chart-surface
+       rate-limit cooldown (~30s) the pool serves a frozen snapshot of the last
+       closed bar, so an option contract whose filter conditions had ALREADY met
+       live on screen stayed on "Waiting entry signal" until the pool bar finally
+       rolled - the 3-4 bar late entry. The series below is the SAME realtime
+       data the user's chart shows:
+         - the OPEN chart's own candles when this instrument IS the chart symbol
+           at the chart timeframe (exact rendered lines, live quote-patched), or
+         - the in-browser FastLive tick-built series (seeded once, then fed tick-
+           by-tick by the /ws quote stream - the identical source that updates
+           the charts), which is immune to the REST cooldown. */
+    const chartMatch = (typeof window.currentChartSymKey === 'function' &&
+      typeof selectedSymbol !== 'undefined' && selectedSymbol &&
+      typeof chartTf !== 'undefined' && chartTf === tf &&
+      window.IndChart && IndChart.getCandles &&
+      String(selectedSymbol.id) === String(instr.kind === 'option' ? instr.sid : (instr.symbol && instr.symbol.id)));
+    if (chartMatch) {
+      /* Only use the chart's candles once its data actually belongs to this
+         symbol+timeframe (IndChart.curSymKey) - while a newly selected chart is
+         still loading, getCandles() would return the previous symbol's series. */
+      const cc = (IndChart.curSymKey && window.currentChartSymKey() === IndChart.curSymKey) ? IndChart.getCandles() : null;
+      if (cc && cc.length >= 10) return cc;
+    }
     /* Ultrafast live feed: read the symbol's in-browser live candle series
        built from WebSocket ticks (initial history seeded once). No REST
-       /api/candles call in the live path. */
-    if (state.fastData && window.FastLive) {
-      try {
-        if (instr.kind === 'option') {
-          const optSym = { id: Number(instr.sid), exch: optionExch(instr.symbol), inst: optionInst(instr.symbol), name: (instr.symbol.name || '') };
+       /api/candles call in the live path. The market-off SIM simulator streams
+       its candles through /api/candles (not the /ws broadcast) and only injects
+       a quote into clientQuotes, so FastLive would freeze on its seed bar -
+       SIM instruments keep the REST fetch path instead. */
+    const simEval = isSimSymbol(instr.symbol);
+    if (state.fastData && window.FastLive && !simEval) {
+      if (instr.kind === 'option') {
+        const optSym = { id: Number(instr.sid), exch: optionExch(instr.symbol), inst: optionInst(instr.symbol), name: (instr.symbol.name || '') };
+        try {
           const c = await FastLive.candlesFor(optSym, tf);
-          return (c && c.length >= 10) ? c : null;
+          if (c && c.length >= 10) {
+            // Premium chart is back - resume premium evaluation/execution.
+            delete _candleFbk[instrumentId(instr)];
+            return c;
+          }
+        } catch (e) {}
+        // Premium chart candles are unavailable (new/illiquid strike, feed gap).
+        // Premium-only mode must NEVER downgrade to the underlying/spot chart: a
+        // missing premium chart means the instrument is skipped until its premium
+        // candles return, honouring the "run + trade on the premium chart only"
+        // toggle instead of silently executing on the underlying.
+        if (state.premiumOnly) {
+          delete _candleFbk[instrumentId(instr)];
+          return null;
         }
+        // Fall back to the underlying/spot chart so the strategy still evaluates
+        // its indicators and the trade still executes instead of the instrument
+        // being skipped. Execution targets are switched to the underlying too.
+        if (!_candleFbk[instrumentId(instr)]) log('Option premium candles unavailable for ' + displayName(instr.symbol) + ' - falling back to underlying chart', 'warn');
+        _candleFbk[instrumentId(instr)] = 1;
+      }
+      if (instr.kind === 'both') {
+        // Combined run-in instrument: the primary run chart is the underlying
+        // spot chart; the premium confirmation series is fetched separately in
+        // confirmCandlesFor().
+        try {
+          const c = await FastLive.candlesFor(instr.symbol, tf);
+          return (c && c.length >= 10) ? c : null;
+        } catch (e) { return null; }
+      }
+      try {
         const c = await FastLive.candlesFor(instr.symbol, tf);
         return (c && c.length >= 10) ? c : null;
       } catch (e) { return null; }
@@ -3460,12 +3637,84 @@ window.createAISmartTrading = function (suffix) {
      normal 1500ms poll is unaffected (it reads null => per-condition key). */
   let _hftExecOn = null;
 
+  /* Option leg (CE/PE) the engine should be trading for a symbol RIGHT NOW,
+     using only synchronous signals (no async per-symbol trend call). Mirrors
+     the side chain contractsFor() applies when auto-picking strikes, so the
+     HFT scanner and the picked-strikes reconciler can enforce the same side the
+     normal poll is resolving:
+       indicator-filters run side (filter mode) -> NIFTY trend-following side ->
+       the unanimous running-strategy category -> the single active
+       indicator-filter direction -> the mover's own daily move.
+     `stratDir` lets callers pass the precomputed running-strategy direction so
+     it is not recomputed for every symbol in a loop. Returns null when no
+     directional signal is live (callers then keep both legs, matching the
+     default CE+PE resolution). */
+   function optionSideFor(symbol, stratDir) {
+     if (!symbol) return null;
+     const nt = state.niftyTrend || {};
+     const ntSide = (nt.enabled && (_lastNiftyDir === 'bullish' || _lastNiftyDir === 'bearish')) ? _lastNiftyDir : null;
+     /* Mirror the contractsFor() leg precedence exactly (see there for why): in
+        filter mode the ticked filter side wins; otherwise NIFTY-trend side, then
+        the unanimous running-strategy category, then the ticked filter, and only
+        then the symbol's own daily move. Keeps the HFT scanner / picked-strike
+        reconciler trading the SAME leg the poll resolves. */
+     const dir = state.filterMode
+       ? (activeFilterDirection() || ntSide || moverDirectionFor(symbol) || (stratDir !== undefined ? stratDir : strategyDirectionFor()))
+       : (ntSide || (stratDir !== undefined ? stratDir : strategyDirectionFor()) || activeFilterDirection() || moverDirectionFor(symbol));
+     return dir === 'bullish' ? 'CE' : (dir === 'bearish' ? 'PE' : null);
+   }
+
+  /* Reconcile the picked-strikes map against the CURRENT run every tick: the
+     "Picked Strikes" panel and the HFT scanner must only show / trade what the
+     engine would resolve right now, never stale strikes accumulated since page
+     load. Deletes entries whose symbol is no longer in the live universe (top
+     movers / NIFTY trend-following / manual selection) and, whenever a side is
+     currently known, entries still holding the OPPOSITE option leg (e.g. old CE
+     picks left over from a bullish NIFTY phase after it flipped bearish). The
+     next poll re-resolves only the matching side for surviving symbols. Open
+     positions are never touched - they keep being managed to their SL/TP. */
+  function reconcilePickedStrikes() {
+    const cur = experimentSymbols();
+    const curKeys = new Set();
+    cur.forEach(s => curKeys.add(_pickedKey(s)));
+    const stratDir = strategyDirectionFor();
+    const stale = [];
+    let legs = 0;
+    _pickedStrikes.forEach((rec, k) => {
+      if (!rec || !rec.symbol || !Array.isArray(rec.contracts) || !rec.contracts.length) {
+        stale.push(k);
+        if (rec && rec.contracts && rec.contracts.length) legs += rec.contracts.length;
+        return;
+      }
+      if (!curKeys.has(k)) {
+        stale.push(k);
+        legs += rec.contracts.length;
+        return;
+      }
+      const side = optionSideFor(rec.symbol, stratDir);
+      if (side && rec.contracts.some(c => c.optionType && c.optionType !== side)) {
+        stale.push(k);
+        legs += rec.contracts.length;
+      }
+    });
+    if (stale.length) {
+      stale.forEach(k => _pickedStrikes.delete(k));
+      diag('pickedRecon', 20000, 'Picked strikes reconciled: removed ' + stale.length + ' stale pick(s) (' + legs + ' leg(s)) that no longer match the current universe / trend side - old CE/PE picks will not be traded', 'warn');
+      _schedulePickedPersist();
+    }
+  }
+
   /* Instruments for the HFT scanner, built synchronously from the strikes the
      normal poll already resolved (_pickedStrikes). Symbols whose contracts have
-     not been resolved yet are skipped this cycle (the poll warms them). */
+     not been resolved yet are skipped this cycle (the poll warms them). When a
+     directional side is currently live (NIFTY trend / mover / single-direction
+     filter), only THAT side's contracts are used so the fast scanner can never
+     fire on a stale opposite-side pick left in _pickedStrikes from an earlier
+     trend. */
   function hftInstruments() {
     const syms = experimentSymbols();
     if (!syms.length) return [];
+    const stratDir = strategyDirectionFor();
     const out = [];
     for (const sym of syms) {
       if (runInMode(sym) === 'spot') {
@@ -3473,7 +3722,11 @@ window.createAISmartTrading = function (suffix) {
         continue;
       }
       const rec = _pickedStrikes.get(_pickedKey(sym));
-      const contracts = (rec && rec.contracts && rec.contracts.length) ? rec.contracts : null;
+      let contracts = (rec && rec.contracts && rec.contracts.length) ? rec.contracts : null;
+      const side = optionSideFor(sym, stratDir);
+      if (contracts && side) {
+        contracts = contracts.filter(c => c.optionType === side);
+      }
       if (runInMode(sym) === 'both') {
         if (contracts && contracts.length) out.push({ kind: 'both', symbol: sym, contracts });
         continue;
@@ -3667,7 +3920,7 @@ window.createAISmartTrading = function (suffix) {
             if (autoPositions[pkey]) continue;
             const budget = hftOpsBudget();
             if (!budget.ok) break;
-            const ok = pt.autoEntry(side, { key: key, symbol: tSym, lotSize: lotSize, lots: u.lots, margin: u.margin, tpPct: tpPct, slPct: slPct, slTrailPct: slTrailPct, fixedTpPct: fixedTpPct, fnoLimit: false, fallbackLtp: tSym.premium });
+            const ok = pt.autoEntry(side, { key: key, symbol: tSym, lotSize: lotSize, lots: u.lots, margin: u.margin, tpPct: tpPct, slPct: slPct, slTrailPct: slTrailPct, fixedTpPct: fixedTpPct, fnoLimit: false, fallbackLtp: tSym.premium, autoTrail: (aiSlOn && slPct > 0) });
             if (ok) {
               placedLegs++;
               hftMarkOrder();
@@ -3861,9 +4114,16 @@ window.createAISmartTrading = function (suffix) {
         const prim = readTwo(cnd.indId, cnd.indSettings, cnd.valueKey, i, candles);
         const cmp = cmpReadAt(cnd, i, candles);
         const v = (v) => v == null || isNaN(v) ? '--' : Math.round(v * 10000) / 10000;
+        let extra = '';
+        if (cnd.logic === 'volUp' || cnd.logic === 'volDown') {
+          const vsv = volumeSeries(candles);
+          let hv = false;
+          for (let j = Math.max(0, i - 6); j <= i; j++) { const vv = vsv[j]; if (vv != null && !isNaN(vv) && vv > 0) { hv = true; break; } }
+          if (!hv) extra = ' no-vol-data';
+        }
         parts.push((ok ? 'PASS' : 'FAIL') + ' ' + (cnd.indId || '?') + ' ' + (cnd.logic || '?') +
           ' [' + v(prim.last) + (prim.prev != null ? ' /' + v(prim.prev) : '') + ' vs ' +
-          (cnd.cmpType === 'number' ? String(cnd.number) : (cnd.cmpType || '?') + ' ' + v(cmp.last)) + ']');
+          (cnd.cmpType === 'number' ? String(cnd.number) : (cnd.cmpType || '?') + ' ' + v(cmp.last)) + ']' + extra);
       }
     }
     if (s.entryExtra && s.entryExtra.length) {
@@ -3984,6 +4244,29 @@ window.createAISmartTrading = function (suffix) {
     _astProg[id] = { pct: Math.max(0, Math.min(100, Math.round(pct))), status: String(status || ''), updated: Date.now() };
   }
 
+  /* TRUE only when the user explicitly un-ticked the "Ultrafast Live Feed"
+     checkbox during a run. Until the next run start this is respected - the
+     engine will NOT fight the user and re-enable the feed mid-run. */
+  let _userFastDataOff = false;
+  /* Live evaluation must read ONLY realtime candle data (the same /ws-fed
+     series the user's charts show), never the REST /api/candles pool: during
+     Dhan's chart rate-limit cooldown (~30s) the pool serves a frozen snapshot
+     of the last closed bar, which is what delayed entries by 3-4 bars even
+     though the condition had already met live on the premium chart. So the
+     moment any evaluation pass runs, the Ultrafast Live Feed is switched ON
+     automatically (the checkbox reflects it). Un-ticking it mid-run is honoured
+     via _userFastDataOff until the next run start. */
+  function forceFastLiveForRun() {
+    if (state.fastData === true) return;
+    if (_userFastDataOff) return;
+    if (!window.FastLive || !FastLive.setEnabled) return;
+    state.fastData = true;
+    try { if (FastLive.reset) FastLive.reset(); } catch (e) {}
+    try { FastLive.setEnabled(true); } catch (e) {}
+    save();
+    log('Ultrafast live feed auto-ON for this run - strategies evaluate realtime in-browser candles only (REST /api/candles pool no longer drives entries)', 'ok');
+  }
+
   /* One full strategy evaluation pass over the enabled strategies. Called by
      tick() directly, or once per selected engine template when the auto
      strategy sender is ON (each template's saved settings are applied silently
@@ -3992,6 +4275,7 @@ window.createAISmartTrading = function (suffix) {
     const stopGen = _stopGen;
     const t0 = performance.now();
     try {
+      forceFastLiveForRun();
       resetTradeCountsIfNewDay();
       const pt = basePaper();
       const SE = window.StratEngine;
@@ -4088,6 +4372,12 @@ window.createAISmartTrading = function (suffix) {
           });
         }
       }
+
+      /* Picked-strike reconciliation: drop picks whose symbol left the live
+         universe or whose option leg no longer matches the current trend side,
+         so neither the Picked Strikes panel nor the HFT scanner keeps stale
+         CE/PE strikes around after NIFTY flips direction. */
+      reconcilePickedStrikes();
 
       /* Global "Run Strategy In" override (Selected Strategies section): when
          enabled every selected strategy runs on the option premium chart of
@@ -4271,7 +4561,7 @@ window.createAISmartTrading = function (suffix) {
             /* Close All ran while this poll was evaluating: abort before any
                fresh entry can be placed. */
             if (stopGen !== _stopGen) { prog(s.id, 95, 'Stopped by Close All'); return; }
-            const ok = pt.autoEntry(side, { key: key, symbol: tSym, lotSize: lotSize, lots: u.lots, margin: u.margin, tpPct: tpPct, slPct: slPct, slTrailPct: slTrailPct, fixedTpPct: fixedTpPct, fnoLimit: false, fallbackLtp: tSym.premium });
+            const ok = pt.autoEntry(side, { key: key, symbol: tSym, lotSize: lotSize, lots: u.lots, margin: u.margin, tpPct: tpPct, slPct: slPct, slTrailPct: slTrailPct, fixedTpPct: fixedTpPct, fnoLimit: false, fallbackLtp: tSym.premium, autoTrail: (aiSlOn && slPct > 0) });
             if (ok) {
               placed++;
               const np = autoPositions[pkey];
@@ -4386,6 +4676,17 @@ window.createAISmartTrading = function (suffix) {
 
   /* ---------------- log ---------------- */
   function log(msg, cls) {
+    /* TEMP DIAGNOSTIC (remove after AST no-trade bug fixed): mirror AST log
+       lines to the server so skip reasons can be read from the server log. */
+    try {
+      const _txt = String(msg || '').slice(0, 300);
+      const _lk = 'astlog:' + _txt;
+      const _now = Date.now();
+      if (!window.__astMirror) window.__astMirror = {};
+      if (window.__astMirror[_lk] && _now - window.__astMirror[_lk] < 8000) return;
+      window.__astMirror[_lk] = _now;
+      fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'astLog', msg: _txt, cls: cls || '' }] }) }).catch(() => {});
+    } catch (e) {}
     const el = $id('astLog');
     if (!el) return;
     const d = new Date();
@@ -4935,7 +5236,7 @@ window.createAISmartTrading = function (suffix) {
     const mslEl = $id('astManualSL'); if (mslEl) mslEl.checked = u.manualSL === true;
     const mslPctEl = $id('astManualSLPct'); if (mslPctEl) mslPctEl.value = (Number(u.manualSLPct) > 0 ? u.manualSLPct : 1);
     const mtslEl = $id('astManualTrailSL'); if (mtslEl) mtslEl.checked = u.manualTrailSL === true;
-    const mtslPctEl = $id('astManualTrailSLPct'); if (mtslPctEl) mtslPctEl.value = (Number(u.manualTrailSLPct) > 0 ? u.manualTrailSLPct : 1);
+    const mtslPctEl = $id('astManualTrailSLPct'); if (mtslPctEl) mtslPctEl.value = (Number(u.manualTrailSLPct) > 0 ? u.manualTrailSLPct : '');
     const mttEl = $id('astManualTrailTP'); if (mttEl) mttEl.checked = u.manualTrailTP === true;
     const mttPctEl = $id('astManualTrailTPPct'); if (mttPctEl) mttPctEl.value = (Number(u.manualTrailTPPct) > 0 ? u.manualTrailTPPct : 20);
     const mtpEl = $id('astManualTP'); if (mtpEl) mtpEl.checked = u.manualTP === true;
@@ -5641,6 +5942,10 @@ window.createAISmartTrading = function (suffix) {
   function onFastDataInput() {
     const el = $id('astFastData');
     state.fastData = !!(el && el.checked);
+    /* Explicit user un-tick during a run: remember it so forceFastLiveForRun()
+       does not flip the feed straight back on this run (respected until the
+       next Run Paper Trading / Indicator-filters run start). */
+    _userFastDataOff = !state.fastData;
     save();
     if (state.fastData) {
       if (window.FastLive && FastLive.reset) { try { FastLive.reset(); } catch (e) {} }
@@ -5794,9 +6099,18 @@ window.createAISmartTrading = function (suffix) {
      stamped a bogus "exited via stop-loss" closed record. */
   const _POSITION_GRACE_MS = 6000;
   let _posMissSince = {};
+  /* Engine birth timestamp. Right after a page reload / engine (re)boot the
+     base paper-trade engine, quote cache and resolved chains are still warming
+     up, so live buckets for genuinely open AST trades can look "missing" for a
+     few reconcile polls. Using a wider grace window for the first seconds of a
+     fresh session stops Running Trades from being wiped moments after reload. */
+  const _bootTs = Date.now();
+  function _positionGraceMs() {
+    return (Date.now() - _bootTs < 30000) ? 20000 : _POSITION_GRACE_MS;
+  }
 
   function _reconcileGraceExpired(k) {
-    return (_posMissSince[k] != null) && (Date.now() - _posMissSince[k]) >= _POSITION_GRACE_MS;
+    return (_posMissSince[k] != null) && (Date.now() - _posMissSince[k]) >= _positionGraceMs();
   }
 
   function reconcileClosedPositions() {
@@ -6019,6 +6333,12 @@ window.createAISmartTrading = function (suffix) {
   /* ---------------- actions ---------------- */
   function toggleAuto() {
     state.enabled = !state.enabled;
+    if (state.enabled) {
+      state.runIntent = { active: true, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
+      _userFastDataOff = false;
+    } else {
+      state.runIntent = { active: false, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
+    }
     save();
     applyUniversalToUI();
     log('AI Smart Trading engine ' + (state.enabled ? 'enabled' : 'disabled'), state.enabled ? 'ok' : 'warn');
@@ -6099,6 +6419,8 @@ window.createAISmartTrading = function (suffix) {
     applyModeToUI();
     applyRunModeUI();
     state.enabled = true;
+    state.runIntent = { active: true, mode: 'normal', at: Date.now() };
+    _userFastDataOff = false;
     save();
     applyUniversalToUI();
     render();
@@ -6119,6 +6441,8 @@ window.createAISmartTrading = function (suffix) {
     applyModeToUI();
     applyRunModeUI();
     state.enabled = true;
+    state.runIntent = { active: true, mode: 'filter', at: Date.now() };
+    _userFastDataOff = false;
     save();
     applyUniversalToUI();
     render();
@@ -6434,6 +6758,7 @@ window.createAISmartTrading = function (suffix) {
   function stopAllStrategies(keepEnabled) {
     state.aiPick = false;
     if (!keepEnabled) state.enabled = false;
+    state.runIntent = { active: false, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
     _stopGen++;
     applyModeToUI();
     selectNone();
@@ -6453,7 +6778,12 @@ window.createAISmartTrading = function (suffix) {
     if (!_pollTimer) startPoll();
   }
   function onTabHide() {
-    stopPoll();
+    /* The BASE AI Smart engine is an always-on live paper algo: leaving the
+       AST app tab must never pause its evaluation / entry / running-trade
+       bookkeeping, so a tab switch never looks like the algo "reset". Only
+       duplicated paper-tab instances (a suffix exists) idle-stop while hidden
+       so clones do not hammer the Dhan feed. */
+    if (suffix) stopPoll();
   }
 
   /* ---------------- engine settings templates ----------------
@@ -6920,12 +7250,52 @@ window.createAISmartTrading = function (suffix) {
     applyRunModeUI();
     render();
     startPoll();
+    /* Full resume after a page reload. The engine remembers the exact run the
+       user had active and re-arms it automatically - identical to pressing the
+       Run button again - so settings / ticked strategies / indicator filters /
+       picked strikes / running trades all come back without any re-click:
+
+       - runIntent.active=true: the user had pressed Run Paper Trading (normal)
+         or Indicator-filters run (filter). We replay that exact button press
+         after a short warm-up so the saved settings are re-applied from the
+         restored state and the engine re-enters its run loop.
+       - otherwise state.enabled=true (Auto toggle was ON): re-tick the already
+         enabled engine so Running Strategies / Running Trades repopulate. */
+    const ri = state.runIntent && state.runIntent.active;
+    if (ri) {
+      const fm = state.runIntent.mode === 'filter';
+      log('Auto-resuming ' + (fm ? 'Indicator-filters run mode' : 'Run Paper Trading') + ' after page reload (instance ' + (suffix || 'base') + ') - re-applying saved settings & picked strikes, trades continue automatically', 'ok');
+      setTimeout(() => {
+        if (!(state.runIntent && state.runIntent.active)) return;
+        try {
+          if (fm) runFilterPaper(); else runPaper();
+        } catch (e) {
+          log('Auto-resume re-run failed: ' + (e && e.message ? e.message : e), 'warn');
+        }
+      }, 1500);
+    } else if (state.enabled === true) {
+      setTimeout(() => {
+        if (state.enabled === true) {
+          tick();
+          if (typeof api.refreshLiveRunning === 'function') api.refreshLiveRunning();
+        }
+      }, 800);
+      log(state.filterMode === true
+        ? 'Resumed from saved state - Indicator-filters mode active, trades continue automatically'
+        : 'Resumed from saved state - ticked strategies keep running automatically', 'ok');
+    }
     const nEl = $id('astAiPickN');
     if (nEl) {
       nEl.addEventListener('input', () => api.onModeInput());
       nEl.addEventListener('change', () => api.onModeInput());
     }
     log('AI Smart Trading engine ready - tick saved strategies to run them live with these settings (no backtest)', '');
+    /* Boot-state diagnostic (mirrored to the server log): shows exactly what
+       this instance restored on page load so reload-resume issues are visible. */
+    const _selN = Object.keys(state.selected || {}).filter(function (k) { return state.selected[k]; }).length;
+    log('BOOT ' + (suffix || 'base') + ' enabled=' + state.enabled + ' filterMode=' + state.filterMode +
+      ' runIntent=' + ((state.runIntent && state.runIntent.active) ? state.runIntent.mode : 'off') +
+      ' selected=' + _selN + ' positions=' + Object.keys(state.positions || {}).length, '');
   }
 
   if (document.readyState === 'loading') {
