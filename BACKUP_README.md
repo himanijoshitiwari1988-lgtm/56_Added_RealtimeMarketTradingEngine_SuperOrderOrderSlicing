@@ -6,7 +6,7 @@ Complete snapshot backup of the project (working directory
 
 ## Contents
 
-- **Complete project files** — the full committed working tree as of `939d967`
+- **Complete project files** — the full committed working tree as of `612d16a`
   (HEAD), including:
   - `app.py`, `main.py`, `broker.py`, `charts.py`, `data_fetcher.py`, `requirements.txt`
   - `static/` (aismart.js, smart_ntrader.js, autoexperiment*.js, oitrend.js,
@@ -14,7 +14,7 @@ Complete snapshot backup of the project (working directory
   - `templates/index.html`
   - `CHANGELOG.md`, `HANDOFF.md`, `SESSION.md`
 - **CHANGES_COMPLETE.patch** — the complete unified diff of every change between
-  the previous backup point `7140715` and HEAD `939d967` (nothing missed),
+  the previous backup point `7140715` and HEAD `612d16a` (nothing missed),
   generated with `git diff 7140715 HEAD`, excluding the regenerated doc files
   themselves.
 - **CHANGES_SUMMARY.txt** — `git diff --stat` plus `--name-status` of the same,
@@ -39,10 +39,10 @@ Complete snapshot backup of the project (working directory
  static/strategies.js         |  255 +++--
  templates/index.html         |  444 +++++++--
  .ai-ready/MEMORY.md          |  589 ++++++++++++
- 16 files changed, 7475 insertions(+), 779 deletions(-)
+  16 files changed, 7519 insertions(+), 783 deletions(-)
 ```
 
-This backup includes (highlights of `7140715..939d967`, 23 commits):
+This backup includes (highlights of `7140715..612d16a`, 25 commits):
 
 - **Direct chart-based trade execution (AST indicator-filter + strategy normal
   mode)** — an option premium chart entry trades that same leg/strike; a spot
@@ -72,3 +72,7 @@ This backup includes (highlights of `7140715..939d967`, 23 commits):
 - **Rate-limit/persistence + live UI fixes** — per-surface quote cooldowns,
   1000ms poll, reload-survival chain/pick snapshots, immediate closed-trade
   repaint, non-blinking running-strategy rows, FastLive WS candle store.
+- **One-trade-per-signal latch** — a strategy+instrument condition opens exactly
+  one trade per meeting; after an SL/TP exit the still-true condition cannot
+  instantly re-buy (APLAPOLLO 2140 PE was churned 24x in one session), it must
+  reset FALSE and meet again fresh.

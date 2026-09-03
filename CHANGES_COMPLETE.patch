@@ -966,7 +966,7 @@ index 13c9a0e..45c03f9 100644
          if not isinstance(outer, dict):
              return out
 diff --git a/static/aismart.js b/static/aismart.js
-index e89df6d..ff8794a 100644
+index e89df6d..b39281a 100644
 --- a/static/aismart.js
 +++ b/static/aismart.js
 @@ -27,9 +27,34 @@ window.createAISmartTrading = function (suffix) {
@@ -1962,7 +1962,35 @@ index e89df6d..ff8794a 100644
    /* One-shot "auto square off" gate: true only the first time the live IST clock
       reaches the configured square-off time on any given session day. The engine
       cuts every open position once, so a browser reload / long-running session
-@@ -3143,6 +3625,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -3100,8 +3582,25 @@ window.createAISmartTrading = function (suffix) {
+     if (day !== state.tradeCountDay) {
+       state.tradeCountDay = day;
+       state.tradeCounts = {};
+-    }
+-  }
++      clearFiredSignals();
++    }
++  }
++
++  /* One-trade-per-signal latch: once a strategy+instrument signal has fired an
++     entry, that same (still-true) condition may not fire another trade. The
++     latch is released ONLY after an evaluation cycle observes the condition
++     FALSE (the signal resets), so a stop-loss exit followed by an instant re-
++     buy on the same persistent condition (the APLAPOLLO 2140 PE 24x churn) is
++     blocked: each fresh condition-meeting arms exactly ONE new trade. An open
++     position owned by the key keeps the latch armed while it is held, so a
++     signal flip during the hold can never re-arm a re-entry at the exit moment
++     - a released latch requires the signal to be observed false AFTER the close
++     before a new meeting may trade again. */
++  let _signalFired = {};
++  function clearFiredSignals() { _signalFired = {}; }
++  function firedSignal(key) { return _signalFired[key] === true; }
++  function armFiredSignal(key) { _signalFired[key] = true; }
++  function releaseFiredSignal(key) { if (_signalFired[key] === true) delete _signalFired[key]; }
+ 
+   /* AI auto-trades decision (cached per newest candle). */
+   const _aiTradesCache = { sig: '', dec: null };
+@@ -3143,6 +3642,7 @@ window.createAISmartTrading = function (suffix) {
    function allowedTradesFor(s, instr, candles) {
      const u = state.universal;
      if (!liveTimeGateOk()) return 0;
@@ -1970,7 +1998,7 @@ index e89df6d..ff8794a 100644
      if (u && u.aiTrades) {
        const r = { key: s.id, optionSid: instr.kind === 'option' ? instr.sid : null, symbol: instr.symbol };
        aiTradesDecisionFor(candles, liveOICtx(r));
-@@ -3170,12 +3653,84 @@ window.createAISmartTrading = function (suffix) {
+@@ -3170,12 +3670,84 @@ window.createAISmartTrading = function (suffix) {
       normal 1500ms poll is unaffected (it reads null => per-condition key). */
    let _hftExecOn = null;
  
@@ -2056,7 +2084,7 @@ index e89df6d..ff8794a 100644
      const out = [];
      for (const sym of syms) {
        if (runInMode(sym) === 'spot') {
-@@ -3183,7 +3738,11 @@ window.createAISmartTrading = function (suffix) {
+@@ -3183,7 +3755,11 @@ window.createAISmartTrading = function (suffix) {
          continue;
        }
        const rec = _pickedStrikes.get(_pickedKey(sym));
@@ -2069,7 +2097,7 @@ index e89df6d..ff8794a 100644
        if (runInMode(sym) === 'both') {
          if (contracts && contracts.length) out.push({ kind: 'both', symbol: sym, contracts });
          continue;
-@@ -3288,9 +3847,14 @@ window.createAISmartTrading = function (suffix) {
+@@ -3288,9 +3864,14 @@ window.createAISmartTrading = function (suffix) {
      const t0 = performance.now();
      const u = state.universal || {};
      const prevExecOn = _hftExecOn;
@@ -2086,7 +2114,7 @@ index e89df6d..ff8794a 100644
      const SE = window.StratEngine;
      if (!pt || !SE) return;
      resetTradeCountsIfNewDay();
-@@ -3298,6 +3862,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -3298,6 +3879,7 @@ window.createAISmartTrading = function (suffix) {
      const autoPositions = (ptState && ptState.autoPositions) || {};
      if (!(u && u.hft)) return;
        if (!liveTimeGateOk()) return;
@@ -2094,7 +2122,24 @@ index e89df6d..ff8794a 100644
        const strategies = activeStrategies();
        if (!strategies.length) return;
        const instruments = hftInstruments();
-@@ -3372,7 +3937,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -3328,7 +3910,15 @@ window.createAISmartTrading = function (suffix) {
+           const entryOk = mtf
+             ? evalEntryMtfLive(working, candles, trendTf ? hftCandlesFor(instr, trendTf, SE) : null, key)
+             : evalEntryLive(working, candles, key);
+-          if (!entryOk) continue;
++          if (!entryOk) {
++            /* Signal reset observed while no position is held: release the
++               one-trade-per-signal latch so the NEXT fresh meeting can arm. */
++            releaseFiredSignal(key);
++            continue;
++          }
++          /* One-trade-per-signal: this still-true condition already fired its
++             trade - no re-entry until the signal resets and meets again. */
++          if (firedSignal(key)) continue;
+           const side = 'BUY';
+           let lotSize = u.lotSize != null ? Number(u.lotSize) : null;
+           if (lotSize == null && pt.lotSizeFor) lotSize = pt.lotSizeFor(tradeTargets[0]);
+@@ -3372,7 +3962,7 @@ window.createAISmartTrading = function (suffix) {
              if (autoPositions[pkey]) continue;
              const budget = hftOpsBudget();
              if (!budget.ok) break;
@@ -2103,7 +2148,15 @@ index e89df6d..ff8794a 100644
              if (ok) {
                placedLegs++;
                hftMarkOrder();
-@@ -3422,6 +3987,14 @@ window.createAISmartTrading = function (suffix) {
+@@ -3398,6 +3988,7 @@ window.createAISmartTrading = function (suffix) {
+           if (placedLegs) {
+             state.tradeCounts[s.id] = (state.tradeCounts[s.id] || 0) + 1;
+             setSettingsFor(s.id);
++            armFiredSignal(key);
+           }
+         }
+       }
+@@ -3422,6 +4013,14 @@ window.createAISmartTrading = function (suffix) {
      const ms = 100;
      const opsEl = $id('astHftOps');
      if (opsEl) { opsEl.disabled = !hftOn; opsEl.style.opacity = hftOn ? '1' : '0.5'; }
@@ -2118,7 +2171,7 @@ index e89df6d..ff8794a 100644
      if (hftOn && state.enabled && !_hftTimer) {
        _hftTimer = setInterval(hftScan, ms);
        _hftMs = ms;
-@@ -3466,19 +4039,62 @@ window.createAISmartTrading = function (suffix) {
+@@ -3466,19 +4065,62 @@ window.createAISmartTrading = function (suffix) {
    /* Whether the strategy's entry conditions fire at bar index `i` (no signal
       state mutation). `i` is normally the last (forming) bar, but the entry loop
       also probes the just-closed bar so a fresh cross is not missed. */
@@ -2189,7 +2242,7 @@ index e89df6d..ff8794a 100644
        gapOk = StratEngine.evalGap(s.entry.gap, candles) !== false;
      }
      const extraOk = (s.entryExtra && s.entryExtra.length)
-@@ -3515,13 +4131,20 @@ window.createAISmartTrading = function (suffix) {
+@@ -3515,13 +4157,20 @@ window.createAISmartTrading = function (suffix) {
          const prim = readTwo(cnd.indId, cnd.indSettings, cnd.valueKey, i, candles);
          const cmp = cmpReadAt(cnd, i, candles);
          const v = (v) => v == null || isNaN(v) ? '--' : Math.round(v * 10000) / 10000;
@@ -2212,7 +2265,7 @@ index e89df6d..ff8794a 100644
      }
      log('Signal diag "' + s.name + '" @ ' + tstr + ' lastClose=' + (c ? c.close : '--') +
        ' -> ' + (parts.length ? parts.join(' | ') : 'no primary cond') +
-@@ -3638,6 +4261,29 @@ window.createAISmartTrading = function (suffix) {
+@@ -3638,6 +4287,29 @@ window.createAISmartTrading = function (suffix) {
      _astProg[id] = { pct: Math.max(0, Math.min(100, Math.round(pct))), status: String(status || ''), updated: Date.now() };
    }
  
@@ -2242,7 +2295,7 @@ index e89df6d..ff8794a 100644
    /* One full strategy evaluation pass over the enabled strategies. Called by
       tick() directly, or once per selected engine template when the auto
       strategy sender is ON (each template's saved settings are applied silently
-@@ -3646,8 +4292,9 @@ window.createAISmartTrading = function (suffix) {
+@@ -3646,8 +4318,9 @@ window.createAISmartTrading = function (suffix) {
      const stopGen = _stopGen;
      const t0 = performance.now();
      try {
@@ -2253,7 +2306,7 @@ index e89df6d..ff8794a 100644
        const SE = window.StratEngine;
        if (!pt || !SE) return;
        const ptState = pt.getState ? pt.getState() : null;
-@@ -3681,9 +4328,18 @@ window.createAISmartTrading = function (suffix) {
+@@ -3681,9 +4354,18 @@ window.createAISmartTrading = function (suffix) {
          render();
        }
  
@@ -2274,7 +2327,7 @@ index e89df6d..ff8794a 100644
          return;
        }
  
-@@ -3692,14 +4348,18 @@ window.createAISmartTrading = function (suffix) {
+@@ -3692,14 +4374,18 @@ window.createAISmartTrading = function (suffix) {
        // picker can build its F&O stock set from the current NIFTY direction.
        const nifty = await niftyBias();
        updateNiftyBiasStatus(nifty);
@@ -2301,7 +2354,7 @@ index e89df6d..ff8794a 100644
          if (tDir === 'bullish' || tDir === 'bearish') {
            const nt = state.niftyTrend;
            const tThresh = (Number(nt.pct) > 0) ? Number(nt.pct) : 2.5;
-@@ -3708,7 +4368,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -3708,7 +4394,7 @@ window.createAISmartTrading = function (suffix) {
            if (nt.includeIndices && Array.isArray(nt.indices)) {
              nt.indices.forEach(s => { idxSet[String(s.id) + ':' + (s.exch || '')] = true; });
            }
@@ -2310,7 +2363,7 @@ index e89df6d..ff8794a 100644
              const p = state.positions[k];
              if (!p) return false;
              if (p.symbolExch === 'IDX_I' || idxSet[k] || idxSet[String(p.symbolId) + ':' + (p.symbolExch || '')]) return false;
-@@ -3719,19 +4379,23 @@ window.createAISmartTrading = function (suffix) {
+@@ -3719,19 +4405,23 @@ window.createAISmartTrading = function (suffix) {
              if (tDir === 'bullish') return pct < tThresh;
              return pct > -tThresh;
            });
@@ -2344,7 +2397,7 @@ index e89df6d..ff8794a 100644
        /* Global "Run Strategy In" override (Selected Strategies section): when
           enabled every selected strategy runs on the option premium chart of
           ONLY the chosen side (manual CE/PE, or auto-picked from the NIFTY
-@@ -3780,11 +4444,19 @@ window.createAISmartTrading = function (suffix) {
+@@ -3780,11 +4470,19 @@ window.createAISmartTrading = function (suffix) {
  
          for (const instr of instruments) {
            const key = strategyKey(s, instr);
@@ -2365,7 +2418,19 @@ index e89df6d..ff8794a 100644
            if (!tradeTargets.length) {
              if (chainRateLimited(instr.symbol)) prog(s.id, 15, 'Option chain rate-limited - retrying in ~' + _CHAIN_RL_SEC + 's');
              else prog(s.id, 15, 'No execution target (option chain unavailable)');
-@@ -3848,6 +4520,8 @@ window.createAISmartTrading = function (suffix) {
+@@ -3806,6 +4504,11 @@ window.createAISmartTrading = function (suffix) {
+             if (!open) continue;
+             anyOpen = true;
+             if (String(open.autoKey || '') !== key) continue; /* owned by another engine / manual trade */
++            /* An open position on this instrument means this signal episode has
++               already been used - keep the one-trade-per-signal latch armed so a
++               stop/TP exit cannot be followed by an instant re-buy while the
++               same condition is still true. */
++            armFiredSignal(key);
+             /* Holding this instrument via this strategy: manage the exit. */
+             const myPos = state.positions[pkey];
+             const aside = open.side === 'BUY' ? 'long' : 'short';
+@@ -3848,13 +4551,23 @@ window.createAISmartTrading = function (suffix) {
            }
            if (anyOpen) { prog(s.id, 50, 'Managing open position'); continue; }
  
@@ -2374,7 +2439,23 @@ index e89df6d..ff8794a 100644
            if (state.niftyEntry && state.niftyEntry.enabled && !(await niftyGateMet(state.niftyEntry))) { prog(s.id, 55, 'Blocked: NIFTY entry gate'); bump(instr, 'nifty'); continue; }
  
            const allowed = allowedTradesFor(s, instr, candles);
-@@ -3906,7 +4580,7 @@ window.createAISmartTrading = function (suffix) {
+           if (allowed != null && (state.tradeCounts[s.id] || 0) >= allowed) { prog(s.id, 60, 'Blocked: trade limit reached'); bump(instr, 'limit'); continue; }
+ 
+           const entryOk = mtf ? evalEntryMtfLive(working, candles, trendCandles, key) : evalEntryLive(working, candles, key);
+-          if (!entryOk) { prog(s.id, 70, mtf ? 'Waiting MTF confirmation' : 'Waiting entry signal'); bump(instr, 'signal'); continue; }
++          if (!entryOk) {
++            /* Signal reset observed while no position is held: release the
++               one-trade-per-signal latch so the NEXT fresh meeting can arm. */
++            releaseFiredSignal(key);
++            prog(s.id, 70, mtf ? 'Waiting MTF confirmation' : 'Waiting entry signal'); bump(instr, 'signal'); continue;
++          }
++          /* One-trade-per-signal: this still-true condition already fired its
++             trade - no re-entry until the signal resets and meets again. */
++          if (firedSignal(key)) { prog(s.id, 72, 'One trade per signal - same condition still active, waiting for a fresh signal'); bump(instr, 'signal'); continue; }
+           prog(s.id, 90, 'Placing entry');
+ 
+           const side = 'BUY'; // buy-only engine: bearish strategies analyze the bearish trend but always execute BUY
+@@ -3906,7 +4619,7 @@ window.createAISmartTrading = function (suffix) {
              /* Close All ran while this poll was evaluating: abort before any
                 fresh entry can be placed. */
              if (stopGen !== _stopGen) { prog(s.id, 95, 'Stopped by Close All'); return; }
@@ -2383,7 +2464,15 @@ index e89df6d..ff8794a 100644
              if (ok) {
                placed++;
                const np = autoPositions[pkey];
-@@ -4003,7 +4677,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -3933,6 +4646,7 @@ window.createAISmartTrading = function (suffix) {
+           if (placed) {
+             state.tradeCounts[s.id] = (state.tradeCounts[s.id] || 0) + 1;
+             setSettingsFor(s.id);
++            armFiredSignal(key);
+             prog(s.id, 100, 'Entry placed');
+           }
+           placedTotal += placed;
+@@ -4003,7 +4717,7 @@ window.createAISmartTrading = function (suffix) {
  
    function startPoll() {
      if (_pollTimer) clearInterval(_pollTimer);
@@ -2392,7 +2481,7 @@ index e89df6d..ff8794a 100644
    }
    function stopPoll() {
      if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-@@ -4011,13 +4685,27 @@ window.createAISmartTrading = function (suffix) {
+@@ -4011,13 +4725,27 @@ window.createAISmartTrading = function (suffix) {
    /* Keep the NIFTY ensemble-trend status and the BB%B live values on screen
       even when no strategies are being ticked. niftyBias() is rate-limited by
       its own 60s cache, so this only re-fetches candles at most once a minute
@@ -2422,7 +2511,7 @@ index e89df6d..ff8794a 100644
      const el = $id('astLog');
      if (!el) return;
      const d = new Date();
-@@ -4067,9 +4755,10 @@ window.createAISmartTrading = function (suffix) {
+@@ -4067,9 +4795,10 @@ window.createAISmartTrading = function (suffix) {
      state.universal.tradeLimitEnabled = tlEl ? tlEl.checked : false;
      state.universal.tradeLimitCount = tlCntEl ? (Number(tlCntEl.value) || 5) : 5;
      state.universal.aiTrades = aiTrEl ? aiTrEl.checked : false;
@@ -2434,7 +2523,7 @@ index e89df6d..ff8794a 100644
      state.universal.hftExecOn = hftExecEl ? (hftExecEl.value || 'close') : 'close';
      syncHftUI();
      const flEl = $id('astFnoLimit');
-@@ -4217,21 +4906,31 @@ window.createAISmartTrading = function (suffix) {
+@@ -4217,21 +4946,31 @@ window.createAISmartTrading = function (suffix) {
      syncFilterSections({ bullish: prevMaster.bullish && !state.filters.bullish, bearish: prevMaster.bearish && !state.filters.bearish });
      _workingCache.clear();
      save();
@@ -2474,7 +2563,7 @@ index e89df6d..ff8794a 100644
    }
  
    function syncFilterSections(masterOff) {
-@@ -4257,6 +4956,12 @@ window.createAISmartTrading = function (suffix) {
+@@ -4257,6 +4996,12 @@ window.createAISmartTrading = function (suffix) {
      });
    }
  
@@ -2487,7 +2576,7 @@ index e89df6d..ff8794a 100644
    function applyModeToUI() {
      const cmEl = $id('astCallManual');
      if (cmEl) cmEl.checked = state.callManual !== false;
-@@ -4550,7 +5255,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -4550,7 +5295,7 @@ window.createAISmartTrading = function (suffix) {
      const mslEl = $id('astManualSL'); if (mslEl) mslEl.checked = u.manualSL === true;
      const mslPctEl = $id('astManualSLPct'); if (mslPctEl) mslPctEl.value = (Number(u.manualSLPct) > 0 ? u.manualSLPct : 1);
      const mtslEl = $id('astManualTrailSL'); if (mtslEl) mtslEl.checked = u.manualTrailSL === true;
@@ -2496,7 +2585,7 @@ index e89df6d..ff8794a 100644
      const mttEl = $id('astManualTrailTP'); if (mttEl) mttEl.checked = u.manualTrailTP === true;
      const mttPctEl = $id('astManualTrailTPPct'); if (mttPctEl) mttPctEl.value = (Number(u.manualTrailTPPct) > 0 ? u.manualTrailTPPct : 20);
      const mtpEl = $id('astManualTP'); if (mtpEl) mtpEl.checked = u.manualTP === true;
-@@ -4565,11 +5270,13 @@ window.createAISmartTrading = function (suffix) {
+@@ -4565,11 +5310,13 @@ window.createAISmartTrading = function (suffix) {
      const dpEl = $id('astDataPool'); if (dpEl) dpEl.checked = state.dataPool === true;
      const dpBody = $id('astDataPoolBody'); if (dpBody) dpBody.style.display = state.dataPool ? 'block' : 'none';
      const dpInfo = $id('astDataPoolInfo'); if (dpInfo) dpInfo.textContent = state.dataPool ? 'scanning...' : 'OFF - shared pool feeds strategies only';
@@ -2510,7 +2599,7 @@ index e89df6d..ff8794a 100644
      const hftExecEl = $id('astHftExecOn'); if (hftExecEl) hftExecEl.value = (['open', 'high', 'low', 'close'].indexOf(u.hftExecOn) >= 0 ? u.hftExecOn : 'close');
      const flEl = $id('astFnoLimit'); if (flEl) flEl.checked = u.fnoLimit !== false;
      const staEl = $id('astStartTradeAfter'); if (staEl) staEl.value = u.startTradeAfter || '09:15';
-@@ -4615,6 +5322,8 @@ window.createAISmartTrading = function (suffix) {
+@@ -4615,6 +5362,8 @@ window.createAISmartTrading = function (suffix) {
        else f[p[1]] = false;
      });
      syncFilterSections();
@@ -2519,7 +2608,7 @@ index e89df6d..ff8794a 100644
      applyMoversToUI();
      applyNiftyTrendToUI();
      applySimToUI();
-@@ -5216,7 +5925,10 @@ window.createAISmartTrading = function (suffix) {
+@@ -5216,7 +5965,10 @@ window.createAISmartTrading = function (suffix) {
            const vwap = poolIndValue('vwap', { anchor: 'session' }, i, candles);
            let cond = 'FAIL';
            for (const s of acts) {
@@ -2531,7 +2620,7 @@ index e89df6d..ff8794a 100644
            }
            const vol = poolVolume(instr, contract, bar);
            rows.push('<tr><td>' + label + '</td><td>' + type + '</td><td>' + src.chart + '</td><td>' + tf + '</td>' +
-@@ -5243,6 +5955,41 @@ window.createAISmartTrading = function (suffix) {
+@@ -5243,6 +5995,41 @@ window.createAISmartTrading = function (suffix) {
      if (info) info.textContent = state.dataPool ? 'scanning...' : 'OFF - shared pool feeds strategies only';
      if (state.dataPool) poolScan();
    }
@@ -2573,7 +2662,7 @@ index e89df6d..ff8794a 100644
    /* Manual Data Pool refresh: force the pool to re-resolve the selected
       universe right now (ignoring the 15s idle throttle) so newly added premium
       charts / symbols / strikes and changed indicator or data values show up
-@@ -5277,7 +6024,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5277,7 +6064,7 @@ window.createAISmartTrading = function (suffix) {
        exit (never at the current live LTP of an already-closed trade). */
    function recordClosedPosition(p) {
      try {
@@ -2582,7 +2671,7 @@ index e89df6d..ff8794a 100644
        /* Locate the authoritative close record written by PaperTrade when the
           position was squared off. Matching is symbolId + side + qty based (no
           fragile time window / symbol-name match) so a close is priced at its
-@@ -5363,9 +6110,31 @@ window.createAISmartTrading = function (suffix) {
+@@ -5363,9 +6150,31 @@ window.createAISmartTrading = function (suffix) {
      return live;
    }
  
@@ -2615,7 +2704,7 @@ index e89df6d..ff8794a 100644
        if (!pt || !pt.getState) return;
        const autoPositions = (pt.getState().autoPositions) || null;
        if (!autoPositions) return;
-@@ -5373,6 +6142,10 @@ window.createAISmartTrading = function (suffix) {
+@@ -5373,6 +6182,10 @@ window.createAISmartTrading = function (suffix) {
          const live = autoPositions[k];
          if (!live) {
            const p = state.positions[k];
@@ -2626,7 +2715,7 @@ index e89df6d..ff8794a 100644
            delete state.positions[k];
            if (p && p.strategyName) {
              recordClosedPosition(p);
-@@ -5384,11 +6157,14 @@ window.createAISmartTrading = function (suffix) {
+@@ -5384,11 +6197,14 @@ window.createAISmartTrading = function (suffix) {
             When another engine took over this symbol bucket, drop the stale
             mirror entry instead of syncing its data in. */
          if (!astOwnedLive(autoPositions, k)) {
@@ -2641,7 +2730,7 @@ index e89df6d..ff8794a 100644
          const p = state.positions[k];
          p.qty = live.qty;
          p.entryPrice = live.entryPrice;
-@@ -5408,13 +6184,19 @@ window.createAISmartTrading = function (suffix) {
+@@ -5408,13 +6224,19 @@ window.createAISmartTrading = function (suffix) {
      const host = $id('astRunningBody');
      if (!host) return;
      /* Final ownership filter (belt and suspenders on top of the reconcile
@@ -2665,7 +2754,7 @@ index e89df6d..ff8794a 100644
        return;
      }
      /* Render each position defensively: a malformed record must not blank the
-@@ -5429,13 +6211,11 @@ window.createAISmartTrading = function (suffix) {
+@@ -5429,13 +6251,11 @@ window.createAISmartTrading = function (suffix) {
    function runningRowHTML(p) {
        const cur = positionCurrentPrice(p);
        const pnl = cur != null ? (p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty) : null;
@@ -2683,7 +2772,7 @@ index e89df6d..ff8794a 100644
        const sideCol = p.side === 'BUY' ? '#00d4aa' : '#ef5350';
        const u = state.universal || {};
        const aiSlOn = u.aiSl !== false && u.manualSL !== true && u.manualTrailSL !== true;
-@@ -5454,8 +6234,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5454,8 +6274,7 @@ window.createAISmartTrading = function (suffix) {
          '<td>' + qtyTxt + '</td>' +
          '<td>' + fmt2(p.entryPrice) + '</td>' +
          '<td>' + (cur != null ? fmt2(cur) : '--') + '</td>' +
@@ -2693,7 +2782,7 @@ index e89df6d..ff8794a 100644
          '<td style="color:#888">' + (slTrailTxt || '--') + '</td>' +
          '<td style="color:#ff9800">' + guard + '</td>' +
          '<td><button class="btn-action" style="width:auto;padding:2px 8px;margin:0;font-size:9px;background:#ef5350;color:#fff" onclick="AISmartTrading.stopPosition(\'' + esc(p.strategyId) + '\')">Stop</button></td>' +
-@@ -5484,13 +6263,13 @@ window.createAISmartTrading = function (suffix) {
+@@ -5484,13 +6303,13 @@ window.createAISmartTrading = function (suffix) {
      /* Closed rows are immutable once recorded, so only rebuild the table when
         the history or the charges display setting actually changed (keeps the
         DOM light even after thousands of trades). */
@@ -2709,7 +2798,7 @@ index e89df6d..ff8794a 100644
          const net = (chargesOn && t.netPnl != null) ? t.netPnl : t.pnl;
          const col = net >= 0 ? '#00d4aa' : '#ef5350';
          const sideCol = t.side === 'BUY' ? '#00d4aa' : '#ef5350';
-@@ -5514,7 +6293,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5514,7 +6333,7 @@ window.createAISmartTrading = function (suffix) {
    }
  
    function renderSummary() {
@@ -2718,7 +2807,7 @@ index e89df6d..ff8794a 100644
      /* Realized P&L / charges / trade counts are derived straight from the
         closed-trades history (the single source of truth) so the Smart Realized
         P&L card always equals the sum of every closed trade's P&L shown in the
-@@ -5529,14 +6308,14 @@ window.createAISmartTrading = function (suffix) {
+@@ -5529,14 +6348,14 @@ window.createAISmartTrading = function (suffix) {
        if (net > 0) winCount++;
      }
      let unreal = 0;
@@ -2737,7 +2826,7 @@ index e89df6d..ff8794a 100644
        }
      }
      const live = realized + unreal;
-@@ -5545,7 +6324,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5545,7 +6364,7 @@ window.createAISmartTrading = function (suffix) {
      const el = $id('astSummary');
      if (!el) return;
      el.innerHTML =
@@ -2746,7 +2835,7 @@ index e89df6d..ff8794a 100644
        '<div class="acard" style="flex:1"><div class="label">Smart Realized P&L</div><div class="value" style="color:' + (realized >= 0 ? '#00d4aa' : '#ef5350') + '">' + (realized >= 0 ? '+' : '') + fmtMoney(realized) + '</div></div>' +
        '<div class="acard" style="flex:1"><div class="label">Smart Win Rate</div><div class="value" style="color:' + (wr >= 50 ? '#00d4aa' : '#ff9800') + '">' + fmt2(wr) + '%</div></div>' +
        '<div class="acard" style="flex:1"><div class="label">Smart Trades (W/L)</div><div class="value" style="font-size:13px">' + total + ' (' + winCount + 'W / ' + (total - winCount) + 'L)</div></div>' +
-@@ -5573,6 +6352,12 @@ window.createAISmartTrading = function (suffix) {
+@@ -5573,6 +6392,12 @@ window.createAISmartTrading = function (suffix) {
    /* ---------------- actions ---------------- */
    function toggleAuto() {
      state.enabled = !state.enabled;
@@ -2759,7 +2848,7 @@ index e89df6d..ff8794a 100644
      save();
      applyUniversalToUI();
      log('AI Smart Trading engine ' + (state.enabled ? 'enabled' : 'disabled'), state.enabled ? 'ok' : 'warn');
-@@ -5649,8 +6434,12 @@ window.createAISmartTrading = function (suffix) {
+@@ -5649,8 +6474,12 @@ window.createAISmartTrading = function (suffix) {
      // only the ticked strategies are evaluated - nothing is auto-picked.
      state.aiPick = false;
      state.callManual = true;
@@ -2772,7 +2861,7 @@ index e89df6d..ff8794a 100644
      save();
      applyUniversalToUI();
      render();
-@@ -5658,6 +6447,68 @@ window.createAISmartTrading = function (suffix) {
+@@ -5658,6 +6487,68 @@ window.createAISmartTrading = function (suffix) {
      tick();
    }
  
@@ -2841,7 +2930,7 @@ index e89df6d..ff8794a 100644
    function importFromPaperTrade(list) {
      if (!Array.isArray(list) || !list.length) {
        log('No strategies received to import', 'warn');
-@@ -5814,7 +6665,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5814,7 +6705,7 @@ window.createAISmartTrading = function (suffix) {
      state.aiPicks = (state.aiPicks || []).filter(s => !removeIds.has(String(s.id)));
      state.imported = (state.imported || []).filter(s => !removeIds.has(String(s.id)));
      removeIds.forEach(id => delete state.selected[id]);
@@ -2850,7 +2939,7 @@ index e89df6d..ff8794a 100644
      const paper = (window.AutoExperiment && AutoExperiment.paper) ? AutoExperiment.paper : null;
      Object.keys(state.positions).forEach(k => {
        if (removeIds.has(String(state.positions[k].strategyId))) {
-@@ -5836,7 +6687,34 @@ window.createAISmartTrading = function (suffix) {
+@@ -5836,7 +6727,34 @@ window.createAISmartTrading = function (suffix) {
      const list = [...(state.manual || []), ...(state.aiPicks || []), ...(state.imported || [])];
      const s = list.find(x => String(x.id) === String(id));
      if (!s) { log('Strategy not found in the selected strategies', 'warn'); return; }
@@ -2886,7 +2975,7 @@ index e89df6d..ff8794a 100644
      if (!sym && typeof selectedSymbol !== 'undefined') sym = selectedSymbol;
      if (sym && typeof selectedSymbol !== 'undefined') {
        selectedSymbol = JSON.parse(JSON.stringify(sym));
-@@ -5850,7 +6728,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5850,7 +6768,7 @@ window.createAISmartTrading = function (suffix) {
    function stopPosition(strategyId) {
      const pkey = Object.keys(state.positions).find(k => state.positions[k].strategyId === strategyId);
      const p = pkey ? state.positions[pkey] : null;
@@ -2895,7 +2984,7 @@ index e89df6d..ff8794a 100644
      if (pt && pt.autoExit && pkey) pt.autoExit(pkey);
      const paper = (window.AutoExperiment && AutoExperiment.paper) ? AutoExperiment.paper : null;
      if (paper && pkey) { if (paper.dropTrailEngine) paper.dropTrailEngine(pkey); if (paper.dropAiTrailEngine) paper.dropAiTrailEngine(pkey); }
-@@ -5863,7 +6741,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5863,7 +6781,7 @@ window.createAISmartTrading = function (suffix) {
    function stopAll() {
      const keys = Object.keys(state.positions);
      if (!keys.length) { log('No running AI Smart positions to stop', 'warn'); return; }
@@ -2904,7 +2993,7 @@ index e89df6d..ff8794a 100644
      const paper = (window.AutoExperiment && AutoExperiment.paper) ? AutoExperiment.paper : null;
      keys.forEach(k => {
        if (pt && pt.autoExit) pt.autoExit(k);
-@@ -5882,7 +6760,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5882,7 +6800,7 @@ window.createAISmartTrading = function (suffix) {
       next trade starts from a clean ₹0 slate. */
    function resetPnl() {
      if (!window.confirm('Reset all Smart P&L?\n\nThis clears every closed AI Smart trade, all running positions and the paper-trade ledger (open positions + closed history). This cannot be undone.')) return;
@@ -2913,7 +3002,7 @@ index e89df6d..ff8794a 100644
      state.closed = [];
      state.positions = {};
      state.rpnl = { realized: 0, charges: 0, count: 0, wins: 0 };
-@@ -5899,6 +6777,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -5899,6 +6817,7 @@ window.createAISmartTrading = function (suffix) {
    function stopAllStrategies(keepEnabled) {
      state.aiPick = false;
      if (!keepEnabled) state.enabled = false;
@@ -2921,7 +3010,7 @@ index e89df6d..ff8794a 100644
      _stopGen++;
      applyModeToUI();
      selectNone();
-@@ -5918,7 +6797,12 @@ window.createAISmartTrading = function (suffix) {
+@@ -5918,7 +6837,12 @@ window.createAISmartTrading = function (suffix) {
      if (!_pollTimer) startPoll();
    }
    function onTabHide() {
@@ -2935,7 +3024,7 @@ index e89df6d..ff8794a 100644
    }
  
    /* ---------------- engine settings templates ----------------
-@@ -5964,7 +6848,8 @@ window.createAISmartTrading = function (suffix) {
+@@ -5964,7 +6888,8 @@ window.createAISmartTrading = function (suffix) {
        niftyExit: JSON.parse(JSON.stringify(state.niftyExit)),
        niftyTf: _niftyTf,
        commodity: state.commodity ? JSON.parse(JSON.stringify(state.commodity)) : { enabled: false, sids: [] },
@@ -2945,7 +3034,7 @@ index e89df6d..ff8794a 100644
      };
    }
  
-@@ -6019,6 +6904,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -6019,6 +6944,7 @@ window.createAISmartTrading = function (suffix) {
      if (s.niftyExit) state.niftyExit = Object.assign(state.niftyExit || {}, JSON.parse(JSON.stringify(s.niftyExit)));
      if (s.niftyTf) setNiftyTf(s.niftyTf);
      if (s.commodity) state.commodity = Object.assign({ enabled: false, sids: [] }, JSON.parse(JSON.stringify(s.commodity)));
@@ -2953,7 +3042,7 @@ index e89df6d..ff8794a 100644
      /* Restore the template's captured instrument set so the engine's symbol
         selection (experimentSymbols / pooled runner) matches the template. */
      if (Array.isArray(s.symbols) && s.symbols.length) state.symbols = s.symbols.slice();
-@@ -6065,6 +6951,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -6065,6 +6991,7 @@ window.createAISmartTrading = function (suffix) {
      toggleAuto,
      onUniversalInput() { readUniversal(); },
      onDataPoolToggle() { onDataPoolToggle(); },
@@ -2961,7 +3050,7 @@ index e89df6d..ff8794a 100644
      poolRefresh() { poolRefresh(); },
      toggleAutoSl,
      onStrikeInput() { readStrikeUI(); },
-@@ -6085,6 +6972,23 @@ window.createAISmartTrading = function (suffix) {
+@@ -6085,6 +7012,23 @@ window.createAISmartTrading = function (suffix) {
      removeNiftyTrendIndex,
      renderNiftyTrendList,
      onFiltersInput() { readFiltersUI(); },
@@ -2985,7 +3074,7 @@ index e89df6d..ff8794a 100644
      /* Master Bullish/Bearish checkbox: checking it selects every sub-filter in
         that section, unchecking it clears them all (no more one-by-one). */
      onFilterMaster(side) {
-@@ -6124,6 +7028,11 @@ window.createAISmartTrading = function (suffix) {
+@@ -6124,6 +7068,11 @@ window.createAISmartTrading = function (suffix) {
      refresh,
      runManual,
      runPaper,
@@ -2997,7 +3086,7 @@ index e89df6d..ff8794a 100644
      importFromPaperTrade,
      clearImported,
      removeImported,
-@@ -6140,7 +7049,12 @@ window.createAISmartTrading = function (suffix) {
+@@ -6140,7 +7089,12 @@ window.createAISmartTrading = function (suffix) {
      onTabShow,
      onTabHide,
      tick,
@@ -3011,7 +3100,7 @@ index e89df6d..ff8794a 100644
      /* Multi-timeframe confirmation helpers (exposed for the pooled runner and
         tests): mtfPair() resolves the {entry, trend} timeframe pair from the
         enabled checkboxes; evalEntryMtfLive() runs the confirmation check. */
-@@ -6304,6 +7218,7 @@ window.createAISmartTrading = function (suffix) {
+@@ -6304,6 +7258,7 @@ window.createAISmartTrading = function (suffix) {
       instead of lagging behind the multi-second poll tick. */
    api.refreshLiveRunning = function () {
      renderRunning();
@@ -3019,7 +3108,7 @@ index e89df6d..ff8794a 100644
      renderSummary();
    };
  
-@@ -6350,14 +7265,56 @@ window.createAISmartTrading = function (suffix) {
+@@ -6350,14 +7305,56 @@ window.createAISmartTrading = function (suffix) {
      syncNiftyTfUI();
      renderTemplateSelect();
      applyCommodityToUI();

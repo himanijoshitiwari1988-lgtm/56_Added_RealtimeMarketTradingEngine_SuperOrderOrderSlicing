@@ -3,9 +3,9 @@
 Backup target: `himanijoshitiwari1988-lgtm/38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`
 Source history: `36_fixed_SmartNTrader_AddedOiTrend` (earlier backups: `33algodhan`..`39algodhan`, `36_fixed_SmartNTrader_AddedOiTrend`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`)
 
-## Latest backup (2026-09-03) — direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate
+## Latest backup (2026-09-03) — direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate + one-trade-per-signal latch
 
-Full diff: `7140715..939d967` (23 commits, 16 files, +7475/-779). Complete code
+Full diff: `7140715..612d16a` (25 commits, 16 files, +7519/-783). Complete code
 state is pushed to `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode` `main`.
 
 - **AST engine now trades directly on the evaluated chart.** An option premium
@@ -49,6 +49,17 @@ state is pushed to `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_A
   snapshots, AST closed-trades table repaints on the quote loop, non-blinking
   PaperRun strike rows, FastLive WS live candles, AST open-chart ENTRY/SL/TP
   price lines, NIFTY trend picker uses the CURRENT EMA9/21 layer on reversal.
+- **One-trade-per-signal latch** (`static/aismart.js`): APLAPOLLO 2140 PE was
+  auto-bought 24x and MCX 3250 PE 8x in one losing session — the signal stayed
+  true, each SL exit was followed by an instant re-buy into the same chop, and
+  every round trip lost money. A per-strategy+instrument latch (`_signalFired`)
+  now allows EXACTLY one trade per condition meeting: firing arms it (normal
+  poll + HFT scanner + management path), it stays armed while that trade is
+  open, after the close an entry is BLOCKED while the same condition is still
+  true ('One trade per signal - same condition still active, waiting for a fresh
+  signal'), it releases only when an eval cycle observes the condition FALSE
+  after the close, and it clears on a new session day. Fresh signal meetings can
+  then fire normally again.
 
 ## How to Run (development / preview)
 

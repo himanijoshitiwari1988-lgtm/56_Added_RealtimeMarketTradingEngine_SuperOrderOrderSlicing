@@ -1,6 +1,6 @@
-CHANGES_SUMMARY for backup (Direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate + all work since 31-Aug backup)
+CHANGES_SUMMARY for backup (Direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate + one-trade-per-signal latch + all work since 31-Aug backup)
 Generated: 2026-09-03 UTC
-Diff of committed work between 7140715 and HEAD (939d967)
+Diff of committed work between 7140715 and HEAD (612d16a)
 
  static/aismart.js            | 1261 +++++++++++++++++++++---
  app.py                       |  156 ++-
@@ -18,7 +18,7 @@ Diff of committed work between 7140715 and HEAD (939d967)
  static/strategies.js         |  255 +++--
  templates/index.html         |  444 +++++++--
  .ai-ready/MEMORY.md          |  589 ++++++++++++
- 16 files changed, 7475 insertions(+), 779 deletions(-)
+ 16 files changed, 7519 insertions(+), 783 deletions(-)
 
 --- name-status ---
 M	.ai-ready/MEMORY.md
@@ -101,3 +101,12 @@ M	templates/index.html
    trend-following picks the CURRENT EMA9/21 momentum direction on a reversal and
    no longer force-exits qualifying positions that dip below the daily change%
    threshold (they stop getting new entries only).
+
+9) One-trade-per-signal latch (AST): a strategy+instrument condition may open
+   EXACTLY one trade per meeting. When the trade closes (SL/TP) while the same
+   condition is still true, re-entry is blocked until the signal is observed
+   FALSE and then meets again fresh. Kills the repeated same-leg re-buy churn
+   (APLAPOLLO 2140 PE was bought 24x / MCX 3250 PE 8x in one losing session).
+   Enforced in the normal poll and the HFT scanner (armed on placement, kept
+   armed while the trade is open, released only on a false signal after the
+   close, cleared each new session day).
