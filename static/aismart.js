@@ -127,6 +127,18 @@ window.createAISmartTrading = function (suffix) {
      by the pool readout so it never re-resolves option chains (zero extra Dhan
      calls - it only reads the shared candle cache + live feed). */
   let _lastInstruments = [];
+  /* Multi Chart Grid event log: appended whenever an open chart's entry
+     condition / signal meets ('signal') or a paper trade executes ('entry').
+     Owned by this engine instance (base vs clone tab logs stay separate) and
+     serialised into every grid snapshot as `events`. */
+  let _gridEvSeq = 0;
+  const _gridEvents = [];
+  function gridEvent(type, o) {
+    try {
+      _gridEvents.push(Object.assign({ seq: ++_gridEvSeq, ts: Date.now(), type: type }, o || {}));
+      if (_gridEvents.length > 400) _gridEvents.shift();
+    } catch (e) {}
+  }
   /* Client-side option-chain rate-limit backoff. Dhan limits the option-chain
      surface independently of the chart surface; when /api/auto_strikes answers
      "Rate limited" the engine backs off ~30s before trying again instead of
@@ -3919,6 +3931,7 @@ window.createAISmartTrading = function (suffix) {
           /* One-trade-per-signal: this still-true condition already fired its
              trade - no re-entry until the signal resets and meets again. */
           if (firedSignal(key)) continue;
+          gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });
           const side = 'BUY';
           let lotSize = u.lotSize != null ? Number(u.lotSize) : null;
           if (lotSize == null && pt.lotSizeFor) lotSize = pt.lotSizeFor(tradeTargets[0]);
@@ -3983,6 +3996,7 @@ window.createAISmartTrading = function (suffix) {
                 };
               }
               log('HFT auto ' + side + ' paper entry from "' + s.name + '" (' + instrumentName(instr) + ')', 'buy');
+              gridEvent('entry', { name: np.symbol || instrumentName(instr), strategy: s.name, key: key, side: side, qty: np.qty, price: np.entryPrice });
             }
           }
           if (placedLegs) {
@@ -4568,6 +4582,7 @@ window.createAISmartTrading = function (suffix) {
           /* One-trade-per-signal: this still-true condition already fired its
              trade - no re-entry until the signal resets and meets again. */
           if (firedSignal(key)) { prog(s.id, 72, 'One trade per signal - same condition still active, waiting for a fresh signal'); bump(instr, 'signal'); continue; }
+          gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });
           prog(s.id, 90, 'Placing entry');
 
           const side = 'BUY'; // buy-only engine: bearish strategies analyze the bearish trend but always execute BUY
@@ -4639,6 +4654,7 @@ window.createAISmartTrading = function (suffix) {
                 };
               }
               log('Auto ' + side + ' paper entry from "' + s.name + '" (' + instrumentName(instr) + ')', 'buy');
+              gridEvent('entry', { name: np.symbol || instrumentName(instr), strategy: s.name, key: key, side: side, qty: np.qty, price: np.entryPrice });
             } else {
               prog(s.id, 92, 'Entry rejected: ' + (pt.lastAutoSkip || 'see Paper Trade log'));
             }
@@ -4703,7 +4719,175 @@ window.createAISmartTrading = function (suffix) {
       _runningTick = false;
       save();
       render();
+      try {
+        if (window.ChartGrid) {
+          const snap = gridSnapshot();
+          window.dispatchEvent(new CustomEvent('astTickEnd', { detail: snap }));
+        }
+      } catch (e) {}
     }
+  }
+
+  /* ---------------- Multi Chart Grid snapshot ---------------- */
+  const _emaPairs = [[9, 21], [21, 35], [35, 50], [50, 100], [100, 200], [200, 300]];
+
+  function gridCardItem(instr) {
+    if (!instr || !instr.symbol) return null;
+    const sym = instr.symbol;
+    if (isSimSymbol(sym)) return null;
+    if (instr.kind === 'option' && instr.sid != null) {
+      const exch = optionExch(sym), inst = optionInst(sym);
+      return { key: String(instr.sid) + ':' + exch, id: Number(instr.sid), exch: exch, inst: inst,
+        name: instrumentName(instr), kind: 'opt' };
+    }
+    if (instr.kind === 'underlying') {
+      const exch = sym.exch || 'NSE';
+      return { key: String(sym.id) + ':' + exch, id: Number(sym.id), exch: exch,
+        inst: sym.inst || 'EQUITY', name: sym.name || instrumentName(instr), kind: 'sym' };
+    }
+    if (instr.kind === 'both' && Array.isArray(instr.contracts)) {
+      /* Run-in "Both (spot + premium)": the strategy's own chart is the spot /
+         underlying instrument (premium contracts are its execution targets and
+         confirmation legs). The grid therefore shows the SPOT card here, never
+         every premium leg - premium charts surface only once a trade is open
+         (they come through the positions feed as TRADE EXECUTION rows). */
+      const exch = sym.exch || 'NSE';
+      return { key: String(sym.id) + ':' + exch, id: Number(sym.id), exch: exch,
+        inst: sym.inst || 'EQUITY', name: sym.name || instrumentName(instr), kind: 'sym',
+        runMode: 'both' };
+    }
+    return null;
+  }
+
+  function pushOvl(list, id, settings) {
+    list.push({ id: id, settings: settings || {} });
+  }
+
+  function overlaySpecFromFilters(f) {
+    const out = [];
+    if (!f) return out;
+    const has = (k) => !!(f[k]);
+    _emaPairs.forEach(p => {
+      ['bull', 'bear'].forEach(d => {
+        ['', 'Meet'].forEach(pr => {
+          const mk = pr + 'Ema' + p[0] + '_' + p[1];
+          if (has(d + mk)) {
+            pushOvl(out, 'ema', { length: p[0] });
+            pushOvl(out, 'ema', { length: p[1] });
+          }
+        });
+      });
+    });
+    const st = (period, f1, f2) => {
+      pushOvl(out, 'supertrend', { atrPeriod: period, factor: f1 });
+      pushOvl(out, 'supertrend', { atrPeriod: period, factor: f2 });
+    };
+    ['bull', 'bear'].forEach(d => {
+      if (has(d + 'St10_1_2') || has(d + 'MeetSt10_1_2')) st(10, 1, 2, d);
+      if (has(d + 'St10_2_3') || has(d + 'MeetSt10_2_3')) st(10, 2, 3, d);
+      if (has(d + 'St1CloseCrossAbove') || has(d + 'St1CloseCrossBelow') || has(d + 'MeetCloseSt')) {
+        pushOvl(out, 'supertrend', { atrPeriod: 10, factor: 1 });
+      }
+      if (has(d + 'VwapCloseCrossAbove') || has(d + 'VwapCloseCrossBelow') || has(d + 'MeetCloseVwap')) pushOvl(out, 'vwap', {});
+      if (has(d + 'BbwInc') || has(d + 'BbCrossAbove') || has(d + 'BbCrossBelow') || has(d + 'MeetCloseBb')) {
+        pushOvl(out, 'bb', { length: 20, mult: 2, source: 'close', midType: 'sma', midLength: 20 });
+      }
+      if (has(d + 'PcCrossAbove') || has(d + 'PcCrossBelow') || has(d + 'MeetClosePc')) {
+        pushOvl(out, 'pc', { length: 20, midType: 'midpoint', midLength: 20 });
+      }
+      if (has(d + 'Asr')) pushOvl(out, 'autosr', { atrPeriod: 14, atrMult: 2.0, minPct: 0.15 });
+      if (has(d + 'Vl')) pushOvl(out, 'vl', { length: 14, signalLen: 9, volLen: 20 });
+      if (has(d + 'Oit')) pushOvl(out, 'oitrend', { fast: 9, slow: 21, enterK: 0.45, exitK: 0.12 });
+    });
+    const seen = {};
+    return out.filter(x => {
+      const k = x.id + '|' + JSON.stringify(x.settings);
+      if (seen[k]) return false;
+      seen[k] = true;
+      return true;
+    });
+  }
+
+  function gridEntryTf() {
+    const tfs = state.universal && state.universal.tfs;
+    if (tfs && tfs['1min']) return '1min';
+    if (tfs && tfs['5min']) return '5min';
+    return '1min';
+  }
+
+  /* Grid STRATEGY RUNNING cards mirror the Paper Trade engine tab's running
+     strategy list (paperrun chartsForStrategy) for this engine, so both views
+     always show the same rows. Per symbol the "Strategy should be run in"
+     dropdown decides whether the spot/underlying chart row is listed (spot +
+     both) — exactly the same rule the engine tab applies (the engine tab does
+     NOT drop the spot row when the global CE/PE "Run Strategy In" override is
+     on, so the grid does not either). The engine's picked premium strikes are
+     listed in every mode, just like the engine tab lists them. Rows collapse
+     across strategies on the same symbol, and once a premium contract actually
+     has an open trade its row moves to TRADE EXECUTION (same key). */
+  function gridStrategyCards() {
+    const strategies = (state.filterMode === true) ? filterModeStrategies() : activeStrategies();
+    if (!strategies.length) return [];
+    const out = [];
+    const seen = new Set();
+    const add = (card) => {
+      if (!card || !card.key || seen.has(card.key)) return;
+      seen.add(card.key);
+      out.push(card);
+    };
+    const syms = experimentSymbols();
+    for (const sym of syms) {
+      if (!sym || sym.id == null) continue;
+      if (isSimSymbol(sym)) continue;
+      const mode = runInMode(sym);
+      /* Spot/underlying row: listed whenever the run-in dropdown is spot or
+         both (identical to the engine-tab list). Premium-only runs have no spot
+         row, exactly like the engine-tab list. */
+      if (mode === 'spot' || mode === 'both') {
+        const card = gridCardItem({ kind: 'both', symbol: sym, contracts: [] });
+        if (card) add(card);
+      }
+      /* Picked premium strike rows: every contract the engine resolved/picked
+         for this symbol, matching the count the engine-tab running strategy list
+         shows. Prefer the engine's picked strikes (full set, identical to the
+         engine tab); fall back to this tick's resolved option instruments. */
+      const rec = _pickedStrikes.get(_pickedKey(sym));
+      const contracts = (rec && Array.isArray(rec.contracts)) ? rec.contracts : [];
+      let added = false;
+      if (contracts.length) {
+        contracts.forEach(c => {
+          if (!c || c.sid == null) return;
+          const card = gridCardItem({ kind: 'option', symbol: sym, sid: c.sid, strike: c.strike, optionType: c.optionType, premium: c.premium });
+          if (card) { add(card); added = true; }
+        });
+      }
+      if (!added) {
+        (_lastInstruments || []).forEach(instr => {
+          if (!instr || instr.kind !== 'option' || instr.sid == null) return;
+          if (!instr.symbol || instr.symbol.id !== sym.id ||
+              (instr.symbol.exch || '') !== (sym.exch || '')) return;
+          const card = gridCardItem(instr);
+          if (card) add(card);
+        });
+      }
+    }
+    return out;
+  }
+
+  function gridSnapshot() {
+    const cards = gridStrategyCards();
+    const pos = {};
+    Object.keys(state.positions || {}).forEach(k => { pos[k] = state.positions[k]; });
+    return {
+      eng: suffix || '',
+      cards: cards,
+      positions: pos,
+      events: _gridEvents.slice(),
+      overlays: overlaySpecFromFilters(state.filters || {}),
+      entryTf: gridEntryTf(),
+      mtf: !!(state.universal && state.universal.mtfConfirm),
+      fast: !!(state.fastData && window.FastLive && window.FastLive.enabled)
+    };
   }
 
   function updatePerfInfo(totalMs, strategyCount) {

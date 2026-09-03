@@ -157,6 +157,49 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
 .tab-close:hover{color:#ef5350}
 .tab-content{flex:1;display:none;min-height:0}
 .tab-content.active{display:flex;flex-direction:column}
+/* ---- Paper Trade sub tabs (Engine / Chart Grid) ---- */
+.pt-subbar{display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid #1e1e40;flex:none;background:#0e0e24}
+.pt-view-btn{font-size:10px;font-weight:700;color:#8a8ab0;background:transparent;border:1px solid #2d2d50;border-radius:12px;padding:3px 14px;cursor:pointer}
+.pt-view-btn.active{background:#00d4aa;color:#062;border-color:#00d4aa}
+.cg-toolbar{display:flex;align-items:center;gap:4px;padding:4px 2px;flex:none;flex-wrap:wrap}
+.cg-wrap{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:8px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a}
+.cg-body{display:flex;flex:1;min-height:0;gap:8px;align-items:stretch}
+.cg-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px;min-height:0}
+.cg-events{flex:0 0 285px;width:285px;display:flex;flex-direction:column;min-height:0;border:1px solid #2d2d50;border-radius:4px;background:#0d0d20;overflow:hidden}
+.cg-events-head{display:flex;align-items:center;gap:6px;padding:4px 6px;border-bottom:1px solid #1e1e40;font-size:9px;font-weight:800;color:#b39ddb;letter-spacing:.4px}
+.cg-events-dot{width:7px;height:7px;border-radius:50%;background:#ffb300;box-shadow:0 0 6px #ffb300;flex:none}
+.cg-events-note{margin-left:auto;color:#555;font-weight:400;font-size:8px}
+.cg-events-list{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a;padding:4px}
+.cg-ev{border:1px solid #1e1e40;border-left:3px solid #ffb300;border-radius:3px;background:#101028;margin:0 0 5px;padding:4px 6px}
+.cg-ev.entry{border-left-color:#26a69a}
+.cg-ev-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.cg-ev-badge{font-size:7px;font-weight:800;letter-spacing:.4px;padding:1px 6px;border-radius:8px;color:#ffd700;background:#2a2400;border:1px solid #8a6d00;white-space:nowrap}
+.cg-ev.entry .cg-ev-badge{color:#26a69a;background:#00221f;border-color:#0f5f57}
+.cg-ev-time{font-size:8px;color:#777;white-space:nowrap;font-variant-numeric:tabular-nums}
+.cg-ev-name{font-size:10px;color:#e8e8f0;font-weight:700;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cg-ev-sub{font-size:8px;color:#777;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cg-ev-empty{font-size:9px;color:#555;padding:10px 6px;text-align:center}
+.cg-sec{border:1px solid #1e1e40;border-radius:4px;padding:4px;background:#0d0d20;display:flex;flex-direction:column;flex:1 1 0;min-height:0;overflow:hidden}
+.cg-sec-head{display:flex;align-items:center;gap:8px;padding:2px 4px;flex:none}
+.cg-sec-title{font-size:9px;font-weight:800;letter-spacing:.5px;padding:2px 8px;border-radius:9px}
+.cg-sec-title.cg-strategy{color:#66ccff;border:1px solid #2d6da0;background:#0e2236}
+.cg-sec-title.cg-exec{color:#ff8a80;border:1px solid #a0403a;background:#33110f}
+.cg-sec-note{font-size:8px;color:#555}
+.cg-row{display:flex;flex-wrap:wrap;gap:8px;padding:4px 2px;flex:1 1 0;min-height:0;max-height:100%;overflow-x:hidden;overflow-y:auto;align-content:flex-start;scrollbar-width:thin;scrollbar-color:#5d5da0 #12122a;scrollbar-gutter:stable}
+.cg-row::-webkit-scrollbar{width:8px}
+.cg-row::-webkit-scrollbar-track{background:#12122a}
+.cg-row::-webkit-scrollbar-thumb{background:#4a4a80;border-radius:4px;border:1px solid #12122a}
+.cg-row::-webkit-scrollbar-thumb:hover{background:#5d5da0}
+.cg-row-el{display:flex;align-items:center;gap:8px;width:100%;flex:none;border:1px solid #2d2d50;border-left:3px solid #2d6da0;border-radius:4px;background:#101028;padding:5px 8px;box-sizing:border-box;min-height:32px}
+.cg-row-el.exec{border-left-color:#ff8a80;background:#15090c}
+.cg-rmain{flex:1;min-width:0;display:flex;align-items:center;gap:8px}
+.cg-rtf{font-size:8px;font-weight:700;color:#ffd700;background:#2a2400;border:1px solid #8a6d00;border-radius:3px;padding:1px 5px;flex:none;white-space:nowrap}
+.cg-rname{font-size:11px;font-weight:700;color:#e8e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none;max-width:44%}
+.cg-rtext{font-size:9px;color:#9a9ab8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:150px;font-variant-numeric:tabular-nums}
+.cg-row-el.exec .cg-rtext{color:#ffccbc}
+.cg-open{flex:none;background:#00d4aa;color:#042;border:none;border-radius:3px;font-size:10px;font-weight:800;padding:4px 10px;cursor:pointer;white-space:nowrap}
+.cg-open:hover{filter:brightness(1.15)}
+.cg-empty{font-size:9px;color:#555;padding:10px 4px}
 #oc-chart-container{height:260px;min-height:260px;position:relative;overflow:hidden}
 #oc-table-container{flex:1;overflow-y:auto}
 #oc-table{width:100%;border-collapse:collapse;font-size:10px}
@@ -912,6 +955,12 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
         </div>
       </div>
       <div class="tab-content" id="tab-papertrade">
+        <div class="pt-subbar" id="ptSubBar">
+          <button class="pt-view-btn active" data-ptview="engine" onclick="ChartGrid.showView(this)">Engine</button>
+          <button class="pt-view-btn" data-ptview="grid" onclick="ChartGrid.showView(this)">Chart Grid</button>
+          <span id="ptGridSubStatus" style="font-size:9px;color:#666;margin-left:8px"></span>
+        </div>
+        <div id="ptEngineView" style="display:flex;flex:1;min-height:0;flex-direction:column">
         <div class="monitor-toolbar" id="ptHftSection" style="border:1px solid #2d2d50;border-radius:4px;margin:4px 8px">
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
             <span style="font-size:10px;color:#66ccff;margin-right:8px">Pooled Strategy Runner</span>
@@ -1523,6 +1572,34 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           </div>
           <div class="account-cards" id="scSummary" style="grid-template-columns:repeat(6,1fr)"></div>
           <div id="scBody" style="padding:0 2px;max-height:300px;overflow-y:auto"></div>
+        </div>
+        </div>
+        <div id="ptGridView" style="display:none;flex:1;min-height:0;flex-direction:column;padding:4px 8px">
+          <div class="cg-toolbar">
+            <span style="font-size:9px;color:#66ccff;font-weight:700">Smart Chart List</span>
+            <button class="btn-action" style="width:auto;padding:2px 10px;margin:0 6px;font-size:9px" onclick="ChartGrid.refresh()">Refresh</button>
+            <span id="ptCgSummary" style="font-size:9px;color:#888;display:flex;flex-wrap:wrap;gap:6px;align-items:center"></span>
+            <span style="font-size:8px;color:#666;margin-left:auto">Analysis + paper trades run on every strike simultaneously in realtime. Open chart = full candlestick chart in the Chart tab with the AST indicator filters deployed.</span>
+          </div>
+          <div class="cg-body">
+            <div class="cg-main">
+              <div class="cg-sec">
+                <div class="cg-sec-head"><span class="cg-sec-title cg-strategy">STRATEGY RUNNING</span><span class="cg-sec-note">indicator filters live-evaluating these premium charts in parallel - rows open/close as symbols join/leave the selected universe (no open position yet). Click Open chart to inspect when a signal alert fires.</span></div>
+                <div class="cg-row" id="ptCgStrategyRow"></div>
+              </div>
+              <div class="cg-sec">
+                <div class="cg-sec-head"><span class="cg-sec-title cg-exec">TRADE EXECUTION</span><span class="cg-sec-note">open positions - running P&amp;L. Opening the chart shows ENTRY / SL / TRAIL SL / TP lines. Row stays until the trade closes even if the symbol left the universe.</span></div>
+                <div class="cg-row" id="ptCgExecRow"></div>
+              </div>
+            </div>
+            <div class="cg-events" id="ptCgEvents">
+              <div class="cg-events-head"><span class="cg-events-dot"></span><span>SIGNAL / TRADE EXECUTED LOG</span><span class="cg-events-note" id="ptCgEvCount">session log</span></div>
+              <div class="cg-events-list" id="ptCgEventsList">
+                <div class="cg-ev-empty">No signals yet. When an open chart's entry conditions meet or a trade executes it appears here with the chart name, date &amp; time.</div>
+              </div>
+            </div>
+          </div>
+          <div id="ptCgStatus" style="font-size:9px;color:#888;padding:2px 2px 0"></div>
         </div>
       </div>
       <div class="tab-content" id="tab-autoexperiment">
@@ -5918,7 +5995,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/autoexperiment.v13.js?v=134"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=129"></script>
+<script src="/static/aismart.js?v=134"></script>
 <script src="/static/paperrun.js?v=22"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -5926,6 +6003,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=3"></script>
 <script src="/static/smart_ntrader.js?v=62"></script>
+<script src="/static/chart_grid.js?v=9"></script>
 <script src="/static/backup.js?v=2"></script>
 <script>
 /* Engine instantiation for the base tabs and every duplicated tab. The cloned
@@ -5977,6 +6055,10 @@ function TabEnginesInit(){
   if(window.SmartNTrader && !window.SmartNTrader._started){
     try { window.SmartNTrader._started = true; window.SmartNTrader.init(); }
     catch(e){ console.warn("[SmartNTrader] init failed:", e); }
+  }
+  if(window.ChartGrid && !window.ChartGrid._started){
+    try { window.ChartGrid.init(); }
+    catch(e){ console.warn("[ChartGrid] init failed:", e); }
   }
 }
 TabEnginesInit();
