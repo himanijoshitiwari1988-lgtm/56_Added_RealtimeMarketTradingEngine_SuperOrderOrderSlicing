@@ -3545,6 +3545,21 @@ window.createAISmartTrading = function (suffix) {
     const now = new Date(Date.now() + 5.5 * 3600 * 1000);
     return timeGateOk(now.getUTCHours() * 60 + now.getUTCMinutes(), state.universal);
   }
+  /* Unconditional NSE trading-session gate: no NEW paper entry may ever be
+     placed while the exchange is closed, regardless of the optional start/no-
+     trade toggles. Stale candles frozen after the 15:30 IST close (or before
+     09:15, or on Sat/Sun) keep satisfying entry conditions, so without this
+     hard gate the engine keeps "buying" after market hours on dead prices -
+     those phantom fills corrupt the paper PnL. Open positions are untouched:
+     they are still managed to their SL / TP / trail. Returns true only
+     Mon-Fri between 09:15 and 15:30 IST. */
+  function marketSessionOpen() {
+    const now = new Date(Date.now() + 5.5 * 3600 * 1000);
+    const day = now.getUTCDay();
+    if (day === 0 || day === 6) return false;
+    const minute = now.getUTCHours() * 60 + now.getUTCMinutes();
+    return minute >= 555 && minute < 930; // 09:15 .. 15:30 IST
+  }
   /* One-shot "auto square off" gate: true only the first time the live IST clock
      reaches the configured square-off time on any given session day. The engine
      cuts every open position once, so a browser reload / long-running session
@@ -3610,6 +3625,7 @@ window.createAISmartTrading = function (suffix) {
   function allowedTradesFor(s, instr, candles) {
     const u = state.universal;
     if (!liveTimeGateOk()) return 0;
+    if (!marketSessionOpen()) return 0;
     if (u && u.aiTrades) {
       const r = { key: s.id, optionSid: instr.kind === 'option' ? instr.sid : null, symbol: instr.symbol };
       aiTradesDecisionFor(candles, liveOICtx(r));
@@ -3846,6 +3862,7 @@ window.createAISmartTrading = function (suffix) {
     const autoPositions = (ptState && ptState.autoPositions) || {};
     if (!(u && u.hft)) return;
       if (!liveTimeGateOk()) return;
+      if (!marketSessionOpen()) return;
       const strategies = activeStrategies();
       if (!strategies.length) return;
       const instruments = hftInstruments();
@@ -4502,6 +4519,8 @@ window.createAISmartTrading = function (suffix) {
             }
           }
           if (anyOpen) { prog(s.id, 50, 'Managing open position'); continue; }
+
+          if (!marketSessionOpen()) { prog(s.id, 53, 'Blocked: NSE market closed (09:15-15:30 IST) - no new entries'); continue; }
 
           if (state.niftyEntry && state.niftyEntry.enabled && !(await niftyGateMet(state.niftyEntry))) { prog(s.id, 55, 'Blocked: NIFTY entry gate'); bump(instr, 'nifty'); continue; }
 
