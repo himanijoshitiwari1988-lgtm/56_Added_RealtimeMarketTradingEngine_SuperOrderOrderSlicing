@@ -1207,8 +1207,6 @@ window.createAISmartTrading = function (suffix) {
          mode automatically - emulating the button press - without depending on
          the enabled flag alone. */
       runIntent: { active: false, mode: 'normal', at: 0 },
-      niftyEntry: { enabled: false, dir: 'bullish', zone: 'above_upper' },
-      niftyExit: { enabled: false, dir: 'bearish', zone: 'below_lower' },
       selected: {},
       imported: [],
       manual: [],
@@ -1383,20 +1381,6 @@ window.createAISmartTrading = function (suffix) {
         if (typeof s.filters[k] !== 'boolean') s.filters[k] = false;
       });
     }
-    if (s) {
-      const normGate = (g, dDir, dZone) => {
-        const out = { enabled: false, dir: dDir, zone: dZone };
-        if (g && typeof g === 'object') {
-          if (typeof g.enabled === 'boolean') out.enabled = g.enabled;
-          out.dir = (g.dir === 'bearish' || g.dir === 'bullish') ? g.dir : dDir;
-          if (['overbought', 'oversold', 'above_upper', 'upper_half', 'lower_half', 'below_lower', 'inc_up', 'inc_down'].indexOf(g.zone) >= 0) out.zone = g.zone;
-        }
-        return out;
-      };
-      s.niftyEntry = normGate(s.niftyEntry || s.niftyBias, 'bullish', 'above_upper');
-      s.niftyExit = normGate(s.niftyExit, 'bearish', 'below_lower');
-      delete s.niftyBias;
-    }
     if (s && !Array.isArray(s.imported)) s.imported = [];
     if (s && !Array.isArray(s.manual)) s.manual = [];
     if (s && !Array.isArray(s.aiPicks)) s.aiPicks = [];
@@ -1451,7 +1435,7 @@ window.createAISmartTrading = function (suffix) {
         tradeCounts: state.tradeCounts, tradeCountDay: state.tradeCountDay,
         imported: state.imported, manual: state.manual, aiPicks: state.aiPicks,
         callManual: state.callManual, aiPick: state.aiPick, aiPickN: state.aiPickN,
-        aiPickBull: state.aiPickBull, aiPickBear: state.aiPickBear, niftyEntry: state.niftyEntry, niftyExit: state.niftyExit,
+        aiPickBull: state.aiPickBull, aiPickBear: state.aiPickBear,
         runStrategyIn: state.runStrategyIn,
         niftyTrend: state.niftyTrend,
         showPickedStrikes: state.showPickedStrikes,
@@ -2307,12 +2291,9 @@ window.createAISmartTrading = function (suffix) {
   }
 
 
-  /* ---- NIFTY market-bias gate (F&O stocks only) ----
-     Optional execution condition: when enabled, F&O stock trades only execute
-     when the NIFTY 50 5min trend direction AND its Bollinger %B zone match the
-     user's selection. When NIFTY is bullish only top-gainer F&O stocks trade;
-     when bearish only top-loser F&O stocks trade. Indices are never restricted
-     by this gate. NIFTY candles are cached for 60s to stay within rate limits. */
+  /* NIFTY 50 ensemble trend used by the live bias readout and the trend-
+     following F&O stock picker. Candles are cached for 60s to stay within
+     rate limits. */
   const NIFTY_IDX = { id: 13, exch: 'IDX_I', inst: 'INDEX', name: 'NIFTY 50' };
   /* Extra trend-confirmation indices used by the NIFTY ensemble: GIFT NIFTY
      (overnight/global NIFTY lead, voted like NIFTY itself) and INDIA VIX (fear
@@ -2479,13 +2460,13 @@ window.createAISmartTrading = function (suffix) {
     return d > eps ? 1 : d < -eps ? -1 : 0;
   }
 
-  /* BB%B extreme-reversal state for the inc_up / inc_down NIFTY gates.
+  /* BB%B extreme-reversal state for the inc_up / inc_down %B readouts.
      inc_up fires when the %B line has touched the SESSION's (today's) oversold
      low and has since turned upward - a rebound off the day's oversold extreme.
      inc_down is the mirror image off the session's overbought high. Unlike the
      plain 1-bar slope, this only holds while the move genuinely started at a
      daily extreme and is still within a fresh bounce window, so a %B line
-     drifting up in the middle of its day range never trips the gate. */
+     drifting up in the middle of its day range never flags the state. */
   function niftyBbExtremeReversal(candles) {
     const n = candles.length;
     if (n < 22) return { inc_up: false, inc_down: false };
@@ -2545,8 +2526,8 @@ window.createAISmartTrading = function (suffix) {
   /* Session BB%B support/resistance: the min and max of the %B series across
      the current session's candles. `pctb` (the latest %B) is classified against
      this range into an overbought (near the session high) / oversold (near the
-     session low) state. The returned low/high are the support/resistance lines
-     the trade-entry / trade-exit gates compare against. */
+     session low) state. The returned low/high are the session support/
+     resistance lines surfaced by the NIFTY %B readout. */
   function sessionBbRange(candles) {
     const n = candles.length;
     if (!n) return { low: 0, high: 1, overbought: false, oversold: false };
@@ -2809,11 +2790,10 @@ window.createAISmartTrading = function (suffix) {
     return null;
   }
 
-  /* Trend-following PICK direction - deliberately FASTER than niftyOperativeDir.
-     The market entry/exit gates stay on the slow, conservative OVERALL (EMA50)
-     regime so a counter-trend bounce can't fire a gate. But the NIFTY
-     trend-following STOCK picker must follow the trend the market is turning
-     INTO, otherwise a live reversal keeps it buying the OLD side's stocks
+  /* Trend-following PICK direction - deliberately FASTER than niftyOperativeDir
+     (the conservative OVERALL / EMA50 regime). The NIFTY trend-following STOCK
+     picker must follow the trend the market is turning INTO, otherwise a live
+     reversal keeps it buying the OLD side's stocks
      (e.g. NIFTY reverses up while trend mode is still picking the bearish
      losers). So the picker follows the CURRENT (EMA9/21) momentum layer first:
         - CURRENT BULL/BEAR (EMA9 crossed + slope confirms) -> pick that side
@@ -2832,46 +2812,60 @@ window.createAISmartTrading = function (suffix) {
     return null;
   }
 
-  /* BB%B gate matching. Overbought / Oversold compare %B against the session
-     support/resistance range (session BB%B high/low); the classic band zones
-     map to the standard %B thresholds. */
-  function niftyZoneAllowed(nifty, zone) {
-    if (!nifty || !zone) return true;
-    if (zone === 'overbought') return !!nifty.overbought;
-    if (zone === 'oversold') return !!nifty.oversold;
-    if (zone === 'inc_up') return !!nifty.bbIncUp;
-    if (zone === 'inc_down') return !!nifty.bbIncDown;
-    return nifty.zone === zone;
+  /* ---------------- NIFTY confirmation + hysteresis layer ----------------
+     niftyPickDir / niftyOperativeDir above flip on intraday 1/5-min noise,
+     which makes the NIFTY trend-following CE/PE picks churn to the wrong side.
+     This layer runs the shared TrendConfirm machine: the raw operative call
+     ('bullish'|'bearish'|null) is the CANDIDATE and it only becomes the live
+     `_lastNiftyDir` once it has persisted for the hold budget AND is backed by
+     the slower 15-min NIFTY regime, with an anti-oscillation cooldown between
+     flips. Every consumer of `_lastNiftyDir` (universe picker, option-leg side,
+     picked-strike reconcile, BB%b gate) therefore sees the CONFIRMED direction
+     and a momentary EMA/BB cross can never switch the engine to the opposite
+     strike. */
+  let _niftyConf = null;
+  let _niftyHtfCache = null; /* { at, dir } 15-min regime, 150s TTL */
+
+  function niftyConfirmedDir() {
+    return (_niftyConf && (_niftyConf.dir === 'BULL' || _niftyConf.dir === 'BEAR')) ? _niftyConf.dir : null;
+  }
+  /* Confirmed operative as the engine's 'bullish'/'bearish' vocabulary. */
+  function niftyConfirmedOperative() {
+    const d = niftyConfirmedDir();
+    return d === 'BULL' ? 'bullish' : d === 'BEAR' ? 'bearish' : null;
+  }
+  /* Slow 15-min NIFTY regime (shared TrendConfirm.regime), own cache so the
+     coarse-tf fetch stays off the fast bias cache and out of Dhan's rate
+     budget. */
+  async function niftyHtfDir() {
+    if (!window.TrendConfirm) return null;
+    const now = Date.now();
+    if (_niftyHtfCache && (now - _niftyHtfCache.at) < 150000) return _niftyHtfCache.dir;
+    const SE = window.StratEngine;
+    if (!SE || !SE.fetchCandlesFor) return _niftyHtfCache ? _niftyHtfCache.dir : null;
+    try {
+      const c = await SE.fetchCandlesFor(NIFTY_IDX, '15min', 7);
+      const rg = (c && window.TrendConfirm.regime) ? window.TrendConfirm.regime(c) : null;
+      const dir = (rg && rg.dir) ? rg.dir : null;
+      _niftyHtfCache = { at: now, dir: dir };
+      return dir;
+    } catch (e) { return _niftyHtfCache ? _niftyHtfCache.dir : null; }
+  }
+  /* Step the machine with the raw operative call and store the confirmed pick
+     into _lastNiftyDir. Returns the confirmed 'bullish'|'bearish'|null. */
+  async function refreshConfirmedNifty(bias) {
+    if (!window.TrendConfirm) { _lastNiftyDir = niftyPickDir(bias); return _lastNiftyDir; }
+    if (!_niftyConf) _niftyConf = window.TrendConfirm.create();
+    const fast = niftyOperativeDir(bias); /* 'bullish' | 'bearish' | null */
+    const fastL = fast === 'bullish' ? 'BULL' : fast === 'bearish' ? 'BEAR' : null;
+    const htf = await niftyHtfDir();
+    window.TrendConfirm.step(_niftyConf, fastL, htf, Date.now());
+    _lastNiftyDir = niftyConfirmedOperative();
+    return _lastNiftyDir;
   }
 
-  /* NIFTY gate decision: shared by the trade-entry and trade-exit gates. The
-     NIFTY ensemble trend is always evaluated on the engine's single timeframe
-     (_niftyTf). A gate only fires when it is enabled AND the trend matches the
-     chosen direction AND its BB%B state. */
-  async function niftyGateMet(g) {
-    const gate = g || {};
-    if (!gate.enabled) return false;
-    const nifty = await niftyBias(_niftyTf);
-    return !!(nifty && niftyOperativeDir(nifty) === gate.dir && niftyZoneAllowed(nifty, gate.zone));
-  }
-
-  /* Synchronous version of the NIFTY entry gate for the HFT scanner, which runs
-     on its own timer and cannot await. Uses the 60s-cached NIFTY bias; if the
-     cache is empty (never computed yet) the gate is conservative and blocks. */
-  function niftyGateMetSync(g) {
-    const gate = g || {};
-    if (!gate.enabled) return true;
-    const cached = _niftyBiasCache[_niftyTf];
-    const nifty = cached ? cached.bias : null;
-    if (!nifty) return false;
-    const op = niftyOperativeDir(nifty);
-    if (!op) return false;
-    return op === gate.dir && niftyZoneAllowed(nifty, gate.zone);
-  }
-
-  /* Beyond the NIFTY exit gate above, signal exits are disabled: open legs are
-     only closed by the trailing take-profit / take-profit protections in
-     checkAutoTargetSl (or by the NIFTY exit gate / a manual Stop/Close). */
+  /* Beyond signal exits: open legs are only closed by the trailing take-profit
+     / take-profit protections in checkAutoTargetSl (or a manual Stop/Close). */
 
   function _niftySummary(bias) {
     if (!bias || !bias.dir) return null;
@@ -2897,24 +2891,74 @@ window.createAISmartTrading = function (suffix) {
   async function updateNiftyBiasStatus(bias) {
     const sum = _niftySummary(bias);
     const sumEl = $id('astNiftyStatus');
-    if (sumEl) sumEl.innerHTML = sum || '<span style="color:#666">waiting for NIFTY ' + _niftyTf + ' data&hellip;</span>';
-    const tfTxt = (t) => (t === 'both' ? '1m+5m' : t);
-    const paint = async (id, gate, label, action) => {
-      const el = $id(id);
-      if (!el) return;
-      let html = '';
-      if (gate.enabled) {
-        const gb = await niftyBias(_niftyTf);
-        if (!gb) html = '<span style="color:#ff9800">' + label + ': no data</span>';
-        else {
-          const ok = niftyOperativeDir(gb) === gate.dir && niftyZoneAllowed(gb, gate.zone);
-          html = '<span style="color:' + (ok ? '#00d4aa' : '#888') + '">' + label + ' [' + tfTxt(_niftyTf) + ' ' + (gate.dir === 'bullish' ? 'Bullish' : 'Bearish') + ' + ' + (NIFTY_ZONE_LABEL[gate.zone] || gate.zone) + '] ' + (ok ? '&rarr; ' + action : '&rarr; waiting') + '</span>';
-        }
-      }
-      el.innerHTML = html;
+    if (sumEl) sumEl.innerHTML = (sum || '<span style="color:#666">waiting for NIFTY ' + _niftyTf + ' data&hellip;</span>') + ' ' + niftyConfirmStatusHtml();
+    if (bias && isFinite(bias.pctb) && window.NiftyBbpAlert) {
+      NiftyBbpAlert.feed('ast', { pctb: bias.pctb, overall: bias.overall });
+    }
+  }
+  /* Confirmed-vs-raw NIFTY direction marker for the status readout. */
+  function niftyConfirmStatusHtml() {
+    if (!window.TrendConfirm) return '';
+    const conf = _niftyConf;
+    if (!conf) return '';
+    const dir = conf.dir;
+    const txt = dir === 'BULL' ? '<span style="color:#00d4aa">BULL confirmed</span>' : dir === 'BEAR' ? '<span style="color:#ef5350">BEAR confirmed</span>' : '<span style="color:#888">neutral</span>';
+    let pend = '';
+    if (conf.pending !== null) {
+      const ptxt = conf.pending === 'BULL' ? 'BULL' : conf.pending === 'BEAR' ? 'BEAR' : 'neutral';
+      const left = Math.max(0, Math.round(((conf.pendingSince + conf.pendingHold) - Date.now()) / 1000));
+      pend = ' &middot; <span style="color:#ffd700">pending ' + ptxt + ' ~' + left + 's</span>';
+    }
+    return ' &middot; <span style="font-size:9px">' + txt + pend + '</span>';
+  }
+
+  /* BB%b alert gate (mirrors the NTR BB%b alert section). Only acts when the
+     section's master "Gate" checkbox is ON. When ON, a new entry may only be
+     placed once the matching set BB%b alert signal is currently met:
+       - exactly ONE alert line armed (user's manual direction pick) -> that
+         line alone decides for every instrument (manual top gainer/loser runs).
+       - BOTH lines armed (needed in NIFTY trend-following auto runs, where the
+         direction can flip) -> the executed option leg decides: CE leg -> BULL
+         CE alert, PE leg -> BEAR PE alert.
+       - no option leg known for the instrument -> the NIFTY trend-following
+         direction (bullish -> BULL CE alert, bearish -> BEAR PE alert) decides.
+     Returns null when the gate is off / satisfied, else a human reason. */
+  function bbpGateBlock(instr, tradeTargets) {
+    if (!window.NiftyBbpAlert) return null;
+    const g = NiftyBbpAlert.gateStatus('ast');
+    if (!g || !g.master) return null;
+    if (g.last == null) return 'BB%b gate ON: NIFTY BB%b sample pending...';
+    const armed = [];
+    if (g.bull.enabled) armed.push('bull');
+    if (g.bear.enabled) armed.push('bear');
+    const rowWait = function (rk, met, valTxt) {
+      const sideTxt = rk === 'bear' ? 'BEAR PE' : 'BULL CE';
+      if (met) return null;
+      return 'BB%b gate: waiting ' + sideTxt + ' alert (' + (rk === 'bear' ? 'BB%b below ' : 'BB%b above ') + valTxt + ', ab ' + g.lastText + ')';
     };
-    await paint('astNiftyEntryStatus', state.niftyEntry || {}, 'Entry', 'allow entry');
-    await paint('astNiftyExitStatus', state.niftyExit || {}, 'Exit', 'cut trade');
+    /* Manual direction pick: one line armed -> that line gates every entry. */
+    if (armed.length === 1) {
+      const rk = armed[0];
+      const row = (rk === 'bear') ? g.bear : g.bull;
+      return rowWait(rk, row.met, row.valueText);
+    }
+    if (!armed.length) return 'BB%b gate ON: koi BB%b alert line LOCK/SET nahi hui - BULL CE ya BEAR PE line enable karke LOCK ALERT & SET dabao';
+    /* Both lines armed (auto / trend-following run): the executed leg decides. */
+    const probe = (instr && instr.kind === 'option' && (instr.optionType === 'CE' || instr.optionType === 'PE'))
+      ? instr
+      : (Array.isArray(tradeTargets) && tradeTargets.length && (tradeTargets[0].optionType === 'CE' || tradeTargets[0].optionType === 'PE'))
+        ? tradeTargets[0]
+        : null;
+    let needBear;
+    if (probe) {
+      needBear = probe.optionType === 'PE';
+    } else {
+      const dir = _lastNiftyDir;
+      if (dir !== 'bullish' && dir !== 'bearish') return 'BB%b gate ON: NIFTY trend direction clear nahi (bullish/bearish pending)';
+      needBear = dir === 'bearish';
+    }
+    const row = needBear ? g.bear : g.bull;
+    return rowWait(needBear ? 'bear' : 'bull', row.met, row.valueText);
   }
 
   /* NIFTY ensemble-trend timeframe (1 min / 5 min). Switching invalidates the
@@ -2932,6 +2976,7 @@ window.createAISmartTrading = function (suffix) {
     _niftyTf = tf;
     localStorage.setItem(_NIFTY_TF_KEY, tf);
     delete _niftyBiasCache[tf];
+    if (window.NiftyBbpAlert) NiftyBbpAlert.reset('ast');
     syncNiftyTfUI();
     updateNiftyBiasStatus(null);
     niftyBias().then(b => { if (b) updateNiftyBiasStatus(b); });
@@ -3949,7 +3994,6 @@ window.createAISmartTrading = function (suffix) {
       if (!strategies.length) return;
       const instruments = hftInstruments();
       if (!instruments.length) return;
-      if (!niftyGateMetSync(state.niftyEntry)) return;
       cutStaleSideLegs(instruments, strategies);
       for (const s of strategies) {
         const working = workingStrategy(s);
@@ -3985,6 +4029,8 @@ window.createAISmartTrading = function (suffix) {
           /* One-trade-per-signal: this still-true condition already fired its
              trade - no re-entry until the signal resets and meets again. */
           if (firedSignal(key)) continue;
+          const bbpBlock = bbpGateBlock(instr, tradeTargets);
+          if (bbpBlock) continue;
           gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });
           const side = 'BUY';
           let lotSize = u.lotSize != null ? Number(u.lotSize) : null;
@@ -4441,12 +4487,13 @@ window.createAISmartTrading = function (suffix) {
         return;
       }
 
-      // NIFTY market conditions (entry/exit gates) are evaluated once per tick.
-      // NIFTY is fetched BEFORE instruments so the trend-following symbol
-      // picker can build its F&O stock set from the current NIFTY direction.
+      // NIFTY market conditions (bias readout + trend-following pick direction)
+      // are evaluated once per tick. NIFTY is fetched BEFORE instruments so the
+      // trend-following symbol picker can build its F&O stock set from the
+      // current NIFTY direction.
       const nifty = await niftyBias();
+      if (nifty) await refreshConfirmedNifty(nifty);
       updateNiftyBiasStatus(nifty);
-      if (nifty) _lastNiftyDir = niftyPickDir(nifty);
 
       // NIFTY trend-following per-tick removal: a picked F&O stock whose daily
       // change% has dropped below the threshold (or no longer moves on the
@@ -4511,22 +4558,6 @@ window.createAISmartTrading = function (suffix) {
         return;
       }
 
-      // NIFTY trade-exit gate: when enabled, force-close every open leg owned
-      // by this engine while NIFTY matches the chosen direction + BB%B state.
-      if (await niftyGateMet(state.niftyExit)) {
-        const gx = state.niftyExit || {};
-        const keys = Object.keys(state.positions);
-        if (keys.length) {
-          keys.forEach(k => {
-            if (pt && pt.autoExit) pt.autoExit(k);
-            if (paper) { if (paper.dropTrailEngine) paper.dropTrailEngine(k); if (paper.dropAiTrailEngine) paper.dropAiTrailEngine(k); }
-            if (state.positions[k]) recordClosedPosition(state.positions[k]);
-            delete state.positions[k];
-          });
-          log('NIFTY exit gate: cut ' + keys.length + ' open position(s) (NIFTY ' + gx.dir + ' + ' + (NIFTY_ZONE_LABEL[gx.zone] || gx.zone) + ')', 'warn');
-        }
-      }
-
       /* Side-flip cleanup: after instruments/strategies are resolved this pass,
          actively cut stale open legs whose option side no longer matches the
          side their strategy trades now (NIFTY / filter direction flip), so
@@ -4534,7 +4565,7 @@ window.createAISmartTrading = function (suffix) {
       cutStaleSideLegs(instruments, strategies);
 
       let placedTotal = 0;
-      const _newBucket = () => ({ candles: 0, targets: 0, nifty: 0, limit: 0, confirm: 0, signal: 0 });
+      const _newBucket = () => ({ candles: 0, targets: 0, nifty: 0, limit: 0, confirm: 0, signal: 0, bbp: 0 });
       const skips = { idx: _newBucket(), fno: _newBucket() };
       const bump = (instr, reason) => { const b = skips[isIndex(instr.symbol) ? 'idx' : 'fno']; if (b) b[reason]++; };
 
@@ -4631,8 +4662,6 @@ window.createAISmartTrading = function (suffix) {
 
           if (!marketSessionOpen()) { prog(s.id, 53, 'Blocked: NSE market closed (09:15-15:30 IST) - no new entries'); continue; }
 
-          if (state.niftyEntry && state.niftyEntry.enabled && !(await niftyGateMet(state.niftyEntry))) { prog(s.id, 55, 'Blocked: NIFTY entry gate'); bump(instr, 'nifty'); continue; }
-
           const allowed = allowedTradesFor(s, instr, candles);
           if (allowed != null && (state.tradeCounts[s.id] || 0) >= allowed) { prog(s.id, 60, 'Blocked: trade limit reached'); bump(instr, 'limit'); continue; }
 
@@ -4646,6 +4675,8 @@ window.createAISmartTrading = function (suffix) {
           /* One-trade-per-signal: this still-true condition already fired its
              trade - no re-entry until the signal resets and meets again. */
           if (firedSignal(key)) { prog(s.id, 72, 'One trade per signal - same condition still active, waiting for a fresh signal'); bump(instr, 'signal'); continue; }
+          const bbpBlock = bbpGateBlock(instr, tradeTargets);
+          if (bbpBlock) { prog(s.id, 77, bbpBlock); bump(instr, 'bbp'); continue; }
           gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });
           prog(s.id, 90, 'Placing entry');
 
@@ -4751,6 +4782,7 @@ window.createAISmartTrading = function (suffix) {
           if (b.limit > 0) p.push(b.limit + ' trade-limit-reached');
           if (b.confirm > 0) p.push(b.confirm + ' missing-both-confirm');
           if (b.signal > 0) p.push(b.signal + ' no-signal');
+          if (b.bbp > 0) p.push(b.bbp + ' bbp-gate-wait');
           return p.length ? p.join(', ') : 'none';
         };
         const idxPart = fmt(skips.idx);
@@ -4876,6 +4908,68 @@ window.createAISmartTrading = function (suffix) {
     });
   }
 
+  /* Every distinct (indicatorId, settings) pair a single condition references -
+     primary line, indicator-vs-indicator compare side, chain legs and pane
+     conditions/moves - mirroring the legacy runner's _condIndSettings. */
+  function condIndSpecs(c) {
+    const out = [];
+    const seen = new Set();
+    const push = (id, settings) => {
+      if (!id) return;
+      const key = id + '|' + JSON.stringify(settings || {});
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({ id: id, settings: settings || {} });
+    };
+    if (!c) return out;
+    if (c.indId) push(c.indId, c.indSettings);
+    if (c.cmpType === 'indicator' && c.cmpIndId) push(c.cmpIndId, c.cmpSettings);
+    (c.chain || []).forEach(ch => {
+      if (!ch) return;
+      if (ch.indId) push(ch.indId, ch.indSettings);
+      if (ch.cmpType === 'indicator' && ch.cmpIndId) push(ch.cmpIndId, ch.cmpSettings);
+    });
+    if (c.paneCond && c.paneCond.indId) push(c.paneCond.indId, c.paneCond.indSettings || c.indSettings);
+    (c.paneConds || []).forEach(p => { if (p && p.indId) push(p.indId, p.indSettings || c.indSettings); });
+    if (c.paneMove && c.paneMove.indId) push(c.paneMove.indId, c.paneMove.indSettings);
+    (c.paneMoves || []).forEach(pm => { if (pm && pm.indId) push(pm.indId, pm.indSettings); });
+    return out;
+  }
+
+  /* Every distinct indicator a running strategy template references across its
+     entry / exit / entryExtra / exitExtra condition set, so "Open Chart" on a
+     Running Strategy / Running Trade deploys the actual indicator lines the
+     strategy evaluates - not just the AST indicator-filter overlays. A normal
+     running strategy used to open a bare chart whenever no Bull/Bear AST
+     filter was ticked, even though the strategy's own EMA/BB/trend lines were
+     the ones firing its entries. */
+  function overlaySpecFromStrategy(s) {
+    const out = [];
+    if (!s) return out;
+    const walk = (c) => {
+      if (!c) return;
+      if (Array.isArray(c)) { c.forEach(walk); return; }
+      condIndSpecs(c).forEach(p => pushOvl(out, p.id, p.settings));
+    };
+    walk(s.entry);
+    walk(s.exit);
+    (s.entryExtra || []).forEach(walk);
+    (s.exitExtra || []).forEach(walk);
+    return out;
+  }
+
+  /* The overlay set deployed for the active run: enabled AST indicator-filter
+     lines PLUS every running strategy's own template indicator lines (deduped).
+     Shared by the engine-tab "Open Chart" deploy and the ChartGrid snapshot so
+     both surfaces always paint the lines the strategy is actually evaluating. */
+  function runOverlaySpecs() {
+    const out = [];
+    const push = (w) => { if (w && w.id && !out.some(x => x.id === w.id && JSON.stringify(x.settings) === JSON.stringify(w.settings))) out.push(w); };
+    overlaySpecFromFilters(state.filters || {}).forEach(push);
+    ((state.filterMode === true) ? filterModeStrategies() : activeStrategies()).forEach(s => overlaySpecFromStrategy(s).forEach(push));
+    return out;
+  }
+
   function gridEntryTf() {
     const tfs = state.universal && state.universal.tfs;
     if (tfs && tfs['1min']) return '1min';
@@ -4890,12 +4984,14 @@ window.createAISmartTrading = function (suffix) {
      strategy evaluates. This mirrors ChartGrid's deployOverlays semantics:
      each wanted overlay is added once; instances already present with matching
      settings are never duplicated. Runs only after the requested symbol's
-     candles have painted (callers await openOptionChartBySid / loadChart first). */
-  function deployAstOverlays() {
+     candles have painted (callers await openOptionChartBySid / loadChart first).
+     `specs` defaults to the full active-run overlay set (AST filter lines +
+     every running strategy's own indicator lines). */
+  function deployAstOverlays(specs) {
     try {
-      const specs = overlaySpecFromFilters(state.filters || {});
+      const want = Array.isArray(specs) ? specs : runOverlaySpecs();
       const IC = window.IndChart;
-      if (!specs.length || !IC || typeof IC.addIndicator !== 'function' || !IC.IND) return;
+      if (!want.length || !IC || typeof IC.addIndicator !== 'function' || !IC.IND) return;
       let cur = [];
       try { cur = (typeof IC.getIndicators === 'function') ? IC.getIndicators() : []; } catch (e) { cur = []; }
       const match = (it, w) => {
@@ -4904,15 +5000,26 @@ window.createAISmartTrading = function (suffix) {
         for (const k in ws) { if (Object.prototype.hasOwnProperty.call(ws, k) && st[k] !== ws[k]) return false; }
         return true;
       };
-      specs.forEach(w => {
+      want.forEach(w => {
         for (let i = 0; i < cur.length; i++) { if (match(cur[i], w)) return; }
         try { IC.addIndicator(w.id, w.settings || {}); } catch (e) {}
       });
     } catch (e) {}
   }
-  function deployAstOverlaysAfter(promise) {
-    if (promise && typeof promise.then === 'function') { promise.then(deployAstOverlays, deployAstOverlays); }
-    else setTimeout(deployAstOverlays, 350);
+  function deployAstOverlaysAfter(promise, specs) {
+    if (promise && typeof promise.then === 'function') { promise.then(() => deployAstOverlays(specs), () => deployAstOverlays(specs)); }
+    else setTimeout(() => deployAstOverlays(specs), 350);
+  }
+
+  /* Overlay specs for opening THIS strategy's chart: the enabled AST
+     indicator-filter lines plus the strategy's own template indicator lines
+     (deduped), so the chart always shows what actually fires its entries. */
+  function specsForOpenChart(s) {
+    const out = [];
+    const push = (w) => { if (w && w.id && !out.some(x => x.id === w.id && JSON.stringify(x.settings) === JSON.stringify(w.settings))) out.push(w); };
+    overlaySpecFromFilters(state.filters || {}).forEach(push);
+    overlaySpecFromStrategy(s).forEach(push);
+    return out;
   }
 
   /* Grid STRATEGY RUNNING cards mirror the Paper Trade engine tab's running
@@ -4983,7 +5090,7 @@ window.createAISmartTrading = function (suffix) {
       cards: cards,
       positions: pos,
       events: _gridEvents.slice(),
-      overlays: overlaySpecFromFilters(state.filters || {}),
+      overlays: runOverlaySpecs(),
       entryTf: gridEntryTf(),
       mtf: !!(state.universal && state.universal.mtfConfirm),
       fast: !!(state.fastData && window.FastLive && window.FastLive.enabled)
@@ -5014,7 +5121,7 @@ window.createAISmartTrading = function (suffix) {
      an idle AST tab never consumes the shared Dhan chart rate-limit budget. */
   function refreshNiftyStatus() {
     if (state.enabled !== true) return;
-    niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); _lastNiftyDir = niftyPickDir(b); } });
+    niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); return refreshConfirmedNifty(b); } }).catch(() => {});
   }
 
   /* ---------------- log ---------------- */
@@ -5527,43 +5634,6 @@ window.createAISmartTrading = function (suffix) {
   }
 
   /* ---------------- UI sync ---------------- */
-  function syncNiftyBiasUI() {
-    [['astNiftyEntryEnabled', 'astNiftyEntryDir', 'astNiftyEntryZone'], ['astNiftyExitEnabled', 'astNiftyExitDir', 'astNiftyExitZone']].forEach(g => {
-      const enEl = $id(g[0]), dirEl = $id(g[1]), zoneEl = $id(g[2]);
-      const on = !!(enEl && enEl.checked);
-      [dirEl, zoneEl].forEach(el => { if (el) { el.disabled = !on; el.style.opacity = on ? '1' : '0.5'; } });
-    });
-  }
-
-  function readNiftyBiasUI() {
-    const readGate = (enId, dirId, zoneId) => {
-      const enEl = $id(enId), dirEl = $id(dirId), zoneEl = $id(zoneId);
-      const zone = zoneEl ? zoneEl.value : 'above_upper';
-      return {
-        enabled: !!(enEl && enEl.checked),
-        dir: (dirEl && dirEl.value === 'bearish') ? 'bearish' : 'bullish',
-        zone: NIFTY_ZONE_LABEL[zone] ? zone : 'above_upper'
-      };
-    };
-    state.niftyEntry = readGate('astNiftyEntryEnabled', 'astNiftyEntryDir', 'astNiftyEntryZone');
-    state.niftyExit = readGate('astNiftyExitEnabled', 'astNiftyExitDir', 'astNiftyExitZone');
-    syncNiftyBiasUI();
-    save();
-    const ge = state.niftyEntry, gx = state.niftyExit;
-    log('NIFTY entry gate ' + (ge.enabled ? (ge.dir + ' + ' + (NIFTY_ZONE_LABEL[ge.zone] || ge.zone)) : 'off') +
-      ' \u00b7 exit gate ' + (gx.enabled ? (gx.dir + ' + ' + (NIFTY_ZONE_LABEL[gx.zone] || gx.zone)) : 'off'), 'ok');
-  }
-
-  function applyNiftyBiasToUI() {
-    const applyGate = (enId, dirId, zoneId, g) => {
-      const enEl = $id(enId); if (enEl) enEl.checked = !!g.enabled;
-      const dirEl = $id(dirId); if (dirEl) dirEl.value = (g.dir === 'bearish') ? 'bearish' : 'bullish';
-      const zoneEl = $id(zoneId); if (zoneEl) zoneEl.value = NIFTY_ZONE_LABEL[g.zone] ? g.zone : 'above_upper';
-    };
-    applyGate('astNiftyEntryEnabled', 'astNiftyEntryDir', 'astNiftyEntryZone', state.niftyEntry || (state.niftyEntry = { enabled: false, dir: 'bullish', zone: 'above_upper' }));
-    applyGate('astNiftyExitEnabled', 'astNiftyExitDir', 'astNiftyExitZone', state.niftyExit || (state.niftyExit = { enabled: false, dir: 'bearish', zone: 'below_lower' }));
-    syncNiftyBiasUI();
-  }
 
   function applyUniversalToUI() {
     const u = state.universal;
@@ -5651,7 +5721,6 @@ window.createAISmartTrading = function (suffix) {
     applyMoversToUI();
     applyNiftyTrendToUI();
     applySimToUI();
-    applyNiftyBiasToUI();
     applyModeToUI();
     const stBtn = $id('astStrikesToggle');
     if (stBtn) {
@@ -7097,7 +7166,7 @@ window.createAISmartTrading = function (suffix) {
       if (typeof setChartTf === 'function' && s.tf) setChartTf(s.tf);
       if (typeof openOptionChartBySid === 'function') {
         const p = openOptionChartBySid(sym.id, sym.exch, sym.inst, sym.name, sym.ocId, sym.ocExch);
-        deployAstOverlaysAfter(p);
+        deployAstOverlaysAfter(p, specsForOpenChart(s));
         log('Opened running-trade chart for "' + s.name + '" on ' + (sym.name || sym.id), 'ok');
         return;
       }
@@ -7111,7 +7180,7 @@ window.createAISmartTrading = function (suffix) {
     let _p = null;
     if (typeof onSymbolChange === 'function') { try { _p = onSymbolChange(); } catch (e) { _p = null; } }
     if (typeof activateTab === 'function') activateTab('chart');
-    deployAstOverlaysAfter(_p);
+    deployAstOverlaysAfter(_p, specsForOpenChart(s));
     log('Opened chart for "' + s.name + '"' + (sym ? ' (' + (sym.name || sym.id) + ')' : ''), 'ok');
   }
 
@@ -7234,8 +7303,6 @@ window.createAISmartTrading = function (suffix) {
       groups: (state.groups || []).slice(),
       filters: JSON.parse(JSON.stringify(state.filters)),
       movers: JSON.parse(JSON.stringify(state.movers)),
-      niftyEntry: JSON.parse(JSON.stringify(state.niftyEntry)),
-      niftyExit: JSON.parse(JSON.stringify(state.niftyExit)),
       niftyTf: _niftyTf,
       commodity: state.commodity ? JSON.parse(JSON.stringify(state.commodity)) : { enabled: false, sids: [] },
       symbols: experimentSymbols(),
@@ -7290,8 +7357,6 @@ window.createAISmartTrading = function (suffix) {
     if (Array.isArray(s.groups) && s.groups.length) state.groups = s.groups.slice();
     if (s.filters) state.filters = Object.assign(state.filters || {}, JSON.parse(JSON.stringify(s.filters)));
     if (s.movers) state.movers = Object.assign(state.movers || {}, JSON.parse(JSON.stringify(s.movers)));
-    if (s.niftyEntry) state.niftyEntry = Object.assign(state.niftyEntry || {}, JSON.parse(JSON.stringify(s.niftyEntry)));
-    if (s.niftyExit) state.niftyExit = Object.assign(state.niftyExit || {}, JSON.parse(JSON.stringify(s.niftyExit)));
     if (s.niftyTf) setNiftyTf(s.niftyTf);
     if (s.commodity) state.commodity = Object.assign({ enabled: false, sids: [] }, JSON.parse(JSON.stringify(s.commodity)));
     if (typeof s.allInOne === 'boolean') state.allInOne = s.allInOne;
@@ -7395,7 +7460,6 @@ window.createAISmartTrading = function (suffix) {
       }
       readFiltersUI();
     },
-    onNiftyBiasInput() { readNiftyBiasUI(); },
     setNiftyTf,
     onModeInput() { readModeUI(); },
     addMoverIndex,
@@ -7653,6 +7717,9 @@ window.createAISmartTrading = function (suffix) {
     populateMoversIndicesUI();
     applyUniversalToUI();
     syncNiftyTfUI();
+    if (window.NiftyBbpAlert) {
+      NiftyBbpAlert.attach({ pfx: 'ast', symbol: NIFTY_IDX, tfGet: function () { return _niftyTf; }, log: log });
+    }
     renderTemplateSelect();
     applyCommodityToUI();
     applyAllInOneToUI();

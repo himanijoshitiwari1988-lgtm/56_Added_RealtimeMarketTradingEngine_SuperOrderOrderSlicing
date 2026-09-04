@@ -919,6 +919,29 @@ window.createAIPaperTrade = function (suffix) {
     if (count > 0) log('Sent ' + count + ' strategy(s) to the AI Smart Trading Engine Selected Strategies', 'ok');
   }
 
+  /* NSE cash / F&O session check (09:15 - 15:30 IST, Mon-Fri) on the client
+     clock. Mirrors the AI Smart engine's marketSessionOpen() so this engine's
+     tick never opens a NEW trade after the day's market has closed (off-hours
+     auto entries skew the day's P&L statistics). Exits stay unaffected - the
+     gate only blocks fresh entries. */
+  function nseMarketSessionOpen() {
+    const now = new Date(Date.now() + 5.5 * 3600 * 1000);
+    const day = now.getUTCDay();
+    if (day === 0 || day === 6) return false;
+    const minute = now.getUTCHours() * 60 + now.getUTCMinutes();
+    return minute >= 555 && minute < 930;
+  }
+  /* The synthetic market-off simulation stream (SIM / 900001) is exempt - its
+     whole purpose is keeping a live feed trading while the market is closed. */
+  function isSimTradedSymbol(symbol) {
+    if (!symbol) return false;
+    if (symbol.sim === true) return true;
+    if (symbol.id !== undefined && Number(symbol.id) === 900001) return true;
+    const nm = String(symbol.name || '').toUpperCase();
+    const ex = String(symbol.exch || symbol.ocExch || '').toUpperCase();
+    return nm.indexOf('SIM') === 0 || ex === 'SIM';
+  }
+
   /* Per-day trade budget for the AI Smart Trader, mirroring the engine's
      Max trades / AI auto trades counters. Reset on a new IST day. */
   function resetTradeCountsIfNewDay() {
@@ -1053,6 +1076,14 @@ window.createAIPaperTrade = function (suffix) {
         if (!evalEntry(st, candles, ai, bias)) { prog(st.key, 70, 'Waiting entry signal'); continue; }
         const side = 'BUY'; // buy-only engine: the AI analysis still detects the bearish/bullish trend, but every executed trade is BUY
         if (px == null) { prog(st.key, 75, 'Blocked: no live price'); continue; }
+        /* NSE market-hours gate: no NEW auto entry while the market is closed
+           (09:15-15:30 IST). Blocks off-hours entries that would land on the
+           day's P&L statistics after the session ended. */
+        const sym = (instr && (instr.symbol || instr.underlying)) || null;
+        if (sym && !isSimTradedSymbol(sym) && !nseMarketSessionOpen()) {
+          prog(st.key, 78, 'Blocked: NSE market closed (09:15-15:30 IST) - no new entries');
+          continue;
+        }
         prog(st.key, 90, 'Placing entry');
         /* Close All ran while this poll was evaluating: abort before any fresh
            entry can be placed. */

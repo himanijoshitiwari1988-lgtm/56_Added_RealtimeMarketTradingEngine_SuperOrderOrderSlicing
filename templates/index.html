@@ -585,6 +585,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
         <button class="tab-btn" data-tab="strategies" onclick="switchTab('strategies', this)">Strategies</button>
         <button class="tab-btn" data-tab="monitor" onclick="switchTab('monitor', this)">Strategy Monitor</button>
         <button class="tab-btn" data-tab="papertrade" onclick="switchTab('papertrade', this)">Paper Trade</button>
+        <button class="tab-btn" data-tab="tradestats" onclick="switchTab('tradestats', this)" title="Executed-trades report across every paper engine — win rate, P&L, charges, max drawdown, charts & best trading hours">Trade Stats</button>
         <button class="tab-btn" data-tab="account" onclick="switchTab('account', this);loadAccount()">Account</button>
         <button class="tab-btn" data-tab="autoexperiment" onclick="switchTab('autoexperiment', this)">Auto Experiment</button>
         <button class="tab-btn" data-tab="indextrend" onclick="switchTab('indextrend', this)">Index Trend</button>
@@ -998,6 +999,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
               <div style="flex:1;min-width:280px">
                 <div style="font-size:10px;color:#66ccff;font-weight:700;margin:4px 0 2px">Running Strategies / Indicator filter based trades</div>
+                <div id="ptRunCapitalBar" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;font-size:9px;padding:3px 7px;margin:2px 0 4px;border:1px solid #3d3d7e;border-radius:3px;background:#12122a"></div>
                 <div id="ptRunStrategies" style="max-height:220px;overflow-y:auto"></div>
               </div>
               <div style="flex:1;min-width:280px">
@@ -1139,44 +1141,67 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <span id="astNiftyTfLabel" style="font-size:8px;color:#666">5min ensemble trend, refreshed at most once a minute.</span>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
-            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Trade entry:</b></div>
-            <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astNiftyEntryEnabled" onchange="AISmartTrading.onNiftyBiasInput()" style="accent-color:#ffd700"> Execute trade if NIFTY is</label>
-            <select id="astNiftyEntryDir" onchange="AISmartTrading.onNiftyBiasInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-              <option value="bullish">Bullish</option>
-              <option value="bearish">Bearish</option>
-            </select>
-            <label style="font-size:9px;color:#888;margin:0 6px">and BB%B</label>
-            <select id="astNiftyEntryZone" onchange="AISmartTrading.onNiftyBiasInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-              <option value="overbought">Overbought</option>
-              <option value="oversold">Oversold</option>
-              <option value="above_upper">Above upper band</option>
-              <option value="upper_half">Upper half</option>
-              <option value="lower_half">Lower half</option>
-              <option value="below_lower">Below lower band</option>
-              <option value="inc_up">Increasing upward</option>
-              <option value="inc_down">Increasing downward</option>
-            </select>
-            <span id="astNiftyEntryStatus" style="font-size:9px;color:#ffd700"></span>
+            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#00d4aa">BB%b Alert:</b></div>
+            <span id="astBbpLive" title="NIFTY 50 Bollinger %B (current sample)" style="font-size:9px;font-weight:700;color:#ffb300;font-variant-numeric:tabular-nums;background:#1f1a2b;border:1px solid #4a3a10;border-radius:3px;padding:2px 7px">BB%b --</span>
+            <label style="font-size:9px;color:#66ccff;margin-left:8px;display:flex;align-items:center;gap:3px;cursor:pointer" title="BB%b gate ON = naye entries tabhi lagegi jab set BB%b alert signal meet ho (BULL CE -> CE entries, BEAR PE -> PE entries). OFF = engine normally trades."><input type="checkbox" id="astBbpEnabled" onchange="NiftyBbpAlert.setEnabled('ast',this.checked)"> Gate</label>
+            <span id="astBbpStatus" style="font-size:8px;color:#777;margin-left:8px"></span>
+            <span style="flex:1"></span>
+            <button class="btn-action" id="astBbpAlertBtn" onclick="NiftyBbpAlert.openEditor('ast')" style="padding:2px 10px;font-size:9px;width:auto;margin:0;color:#00d4aa">hide alerts</button>
+            <button class="btn-action" id="astBbpPaneBtn" onclick="NiftyBbpAlert.togglePane('ast')" style="padding:2px 10px;font-size:9px;width:auto;margin:0 0 0 6px">BB%b pane</button>
           </div>
-          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
-            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Trade exit:</b></div>
-            <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astNiftyExitEnabled" onchange="AISmartTrading.onNiftyBiasInput()" style="accent-color:#ff9800"> Cut the trade if NIFTY is</label>
-            <select id="astNiftyExitDir" onchange="AISmartTrading.onNiftyBiasInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-              <option value="bullish">Bullish</option>
-              <option value="bearish">Bearish</option>
-            </select>
-            <label style="font-size:9px;color:#888;margin:0 6px">and BB%B</label>
-            <select id="astNiftyExitZone" onchange="AISmartTrading.onNiftyBiasInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-              <option value="overbought">Overbought</option>
-              <option value="oversold">Oversold</option>
-              <option value="above_upper">Above upper band</option>
-              <option value="upper_half">Upper half</option>
-              <option value="lower_half">Lower half</option>
-              <option value="below_lower">Below lower band</option>
-              <option value="inc_up">Increasing upward</option>
-              <option value="inc_down">Increasing downward</option>
-            </select>
-            <span id="astNiftyExitStatus" style="font-size:9px;color:#ff9800"></span>
+          <div id="astBbpAlertBox" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;align-items:flex-start">
+            <div id="astBbpBullWrap" style="border:1px solid #00d4aa;border-radius:3px;padding:4px 6px">
+              <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+                <input type="checkbox" id="astBbpBullEn" onchange="NiftyBbpAlert.editDraft('ast','bull','enabled',this.checked)" style="width:12px;height:12px;accent-color:#00d4aa">
+                <label style="font-size:10px;font-weight:700;color:#00d4aa;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('astBbpBullEn');c.checked=!c.checked;NiftyBbpAlert.editDraft('ast','bull','enabled',c.checked)">BULL CE</label>
+                <span style="font-size:9px;color:#888;white-space:nowrap">when BB%b</span>
+                <select id="astBbpBullCond" onchange="NiftyBbpAlert.editDraft('ast','bull','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="crossed_above">crossed above</option>
+                  <option value="crossed_below">crossed below</option>
+                </select>
+                <input type="number" id="astBbpBullVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editDraft('ast','bull','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                <span style="font-size:9px;color:#888">-&gt; trade</span>
+                <select id="astBbpBullSide" onchange="NiftyBbpAlert.editDraft('ast','bull','side',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="CE">BUY Bullish CE</option>
+                  <option value="PE">BUY Bearish PE</option>
+                </select>
+              </div>
+            </div>
+            <div id="astBbpBearWrap" style="border:1px solid #ff4d6a;border-radius:3px;padding:4px 6px">
+              <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+                <input type="checkbox" id="astBbpBearEn" onchange="NiftyBbpAlert.editDraft('ast','bear','enabled',this.checked)" style="width:12px;height:12px;accent-color:#ff4d6a">
+                <label style="font-size:10px;font-weight:700;color:#ff4d6a;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('astBbpBearEn');c.checked=!c.checked;NiftyBbpAlert.editDraft('ast','bear','enabled',c.checked)">BEAR PE</label>
+                <span style="font-size:9px;color:#888;white-space:nowrap">when BB%b</span>
+                <select id="astBbpBearCond" onchange="NiftyBbpAlert.editDraft('ast','bear','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="crossed_above">crossed above</option>
+                  <option value="crossed_below">crossed below</option>
+                </select>
+                <input type="number" id="astBbpBearVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editDraft('ast','bear','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                <span style="font-size:9px;color:#888">-&gt; trade</span>
+                <select id="astBbpBearSide" onchange="NiftyBbpAlert.editDraft('ast','bear','side',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="PE">BUY Bearish PE</option>
+                  <option value="CE">BUY Bullish CE</option>
+                </select>
+              </div>
+            </div>
+            <div style="min-width:200px;flex:1">
+              <div id="astBbpDraftNote" style="font-size:8px;color:#888"></div>
+              <div style="margin-top:5px;display:flex;gap:6px;align-items:center">
+                <button class="btn-action" onclick="NiftyBbpAlert.arm('ast')" style="padding:3px 10px;font-size:9px;width:auto;margin:0;color:#ffd700">LOCK ALERT &amp; SET</button>
+                <button class="btn-action" onclick="NiftyBbpAlert.clearAlert('ast')" style="padding:3px 10px;font-size:9px;width:auto;margin:0;color:#ff4d6a">REMOVE ALERT</button>
+                <button class="btn-action" onclick="NiftyBbpAlert.closeEditor('ast')" style="padding:3px 10px;font-size:9px;width:auto;margin:0">Close</button>
+                <span style="font-size:8px;color:#666">Enabling a row and pressing SET arms it; fires when BB%b crosses the value on a fresh NIFTY sample.</span>
+              </div>
+            </div>
+          </div>
+          <div id="astBbpPaneWrap" style="display:none;margin-top:6px;border:1px solid #2d2d50;border-radius:3px;background:#0b0b1a;padding:4px 6px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:8px;color:#888">NIFTY BB%b pane</span>
+              <span id="astBbpPaneTf" style="font-size:8px;color:#ffb300"></span>
+              <span style="flex:1"></span>
+              <a href="javascript:void(0)" onclick="NiftyBbpAlert.paneRefresh('ast')" style="font-size:8px;color:#00d4aa">refresh</a>
+            </div>
+            <div id="astBbpPane" style="width:100%;height:110px;margin-top:2px"></div>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px">
             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Strike:</b></div>
@@ -1602,6 +1627,130 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <div id="ptCgStatus" style="font-size:9px;color:#888;padding:2px 2px 0"></div>
         </div>
       </div>
+      <div class="tab-content" id="tab-tradestats">
+        <style>
+          .ts-wrap{display:flex;flex-direction:column;gap:8px;padding:10px;overflow-y:auto;min-height:0;flex:1}
+          .ts-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+          .ts-chip{font-size:10px;color:#d0d0d0;background:#0e0e24;border:1px solid #2d2d50;border-radius:3px;padding:3px 8px;cursor:pointer;font-family:inherit}
+          .ts-chip:hover{border-color:#00d4aa;background:#12122a}
+          .ts-chart{flex:1;min-width:270px;background:#0e0e24;border:1px solid #1e1e40;border-radius:4px;padding:8px;position:relative}
+          .ts-chart-title{font-size:10px;color:#66ccff;font-weight:700;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px}
+          .ts-chart-body{position:relative;height:175px}
+          .ts-empt{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;color:#666;font-size:10px;text-align:center;padding:0 10px}
+          .ts-table-wrap{max-height:300px;overflow:auto;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a}
+          table.ts-table{width:100%;border-collapse:collapse;font-size:10px;background:#0a0a18}
+          .ts-table th{background:#12122a;color:#888;padding:5px 7px;text-align:left;border-bottom:1px solid #1e1e40;position:sticky;top:0;white-space:nowrap;font-weight:600;z-index:1}
+          .ts-table td{padding:4px 7px;text-align:left;border-bottom:1px solid #111130;white-space:nowrap;color:#d0d0d0}
+          .ts-table tbody tr:hover td{background:#1a1a35}
+          .ts-table .green{color:#00d4aa}
+          .ts-table .red{color:#ef5350}
+        </style>
+        <div class="ts-wrap">
+          <div class="ts-toolbar">
+            <h3 style="font-size:12px;color:#00d4aa;text-transform:uppercase;margin:0">Executed Trades Report</h3>
+            <span style="font-size:9px;color:#666">Aggregates every executed paper trade from all engines (AI Smart base, Pooled Runner, Smart NTrader and each Paper tab). Net basis when charges are banked.</span>
+            <span style="margin-left:auto"></span>
+            <label style="font-size:10px;color:#888">Engine
+              <select id="tsEngine" style="min-width:130px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px"></select>
+            </label>
+            <label style="font-size:10px;color:#888" title="Split executed trades between the Indicator-filters run mode (its single synthetic 'all together' strategy) and normal saved-strategy trades">Mode
+              <select id="tsMode" style="min-width:150px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
+                <option value="" selected>All trades</option>
+                <option value="filter">Indicator-filter mode</option>
+                <option value="strategy">Strategy mode</option>
+              </select>
+            </label>
+            <button class="btn-action" id="tsRefresh" style="width:auto;padding:3px 12px;margin:0;font-size:10px">Refresh</button>
+            <span id="tsStatus" style="font-size:9px;color:#888"></span>
+          </div>
+
+          <div id="tsChips" style="display:flex;gap:5px;flex-wrap:wrap;align-items:center"></div>
+
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;border:1px solid #1e1e40;border-radius:4px;padding:6px 8px;background:#0e0e24">
+            <label style="font-size:10px;color:#00d4aa;font-weight:700">Period</label>
+            <select id="tsRange" style="min-width:150px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:10px">
+              <option value="1h">Last 1 hour</option>
+              <option value="today">Today</option>
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="6m">Last 6 months</option>
+              <option value="year">This year</option>
+              <option value="all" selected>All time</option>
+            </select>
+            <span id="tsRangeLabel" style="font-size:10px;color:#888"></span>
+            <span style="flex:1"></span>
+            <button class="btn-action" id="tsExportCsv" style="width:auto;padding:3px 10px;margin:0;font-size:10px">Export CSV</button>
+          </div>
+
+          <div id="tsStats" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <div class="ts-chart">
+              <div class="ts-chart-title">Cumulative Net P&amp;L (equity curve)</div>
+              <div class="ts-chart-body"><canvas id="tsEquity"></canvas><div class="ts-empt" id="tsEquityEmpty" style="display:none"></div></div>
+            </div>
+            <div class="ts-chart">
+              <div class="ts-chart-title">Net P&amp;L distribution (per day / per trade)</div>
+              <div class="ts-chart-body"><canvas id="tsDist"></canvas><div class="ts-empt" id="tsDistEmpty" style="display:none"></div></div>
+            </div>
+          </div>
+
+          <div style="font-size:10px;color:#66ccff;font-weight:700;text-transform:uppercase;letter-spacing:0.5px">Executed Trades</div>
+          <div class="ts-table-wrap">
+            <table class="ts-table">
+              <thead><tr>
+                <th>Option</th><th>Qty</th><th>Entry → Exit</th><th>P&amp;L (net)</th>
+                <th>Charges (deducted)</th><th>Reason</th><th>Entry → Exit time</th>
+              </tr></thead>
+              <tbody id="tsBody"></tbody>
+            </table>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;border-top:1px solid #1e1e40;padding-top:6px">
+            <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:0">Strategy-wise breakdown</h3>
+            <span style="font-size:9px;color:#666">Per-strategy net P&amp;L for the period/mode above — the Indicator-filters run shows as its own strategy row; contribution = each strategy's share of the period's total net P&amp;L.</span>
+            <span style="font-size:9px;color:#888;margin-left:auto" id="tsStrategyNote"></span>
+          </div>
+          <div class="ts-table-wrap" style="max-height:230px">
+            <table class="ts-table">
+              <thead><tr>
+                <th>Strategy</th><th>Trades (W/L)</th><th>Win rate</th><th>Net P&amp;L</th>
+                <th>Avg trade</th><th>Charges</th><th>Contribution</th><th>Last trade</th>
+              </tr></thead>
+              <tbody id="tsStrategyBody"></tbody>
+            </table>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:4px;border-top:1px solid #1e1e40;padding-top:6px">
+            <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:0">Most Profitable Time of Day</h3>
+            <label style="font-size:9px;color:#888">Scope
+              <select id="tsInsightScope" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 5px;font-size:9px">
+                <option value="all" selected>All history</option>
+                <option value="30d">Last 30 days</option>
+                <option value="7d">Last 7 days</option>
+                <option value="today">Today</option>
+              </select>
+            </label>
+            <span id="tsInsightScopeNote" style="font-size:9px;color:#888"></span>
+            <span style="font-size:9px;color:#666;margin-left:auto">Trades grouped by the hour they were entered — the ★ row is the hour with the most profitable trades.</span>
+          </div>
+          <div id="tsInsightBest" style="font-size:10px;color:#d0d0d0;border:1px solid #0f3d33;background:#0b1c17;border-radius:4px;padding:6px 10px"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <div class="ts-chart">
+              <div class="ts-chart-title">Net P&amp;L by entry hour</div>
+              <div class="ts-chart-body"><canvas id="tsHour"></canvas><div class="ts-empt" id="tsHourEmpty" style="display:none"></div></div>
+            </div>
+            <div class="ts-chart">
+              <div class="ts-chart-title">Net P&amp;L by weekday</div>
+              <div class="ts-chart-body"><canvas id="tsWeek"></canvas><div class="ts-empt" id="tsWeekEmpty" style="display:none"></div></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;min-width:0">
+            <div style="flex:1;min-width:330px" id="tsHourTable"></div>
+            <div style="flex:1;min-width:330px" id="tsWeekTable"></div>
+          </div>
+        </div>
+      </div>
       <div class="tab-content" id="tab-autoexperiment">
         <div class="monitor-toolbar">
           <div class="monitor-toolbar-title">Auto Strategy Experiment Engine</div>
@@ -1725,44 +1874,67 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <span id="aeNiftyTfLabel" style="font-size:8px;color:#666">5min ensemble trend, refreshed at most once a minute.</span>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
-            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Trade entry:</b></div>
-            <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeNiftyEntryEnabled" onchange="AutoExperiment.onNiftyBiasInput()" style="accent-color:#ffd700"> Execute trade if NIFTY is</label>
-            <select id="aeNiftyEntryDir" onchange="AutoExperiment.onNiftyBiasInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-              <option value="bullish">Bullish</option>
-              <option value="bearish">Bearish</option>
-            </select>
-            <label style="font-size:9px;color:#888;margin:0 6px">and BB%B</label>
-            <select id="aeNiftyEntryZone" onchange="AutoExperiment.onNiftyBiasInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-              <option value="overbought">Overbought</option>
-              <option value="oversold">Oversold</option>
-              <option value="above_upper">Above upper band</option>
-              <option value="upper_half">Upper half</option>
-              <option value="lower_half">Lower half</option>
-              <option value="below_lower">Below lower band</option>
-              <option value="inc_up">Increasing upward</option>
-              <option value="inc_down">Increasing downward</option>
-            </select>
-            <span id="aeNiftyEntryStatus" style="font-size:9px;color:#ffd700"></span>
+            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#00d4aa">BB%b Alert:</b></div>
+            <span id="aeBbpLive" title="NIFTY 50 Bollinger %B (current sample)" style="font-size:9px;font-weight:700;color:#ffb300;font-variant-numeric:tabular-nums;background:#1f1a2b;border:1px solid #4a3a10;border-radius:3px;padding:2px 7px">BB%b --</span>
+            <label style="font-size:9px;color:#66ccff;margin-left:8px;display:flex;align-items:center;gap:3px;cursor:pointer" title="BB%b gate ON = naye entries tabhi lagegi jab set BB%b alert signal meet ho (BULL CE -> CE entries, BEAR PE -> PE entries). OFF = engine normally trades."><input type="checkbox" id="aeBbpEnabled" onchange="NiftyBbpAlert.setEnabled('ae',this.checked)"> Gate</label>
+            <span id="aeBbpStatus" style="font-size:8px;color:#777;margin-left:8px"></span>
+            <span style="flex:1"></span>
+            <button class="btn-action" onclick="NiftyBbpAlert.openEditor('ae')" style="padding:2px 10px;font-size:9px;width:auto;margin:0;color:#00d4aa">+ alert</button>
+            <button class="btn-action" id="aeBbpPaneBtn" onclick="NiftyBbpAlert.togglePane('ae')" style="padding:2px 10px;font-size:9px;width:auto;margin:0 0 0 6px">BB%b pane</button>
           </div>
-          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
-            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Trade exit:</b></div>
-            <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeNiftyExitEnabled" onchange="AutoExperiment.onNiftyBiasInput()" style="accent-color:#ff9800"> Cut the trade if NIFTY is</label>
-            <select id="aeNiftyExitDir" onchange="AutoExperiment.onNiftyBiasInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-              <option value="bullish">Bullish</option>
-              <option value="bearish">Bearish</option>
-            </select>
-            <label style="font-size:9px;color:#888;margin:0 6px">and BB%B</label>
-            <select id="aeNiftyExitZone" onchange="AutoExperiment.onNiftyBiasInput()" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
-              <option value="overbought">Overbought</option>
-              <option value="oversold">Oversold</option>
-              <option value="above_upper">Above upper band</option>
-              <option value="upper_half">Upper half</option>
-              <option value="lower_half">Lower half</option>
-              <option value="below_lower">Below lower band</option>
-              <option value="inc_up">Increasing upward</option>
-              <option value="inc_down">Increasing downward</option>
-            </select>
-            <span id="aeNiftyExitStatus" style="font-size:9px;color:#ff9800"></span>
+          <div id="aeBbpAlertBox" style="display:none;flex-wrap:wrap;gap:8px;margin-top:6px;align-items:flex-start">
+            <div id="aeBbpBullWrap" style="border:1px solid #00d4aa;border-radius:3px;padding:4px 6px">
+              <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+                <input type="checkbox" id="aeBbpBullEn" onchange="NiftyBbpAlert.editDraft('ae','bull','enabled',this.checked)" style="width:12px;height:12px;accent-color:#00d4aa">
+                <label style="font-size:10px;font-weight:700;color:#00d4aa;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('aeBbpBullEn');c.checked=!c.checked;NiftyBbpAlert.editDraft('ae','bull','enabled',c.checked)">BULL CE</label>
+                <span style="font-size:9px;color:#888;white-space:nowrap">when BB%b</span>
+                <select id="aeBbpBullCond" onchange="NiftyBbpAlert.editDraft('ae','bull','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="crossed_above">crossed above</option>
+                  <option value="crossed_below">crossed below</option>
+                </select>
+                <input type="number" id="aeBbpBullVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editDraft('ae','bull','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                <span style="font-size:9px;color:#888">-&gt; trade</span>
+                <select id="aeBbpBullSide" onchange="NiftyBbpAlert.editDraft('ae','bull','side',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="CE">BUY Bullish CE</option>
+                  <option value="PE">BUY Bearish PE</option>
+                </select>
+              </div>
+            </div>
+            <div id="aeBbpBearWrap" style="border:1px solid #ff4d6a;border-radius:3px;padding:4px 6px">
+              <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+                <input type="checkbox" id="aeBbpBearEn" onchange="NiftyBbpAlert.editDraft('ae','bear','enabled',this.checked)" style="width:12px;height:12px;accent-color:#ff4d6a">
+                <label style="font-size:10px;font-weight:700;color:#ff4d6a;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('aeBbpBearEn');c.checked=!c.checked;NiftyBbpAlert.editDraft('ae','bear','enabled',c.checked)">BEAR PE</label>
+                <span style="font-size:9px;color:#888;white-space:nowrap">when BB%b</span>
+                <select id="aeBbpBearCond" onchange="NiftyBbpAlert.editDraft('ae','bear','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="crossed_above">crossed above</option>
+                  <option value="crossed_below">crossed below</option>
+                </select>
+                <input type="number" id="aeBbpBearVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editDraft('ae','bear','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                <span style="font-size:9px;color:#888">-&gt; trade</span>
+                <select id="aeBbpBearSide" onchange="NiftyBbpAlert.editDraft('ae','bear','side',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="PE">BUY Bearish PE</option>
+                  <option value="CE">BUY Bullish CE</option>
+                </select>
+              </div>
+            </div>
+            <div style="min-width:200px;flex:1">
+              <div id="aeBbpDraftNote" style="font-size:8px;color:#888"></div>
+              <div style="margin-top:5px;display:flex;gap:6px;align-items:center">
+                <button class="btn-action" onclick="NiftyBbpAlert.arm('ae')" style="padding:3px 10px;font-size:9px;width:auto;margin:0;color:#ffd700">LOCK ALERT &amp; SET</button>
+                <button class="btn-action" onclick="NiftyBbpAlert.clearAlert('ae')" style="padding:3px 10px;font-size:9px;width:auto;margin:0;color:#ff4d6a">REMOVE ALERT</button>
+                <button class="btn-action" onclick="NiftyBbpAlert.closeEditor('ae')" style="padding:3px 10px;font-size:9px;width:auto;margin:0">Close</button>
+                <span style="font-size:8px;color:#666">Enabling a row and pressing SET arms it; fires when BB%b crosses the value on a fresh NIFTY sample.</span>
+              </div>
+            </div>
+          </div>
+          <div id="aeBbpPaneWrap" style="display:none;margin-top:6px;border:1px solid #2d2d50;border-radius:3px;background:#0b0b1a;padding:4px 6px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:8px;color:#888">NIFTY BB%b pane</span>
+              <span id="aeBbpPaneTf" style="font-size:8px;color:#ffb300"></span>
+              <span style="flex:1"></span>
+              <a href="javascript:void(0)" onclick="NiftyBbpAlert.paneRefresh('ae')" style="font-size:8px;color:#00d4aa">refresh</a>
+            </div>
+            <div id="aeBbpPane" style="width:100%;height:110px;margin-top:2px"></div>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px">
             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Strike:</b></div>
@@ -3078,6 +3250,7 @@ function switchTab(t, el){
   if(t==="simulator"){ if(typeof Simulator !== "undefined" && Simulator.onShow) Simulator.onShow(); }
   if(prevTab==="simulator" && prevTab !== t){ if(typeof Simulator !== "undefined" && Simulator.onHide) Simulator.onHide(); }
   if(t==="backup"){ if(window.BackupSys && typeof BackupSys.render === "function"){ try{ BackupSys.render(); }catch(e){} } }
+  if(t==="tradestats"){ if(window.TradeStats && typeof TradeStats.onShow === "function"){ try{ TradeStats.onShow(); }catch(e){} } }
   if(t==="chart"){
     if(IndChart.hasChart()){ IndChart.resize(); }
     else { loadChart(); }
@@ -6038,12 +6211,13 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/aitrail.js?v=2"></script>
 <script src="/static/aitrades.js?v=2"></script>
 <script src="/static/strategies.js?v=71"></script>
-<script src="/static/papertrade.js?v=32"></script>
+<script src="/static/trendconfirm.js?v=1"></script>
+<script src="/static/papertrade.js?v=33"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=134"></script>
+<script src="/static/autoexperiment.v13.js?v=138"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=140"></script>
+<script src="/static/aismart.js?v=145"></script>
 <script src="/static/paperrun.js?v=22"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6051,7 +6225,9 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=3"></script>
 <script src="/static/smart_ntrader.js?v=62"></script>
+<script src="/static/niftybbp_alert.js?v=5"></script>
 <script src="/static/chart_grid.js?v=9"></script>
+<script src="/static/tradestats.js?v=1"></script>
 <script src="/static/backup.js?v=2"></script>
 <script>
 /* Engine instantiation for the base tabs and every duplicated tab. The cloned

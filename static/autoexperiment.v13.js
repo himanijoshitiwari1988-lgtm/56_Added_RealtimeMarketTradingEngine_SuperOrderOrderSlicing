@@ -2477,9 +2477,6 @@ window.createAutoExperiment = function (suffix) {
       trendConfirm: false, // when ON the bullish/bearish backtest skips symbols whose own trend does not match the selected filter side; when OFF the backtest runs on the strategy's own bullish/bearish entry signal for every symbol
       allInOne: false, // "All indicators & filters together": entry fires ONLY when the strategy's own conditions AND every selected AST indicator filter pass together (strict AND, no N-of-M)
       groupByStrategy: true, // group results by strategy (one card per strategy across all backtested symbols)
-      filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullOit: false, bearOit: false, bullEma9_21: false, bearEma9_21: false, bullEma21_35: false, bearEma21_35: false, bullEma35_50: false, bearEma35_50: false, bullEma50_100: false, bearEma50_100: false, bullEma100_200: false, bearEma100_200: false, bullEma200_300: false, bearEma200_300: false, bullSt10_1_2: false, bearSt10_1_2: false, bullSt10_2_3: false, bearSt10_2_3: false, bullSt1CloseCrossAbove: false, bearSt1CloseCrossBelow: false, bullVwapCloseCrossAbove: false, bullMeetEma9_21: false, bullMeetEma21_35: false, bullMeetEma35_50: false, bullMeetEma50_100: false, bullMeetEma100_200: false, bullMeetEma200_300: false, bullMeetSt10_1_2: false, bullMeetSt10_2_3: false, bullMeetCloseSt: false, bullMeetCloseVwap: false, bullMeetPaneCross: false, bullMeetCross: false, bullMeetCloseBb: false, bullMeetClosePc: false, bearVwapCloseCrossBelow: false, bearMeetEma9_21: false, bearMeetEma21_35: false, bearMeetEma35_50: false, bearMeetEma50_100: false, bearMeetEma100_200: false, bearMeetEma200_300: false, bearMeetSt10_1_2: false, bearMeetSt10_2_3: false, bearMeetCloseSt: false, bearMeetCloseVwap: false, bearMeetPaneCross: false, bearMeetCross: false, bearMeetCloseBb: false, bearMeetClosePc: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false }, // Bullish/Bearish section masters + trend/cross/volume/fake-breakout/reversal/pane gates + per-side research-stream scopes
-      niftyEntry: { enabled: false, dir: 'bullish', zone: 'above_upper' }, // trade-entry NIFTY condition (execute only when NIFTY matches)
-      niftyExit: { enabled: false, dir: 'bearish', zone: 'below_lower' }, // trade-exit NIFTY condition (cut the trade when NIFTY matches)
       results: [],
       lastRun: null,
       lastResearchAt: null,
@@ -2603,20 +2600,6 @@ window.createAutoExperiment = function (suffix) {
         if (typeof s.filters[k] !== 'boolean') s.filters[k] = false;
       });
     }
-    if (s) {
-      const normGate = (g, dDir, dZone) => {
-        const out = { enabled: false, dir: dDir, zone: dZone };
-        if (g && typeof g === 'object') {
-          if (typeof g.enabled === 'boolean') out.enabled = g.enabled;
-          out.dir = (g.dir === 'bearish' || g.dir === 'bullish') ? g.dir : dDir;
-          if (['overbought', 'oversold', 'above_upper', 'upper_half', 'lower_half', 'below_lower', 'inc_up', 'inc_down'].indexOf(g.zone) >= 0) out.zone = g.zone;
-        }
-        return out;
-      };
-      s.niftyEntry = normGate(s.niftyEntry || s.niftyBias, 'bullish', 'above_upper');
-      s.niftyExit = normGate(s.niftyExit, 'bearish', 'below_lower');
-      delete s.niftyBias;
-    }
     /* Drop duplicate result cards persisted from earlier versions / runs so the
        created-strategies list never shows the same strategy twice. */
     if (s && Array.isArray(s.results) && s.results.length) {
@@ -2630,7 +2613,7 @@ window.createAutoExperiment = function (suffix) {
         enabled: state.enabled, runManual: state.runManual,
         universal: state.universal, strike: state.strike, runIn: state.runIn, tradeIn: state.tradeIn, premiumOnly: state.premiumOnly, groups: state.groups, symbols: state.symbols,
         movers: state.movers, filters: state.filters, results: state.results, lastRun: state.lastRun,
-        lastResearchAt: state.lastResearchAt, niftyEntry: state.niftyEntry, niftyExit: state.niftyExit, niftyTrend: state.niftyTrend, showPickedStrikes: state.showPickedStrikes,
+        lastResearchAt: state.lastResearchAt, niftyTrend: state.niftyTrend, showPickedStrikes: state.showPickedStrikes,
         autoSend: state.autoSend, groupByStrategy: !!state.groupByStrategy
       }));
     } catch (e) {}
@@ -3260,17 +3243,12 @@ window.createAutoExperiment = function (suffix) {
     if (s.filters) state.filters = Object.assign(state.filters || {}, JSON.parse(JSON.stringify(s.filters)));
     if (s.movers) state.movers = Object.assign(state.movers || {}, JSON.parse(JSON.stringify(s.movers)));
     if (s.niftyTrend) state.niftyTrend = Object.assign(state.niftyTrend || {}, JSON.parse(JSON.stringify(s.niftyTrend)));
-    if (s.niftyEntry) state.niftyEntry = Object.assign(state.niftyEntry || {}, JSON.parse(JSON.stringify(s.niftyEntry)));
-    if (s.niftyExit) state.niftyExit = Object.assign(state.niftyExit || {}, JSON.parse(JSON.stringify(s.niftyExit)));
     if (s.niftyTf && (s.niftyTf === '1min' || s.niftyTf === '5min' || s.niftyTf === 'both')) _niftyTf = s.niftyTf;
   }
 
-  /* ---- NIFTY market-bias gate (F&O stocks only) ----
-     Optional execution condition: when enabled, F&O stock trades only execute
-     when the NIFTY 50 5min trend direction AND its Bollinger %B zone match the
-     user's selection. When NIFTY is bullish only top-gainer F&O stocks trade;
-     when bearish only top-loser F&O stocks trade. Indices are never restricted
-     by this gate. NIFTY candles are cached for 60s to stay within rate limits. */
+  /* NIFTY 50 ensemble trend used by the live bias readout and the trend-
+     following F&O stock picker. Candles are cached for 60s to stay within
+     rate limits. */
   const NIFTY_IDX = { id: 13, exch: 'IDX_I', inst: 'INDEX', name: 'NIFTY 50' };
   /* Extra trend-confirmation indices used by the NIFTY ensemble: GIFT NIFTY
      (overnight/global NIFTY lead, voted like NIFTY itself) and INDIA VIX (fear
@@ -3301,6 +3279,70 @@ window.createAutoExperiment = function (suffix) {
     _trendScanAt = 0;
     _trendScanDir = null;
     _trendScanCache = null;
+  }
+
+  /* ---------------- NIFTY confirmation + hysteresis layer ----------------
+     `nb.dir` from the ensemble above flips on 1/5-min noise (plus GIFT/VIX
+     votes), which churns the trend-following F&O picks and the armed-direction
+     BB%b gate to the wrong side. This layer runs the shared TrendConfirm
+     machine: `nb.dir` is the CANDIDATE and it only becomes the live
+     `_lastNiftyDir` once it persists for the hold budget AND is backed by the
+     slower 15-min NIFTY regime, with an anti-oscillation cooldown between
+     flips. Every consumer (symbol picker, prune, BB%b gate row) sees the
+     CONFIRMED direction so a momentary EMA/candle flips can never switch the
+     experiment universe to the opposite side. */
+  let _niftyConfAE = null;
+  let _niftyHtfCacheAE = null; /* { at, dir } 15-min regime, 150s TTL */
+
+  function niftyConfirmedDirAE() {
+    return (_niftyConfAE && (_niftyConfAE.dir === 'BULL' || _niftyConfAE.dir === 'BEAR')) ? _niftyConfAE.dir : null;
+  }
+  function niftyConfirmedOperativeAE() {
+    const d = niftyConfirmedDirAE();
+    return d === 'BULL' ? 'bullish' : d === 'BEAR' ? 'bearish' : null;
+  }
+  /* Slow 15-min NIFTY regime (shared TrendConfirm.regime), own cache so the
+     coarse-tf fetch stays off the fast bias cache and out of Dhan's rate
+     budget. */
+  async function niftyHtfDirAE() {
+    if (!window.TrendConfirm) return null;
+    const now = Date.now();
+    if (_niftyHtfCacheAE && (now - _niftyHtfCacheAE.at) < 150000) return _niftyHtfCacheAE.dir;
+    const SE = window.StratEngine;
+    if (!SE || !SE.fetchCandlesFor) return _niftyHtfCacheAE ? _niftyHtfCacheAE.dir : null;
+    try {
+      const c = await SE.fetchCandlesFor(NIFTY_IDX, '15min', 7);
+      const rg = (c && window.TrendConfirm.regime) ? window.TrendConfirm.regime(c) : null;
+      const dir = (rg && rg.dir) ? rg.dir : null;
+      _niftyHtfCacheAE = { at: now, dir: dir };
+      return dir;
+    } catch (e) { return _niftyHtfCacheAE ? _niftyHtfCacheAE.dir : null; }
+  }
+  /* Step the machine with the raw ensemble dir and store the confirmed pick
+     into _lastNiftyDir. Returns the confirmed 'bullish'|'bearish'|null. */
+  async function refreshConfirmedAE(bias) {
+    const raw = (bias && bias.dir) ? bias.dir : null;
+    if (!window.TrendConfirm) { _lastNiftyDir = raw; return _lastNiftyDir; }
+    if (!_niftyConfAE) _niftyConfAE = window.TrendConfirm.create();
+    const fastL = raw === 'bullish' ? 'BULL' : raw === 'bearish' ? 'BEAR' : null;
+    const htf = await niftyHtfDirAE();
+    window.TrendConfirm.step(_niftyConfAE, fastL, htf, Date.now());
+    _lastNiftyDir = niftyConfirmedOperativeAE();
+    return _lastNiftyDir;
+  }
+  /* Confirmed-vs-raw marker for the AE status readout. */
+  function niftyConfirmHtmlAE() {
+    if (!window.TrendConfirm) return '';
+    const conf = _niftyConfAE;
+    if (!conf) return '';
+    const txt = conf.dir === 'BULL' ? '<span style="color:#00d4aa">BULL confirmed</span>' : conf.dir === 'BEAR' ? '<span style="color:#ef5350">BEAR confirmed</span>' : '<span style="color:#888">neutral</span>';
+    let pend = '';
+    if (conf.pending !== null) {
+      const ptxt = conf.pending === 'BULL' ? 'BULL' : conf.pending === 'BEAR' ? 'BEAR' : 'neutral';
+      const left = Math.max(0, Math.round(((conf.pendingSince + conf.pendingHold) - Date.now()) / 1000));
+      pend = ' &middot; <span style="color:#ffd700">pending ' + ptxt + ' ~' + left + 's</span>';
+    }
+    return ' &middot; <span style="font-size:9px">' + txt + pend + '</span>';
   }
 
   function emaSeries(values, period) {
@@ -3434,13 +3476,13 @@ window.createAutoExperiment = function (suffix) {
     return d > eps ? 1 : d < -eps ? -1 : 0;
   }
 
-  /* BB%B extreme-reversal state for the inc_up / inc_down NIFTY gates.
+  /* BB%B extreme-reversal state for the inc_up / inc_down %B readouts.
      inc_up fires when the %B line has touched the SESSION's (today's) oversold
      low and has since turned upward - a rebound off the day's oversold extreme.
      inc_down is the mirror image off the session's overbought high. Unlike the
      plain 1-bar slope, this only holds while the move genuinely started at a
      daily extreme and is still within a fresh bounce window, so a %B line
-     drifting up in the middle of its day range never trips the gate. */
+     drifting up in the middle of its day range never flags the state. */
   function niftyBbExtremeReversal(candles) {
     const n = candles.length;
     if (n < 22) return { inc_up: false, inc_down: false };
@@ -3500,8 +3542,8 @@ window.createAutoExperiment = function (suffix) {
   /* Session BB%B support/resistance: the min and max of the %B series across
      the current session's candles. `pctb` (the latest %B) is classified against
      this range into an overbought (near the session high) / oversold (near the
-     session low) state. The returned low/high are the support/resistance lines
-     the trade-entry / trade-exit gates compare against. */
+     session low) state. The returned low/high are the session support/
+     resistance lines surfaced by the NIFTY %B readout. */
   function sessionBbRange(candles) {
     const n = candles.length;
     if (!n) return { low: 0, high: 1, overbought: false, oversold: false };
@@ -3735,32 +3777,8 @@ window.createAutoExperiment = function (suffix) {
     return 0;
   }
 
-  /* BB%B gate matching. Overbought / Oversold compare %B against the session
-     support/resistance range (session BB%B high/low); the classic band zones
-     map to the standard %B thresholds. */
-  function niftyZoneAllowed(nifty, zone) {
-    if (!nifty || !zone) return true;
-    if (zone === 'overbought') return !!nifty.overbought;
-    if (zone === 'oversold') return !!nifty.oversold;
-    if (zone === 'inc_up') return !!nifty.bbIncUp;
-    if (zone === 'inc_down') return !!nifty.bbIncDown;
-    return nifty.zone === zone;
-  }
-
-  /* NIFTY gate decision: shared by the trade-entry and trade-exit gates. The
-     NIFTY ensemble trend is always evaluated on the engine's single timeframe
-     (_niftyTf). A gate only fires when it is enabled AND the trend matches the
-     chosen direction AND its BB%B state. */
-  async function niftyGateMet(g) {
-    const gate = g || {};
-    if (!gate.enabled) return false;
-    const nifty = await niftyBias(_niftyTf);
-    return !!(nifty && nifty.dir && nifty.dir === gate.dir && niftyZoneAllowed(nifty, gate.zone));
-  }
-
-  /* Beyond the NIFTY exit gate above, signal exits are disabled: open legs are
-     only closed by the trailing take-profit / take-profit protections in
-     checkAutoTargetSl (or by the NIFTY exit gate / a manual Stop/Close). */
+  /* Beyond signal exits: open legs are only closed by the trailing take-profit
+     / take-profit protections in checkAutoTargetSl (or a manual Stop/Close). */
 
   function _niftySummary(bias) {
     if (!bias || !bias.dir) return null;
@@ -3783,24 +3801,10 @@ window.createAutoExperiment = function (suffix) {
   async function updateNiftyBiasStatus(bias) {
     const sum = _niftySummary(bias);
     const sumEl = $id('aeNiftyStatus');
-    if (sumEl) sumEl.innerHTML = sum || '<span style="color:#666">waiting for NIFTY ' + _niftyTf + ' data&hellip;</span>';
-    const tfTxt = (t) => (t === 'both' ? '1m+5m' : t);
-    const paint = async (id, gate, label, action) => {
-      const el = $id(id);
-      if (!el) return;
-      let html = '';
-      if (gate.enabled) {
-        const gb = await niftyBias(_niftyTf);
-        if (!gb) html = '<span style="color:#ff9800">' + label + ': no data</span>';
-        else {
-          const ok = gb.dir === gate.dir && niftyZoneAllowed(gb, gate.zone);
-          html = '<span style="color:' + (ok ? '#00d4aa' : '#888') + '">' + label + ' [' + tfTxt(_niftyTf) + ' ' + (gate.dir === 'bullish' ? 'Bullish' : 'Bearish') + ' + ' + (NIFTY_ZONE_LABEL[gate.zone] || gate.zone) + '] ' + (ok ? '&rarr; ' + action : '&rarr; waiting') + '</span>';
-        }
-      }
-      el.innerHTML = html;
-    };
-    await paint('aeNiftyEntryStatus', state.niftyEntry || {}, 'Entry', 'allow entry');
-    await paint('aeNiftyExitStatus', state.niftyExit || {}, 'Exit', 'cut trade');
+    if (sumEl) sumEl.innerHTML = (sum || '<span style="color:#666">waiting for NIFTY ' + _niftyTf + ' data&hellip;</span>') + ' ' + niftyConfirmHtmlAE();
+    if (bias && isFinite(bias.pctb) && window.NiftyBbpAlert) {
+      NiftyBbpAlert.feed('ae', { pctb: bias.pctb, overall: bias.overall });
+    }
   }
 
   /* NIFTY ensemble-trend timeframe (1 min / 5 min). Switching invalidates the
@@ -3818,6 +3822,7 @@ window.createAutoExperiment = function (suffix) {
     _niftyTf = tf;
     localStorage.setItem(_NIFTY_TF_KEY, tf);
     delete _niftyBiasCache[tf];
+    if (window.NiftyBbpAlert) NiftyBbpAlert.reset('ae');
     syncNiftyTfUI();
     updateNiftyBiasStatus(null);
     niftyBias().then(b => { if (b) updateNiftyBiasStatus(b); });
@@ -4157,7 +4162,7 @@ window.createAutoExperiment = function (suffix) {
     let niftyDir = null;
     if (state.niftyTrend && state.niftyTrend.enabled) {
       const nb = await niftyBias();
-      if (nb) { _lastNiftyDir = nb.dir; niftyDir = nb.dir; }
+      if (nb) { await refreshConfirmedAE(nb); niftyDir = _lastNiftyDir; }
     }
     const syms = experimentSymbols(niftyDir);
     if (!syms.length) {
@@ -5134,7 +5139,40 @@ window.createAutoExperiment = function (suffix) {
        engine template they were created under are also routed to every paper
        trade tab linked to that template. */
     const astPayload = resultsToAstPayload(deduped);
-    if (autoSendOn && astPayload.length && window.AISmartTrading && AISmartTrading.importFromPaperTrade) {
+    let aeBbpReason = null;
+    if (autoSendOn && astPayload.length && window.NiftyBbpAlert) {
+      const gs = NiftyBbpAlert.gateStatus('ae');
+      if (gs && gs.master) {
+        if (gs.last == null) aeBbpReason = 'BB%b Gate ON: NIFTY BB%b sample pending';
+        else {
+          const armed = [];
+          if (gs.bull.enabled) armed.push('bull');
+          if (gs.bear.enabled) armed.push('bear');
+          const waitTxt = function (rk, row) {
+            return 'BB%b Gate ON: waiting ' + (rk === 'bear' ? 'BEAR PE' : 'BULL CE') + ' alert (' + (rk === 'bear' ? 'BB%b below ' : 'BB%b above ') + row.valueText + ', ab ' + gs.lastText + ')';
+          };
+          if (armed.length === 1) {
+            const rk = armed[0];
+            const row = (rk === 'bear') ? gs.bear : gs.bull;
+            if (!row.met) aeBbpReason = waitTxt(rk, row);
+          } else if (!armed.length) {
+            aeBbpReason = 'BB%b Gate ON: koi BB%b alert line LOCK/SET nahi hui - BULL CE ya BEAR PE line enable karke LOCK ALERT &amp; SET dabao';
+          } else {
+            const dir = _lastNiftyDir;
+            if (dir !== 'bullish' && dir !== 'bearish') aeBbpReason = 'BB%b Gate ON: NIFTY trend direction clear nahi (bullish/bearish pending)';
+            else {
+              const rk = (dir === 'bearish') ? 'bear' : 'bull';
+              const row = (rk === 'bear') ? gs.bear : gs.bull;
+              if (!row.met) aeBbpReason = waitTxt(rk, row);
+            }
+          }
+        }
+      }
+    }
+    if (aeBbpReason) {
+      log('Auto strategy sender: ' + aeBbpReason + ' - strategies abhi AI Smart / paper me nahi bheje gaye, BB%b alert signal ke baad hi send honge', 'warn');
+    }
+    if (autoSendOn && !aeBbpReason && astPayload.length && window.AISmartTrading && AISmartTrading.importFromPaperTrade) {
       try {
         const sent = AISmartTrading.importFromPaperTrade(astPayload);
         log('Auto strategy sender: sent ' + sent + ' created strategy(s) to AI Smart (paper trade)', 'ok');
@@ -5146,7 +5184,7 @@ window.createAutoExperiment = function (suffix) {
     /* Also land the created strategies in the Paper Trade tab's Bullish /
        Bearish strategy lists so they are always visible there. The lists
        de-duplicate by template key, so re-runs never pile up duplicates. */
-    if (autoSendOn && deduped.length && window.PaperStrategies && PaperStrategies.addFromAE) {
+    if (autoSendOn && !aeBbpReason && deduped.length && window.PaperStrategies && PaperStrategies.addFromAE) {
       try {
         const staged = PaperStrategies.addFromAE(deduped);
         if (staged) log('Auto strategy sender: added ' + staged + ' strategy(s) to the Paper Trade strategy lists', 'ok');
@@ -5154,7 +5192,7 @@ window.createAutoExperiment = function (suffix) {
         if (typeof console !== 'undefined' && console.error) console.error('autoSend staging failed', e);
       }
     }
-    if (autoSendOn && deduped.length && typeof PaperTabs !== 'undefined' && PaperTabs.receiveFromAE) {
+    if (autoSendOn && !aeBbpReason && deduped.length && typeof PaperTabs !== 'undefined' && PaperTabs.receiveFromAE) {
       try {
         const routed = PaperTabs.receiveFromAE(deduped);
         if (routed) log('Auto strategy sender: routed strategies to ' + routed + ' linked paper trade tab(s)', 'ok');
@@ -5530,16 +5568,13 @@ window.createAutoExperiment = function (suffix) {
      while the displayed reading refreshes on every poll. */
   function refreshNiftyStatus() {
     /* Only fetch NIFTY candles when a NIFTY-dependent feature is actually
-       active. With the engine off and no NIFTY trend / entry / exit gate
-       enabled, skip the fetch entirely so the AE poll never hits /api/candles
-       on its own (it shares the Dhan chart rate-limit budget with the AST
-       engine's live tick). */
+       active. With the engine off and no NIFTY trend enabled, skip the fetch
+       entirely so the AE poll never hits /api/candles on its own (it shares the
+       Dhan chart rate-limit budget with the AST engine's live tick). */
     const niftyOn = state.enabled === true ||
-      (state.niftyTrend && state.niftyTrend.enabled) ||
-      (state.niftyEntry && state.niftyEntry.enabled) ||
-      (state.niftyExit && state.niftyExit.enabled);
+      (state.niftyTrend && state.niftyTrend.enabled);
     if (!niftyOn) return;
-    niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); _lastNiftyDir = b.dir; } });
+    niftyBias().then(b => { if (b) { updateNiftyBiasStatus(b); return refreshConfirmedAE(b); } }).catch(() => {});
   }
 
   /* ---------------- log ---------------- */
@@ -6446,44 +6481,6 @@ window.createAutoExperiment = function (suffix) {
       '</span>').join('');
   }
 
-  function syncNiftyBiasUI() {
-    [['aeNiftyEntryEnabled', 'aeNiftyEntryDir', 'aeNiftyEntryZone'], ['aeNiftyExitEnabled', 'aeNiftyExitDir', 'aeNiftyExitZone']].forEach(g => {
-      const enEl = $id(g[0]), dirEl = $id(g[1]), zoneEl = $id(g[2]);
-      const on = !!(enEl && enEl.checked);
-      [dirEl, zoneEl].forEach(el => { if (el) { el.disabled = !on; el.style.opacity = on ? '1' : '0.5'; } });
-    });
-  }
-
-  function readNiftyBiasUI() {
-    const readGate = (enId, dirId, zoneId) => {
-      const enEl = $id(enId), dirEl = $id(dirId), zoneEl = $id(zoneId);
-      const zone = zoneEl ? zoneEl.value : 'above_upper';
-      return {
-        enabled: !!(enEl && enEl.checked),
-        dir: (dirEl && dirEl.value === 'bearish') ? 'bearish' : 'bullish',
-        zone: NIFTY_ZONE_LABEL[zone] ? zone : 'above_upper'
-      };
-    };
-    state.niftyEntry = readGate('aeNiftyEntryEnabled', 'aeNiftyEntryDir', 'aeNiftyEntryZone');
-    state.niftyExit = readGate('aeNiftyExitEnabled', 'aeNiftyExitDir', 'aeNiftyExitZone');
-    syncNiftyBiasUI();
-    save();
-    const ge = state.niftyEntry, gx = state.niftyExit;
-    log('NIFTY entry gate ' + (ge.enabled ? (ge.dir + ' + ' + (NIFTY_ZONE_LABEL[ge.zone] || ge.zone)) : 'off') +
-      ' \u00b7 exit gate ' + (gx.enabled ? (gx.dir + ' + ' + (NIFTY_ZONE_LABEL[gx.zone] || gx.zone)) : 'off'), 'ok');
-  }
-
-  function applyNiftyBiasToUI() {
-    const applyGate = (enId, dirId, zoneId, g) => {
-      const enEl = $id(enId); if (enEl) enEl.checked = !!g.enabled;
-      const dirEl = $id(dirId); if (dirEl) dirEl.value = (g.dir === 'bearish') ? 'bearish' : 'bullish';
-      const zoneEl = $id(zoneId); if (zoneEl) zoneEl.value = NIFTY_ZONE_LABEL[g.zone] ? g.zone : 'above_upper';
-    };
-    applyGate('aeNiftyEntryEnabled', 'aeNiftyEntryDir', 'aeNiftyEntryZone', state.niftyEntry || (state.niftyEntry = { enabled: false, dir: 'bullish', zone: 'above_upper' }));
-    applyGate('aeNiftyExitEnabled', 'aeNiftyExitDir', 'aeNiftyExitZone', state.niftyExit || (state.niftyExit = { enabled: false, dir: 'bearish', zone: 'below_lower' }));
-    syncNiftyBiasUI();
-  }
-
   function applyUniversalToUI() {
     const u = state.universal;
     const set = (id, v) => { const el = $id(id); if (el) el.value = v; };
@@ -6569,7 +6566,6 @@ window.createAutoExperiment = function (suffix) {
     applyMoversToUI();
     applyNiftyTrendToUI();
     applyAutoSendToUI();
-    applyNiftyBiasToUI();
     const stBtn = $id('aeStrikesToggle');
     if (stBtn) {
       stBtn.textContent = 'Picked Strikes: ' + (state.showPickedStrikes ? 'ON' : 'OFF');
@@ -7025,8 +7021,6 @@ window.createAutoExperiment = function (suffix) {
       filters: JSON.parse(JSON.stringify(state.filters)),
       movers: JSON.parse(JSON.stringify(state.movers)),
       niftyTrend: JSON.parse(JSON.stringify(state.niftyTrend)),
-      niftyEntry: JSON.parse(JSON.stringify(state.niftyEntry)),
-      niftyExit: JSON.parse(JSON.stringify(state.niftyExit)),
       niftyTf: _niftyTf,
       commodity: state.commodity ? JSON.parse(JSON.stringify(state.commodity)) : { enabled: false, sids: [] },
       symbols: (state.symbols || []).slice(),
@@ -7047,8 +7041,6 @@ window.createAutoExperiment = function (suffix) {
     if (s.filters) state.filters = Object.assign(state.filters || {}, JSON.parse(JSON.stringify(s.filters)));
     if (s.movers) state.movers = Object.assign(state.movers || {}, JSON.parse(JSON.stringify(s.movers)));
     if (s.niftyTrend) state.niftyTrend = Object.assign(state.niftyTrend || {}, JSON.parse(JSON.stringify(s.niftyTrend)));
-    if (s.niftyEntry) state.niftyEntry = Object.assign(state.niftyEntry || {}, JSON.parse(JSON.stringify(s.niftyEntry)));
-    if (s.niftyExit) state.niftyExit = Object.assign(state.niftyExit || {}, JSON.parse(JSON.stringify(s.niftyExit)));
     if (s.niftyTf) setNiftyTf(s.niftyTf);
     if (s.commodity) state.commodity = Object.assign({ enabled: false, sids: [] }, JSON.parse(JSON.stringify(s.commodity)));
     if (Array.isArray(s.symbols)) state.symbols = s.symbols.slice();
@@ -7343,9 +7335,6 @@ window.createAutoExperiment = function (suffix) {
       }
       readFiltersUI();
     },
-    onNiftyBiasInput() {
-      readNiftyBiasUI();
-    },
     setNiftyTf,
     addMoverIndex,
     removeMoverIndex,
@@ -7389,8 +7378,7 @@ window.createAutoExperiment = function (suffix) {
       aiTrailEngineFor,
       dropAiTrailEngine,
       applyFilters,
-      niftyBias,
-      niftyGateMet
+      niftyBias
     },
     sendToPaper() {
       if (!window.AISmartTrading || !AISmartTrading.importFromPaperTrade) {
@@ -7549,6 +7537,9 @@ window.createAutoExperiment = function (suffix) {
     populateMoversIndicesUI();
     applyUniversalToUI();
     syncNiftyTfUI();
+    if (window.NiftyBbpAlert) {
+      NiftyBbpAlert.attach({ pfx: 'ae', symbol: NIFTY_IDX, tfGet: function () { return _niftyTf; }, log: log });
+    }
     renderTemplateSelect();
     applyAutoSendToUI();
     syncDefaultTplUI();

@@ -207,6 +207,119 @@ window.createPaperRun = function (suffix) {
     return out;
   }
 
+  /* ---------------- required capital ---------------- */
+
+  /* AST's universal sizing settings (lots + optional manual lot-size override)
+     used for the capital readout, so the money shown always matches what the
+     engine would actually buy per entry. */
+  function astUniversalCapital() {
+    const st = aismartState();
+    const u = (st && st.universal) || {};
+    const lots = Math.max(1, Math.round(Number(u.lots) || 1));
+    const lotSizeOverride = (u.lotSize != null && Number(u.lotSize) > 0) ? Math.max(1, Math.round(Number(u.lotSize))) : null;
+    return { lots: lots, lotSizeOverride: lotSizeOverride };
+  }
+
+  /* The BASE paper engine (same one the AST engine pins every execution to).
+     Its lotSizeFor() resolves an option's exchange lot from its underlying. */
+  function astBaseEngine() {
+    if (window.TabEngines && window.TabEngines.papertrade && window.TabEngines.papertrade.papertrade) {
+      return window.TabEngines.papertrade.papertrade;
+    }
+    return (window.PaperTrade && window.PaperTrade.getState) ? window.PaperTrade : null;
+  }
+
+  /* Live premium of an option contract from the shared quote feed. */
+  function livePremiumForSid(sid) {
+    if (sid == null) return null;
+    const qm = (typeof clientQuotes !== 'undefined' && clientQuotes) ? clientQuotes : {};
+    const q = qm[String(sid)];
+    return (q && q.ltp != null) ? Number(q.ltp) : null;
+  }
+
+  /* Required capital for ONE picked option contract, mirroring the engine's own
+     sizing: qty = universal lots x (manual lot-size override or the underlying's
+     exchange lot); money = qty x premium (live quote, snapshot premium as the
+     fallback so the number still shows before the feed tick arrives). */
+  function strikeCapital(sid, optionName, snapshotPremium) {
+    const cap = astUniversalCapital();
+    const base = astBaseEngine();
+    let lotSize = cap.lotSizeOverride;
+    if (lotSize == null) {
+      lotSize = 1;
+      if (base && base.lotSizeFor) {
+        try { lotSize = Math.max(1, Math.round(Number(base.lotSizeFor({ name: optionName })) || 1)); }
+        catch (e) { lotSize = 1; }
+      }
+    }
+    const qty = Math.max(1, cap.lots) * Math.max(1, lotSize);
+    const live = livePremiumForSid(sid);
+    const premium = (live != null && live > 0) ? live
+      : ((snapshotPremium != null && Number(snapshotPremium) > 0) ? Number(snapshotPremium) : null);
+    const money = (premium != null && qty > 0) ? qty * premium : null;
+    return { lots: cap.lots, lotSize: lotSize, qty: qty, premium: premium, money: money };
+  }
+
+  /* The unique premium contracts the Running Strategies list shows. Because
+     every running AST strategy lists charts for the whole engine universe, the
+     same picked strike appears under several strategies - the grand total must
+     count each unique strike once, not once per strategy card. Resolved from the
+     same engine data the chart rows are built from (AISmartTrading
+     .pickedStrikesFor), so this is synchronous and needs no DOM probing. */
+  function runningStrikeSummary() {
+    const rows = [];
+    const seen = {};
+    if (!window.AISmartTrading || !AISmartTrading.pickedStrikesFor) return rows;
+    const list = runningStrategies();
+    for (const s of list) {
+      if (s.engine !== 'ast') continue;
+      const syms = strategySymbols(s);
+      for (const sym of syms) {
+        if (!sym || sym.id == null) continue;
+        let rec = null;
+        try { rec = AISmartTrading.pickedStrikesFor(sym); } catch (e) { rec = null; }
+        if (!rec || !rec.contracts || !rec.contracts.length) continue;
+        for (const c of rec.contracts) {
+          if (c.sid == null) continue;
+          const sid = Number(c.sid);
+          if (seen[sid]) continue;
+          seen[sid] = 1;
+          const optionName = (sym.name || 'Symbol ' + sym.id) + ' ' + c.strike + ' ' + c.optionType;
+          const cap = strikeCapital(sid, optionName, c.premium);
+          rows.push({
+            sid: sid,
+            name: optionName,
+            strike: c.strike,
+            optionType: c.optionType,
+            lots: cap.lots, lotSize: cap.lotSize, qty: cap.qty,
+            premium: cap.premium, money: cap.money
+          });
+        }
+      }
+    }
+    return rows;
+  }
+
+  function capitalBarHTML() {
+    const rows = runningStrikeSummary();
+    if (!rows.length) return '';
+    let total = 0, priced = 0;
+    const tip = [];
+    rows.forEach(r => {
+      if (r.money != null) { total += r.money; priced++; }
+      tip.push(r.name + ' :: ' + r.qty + ' qty (' + r.lots + ' lots x ' + r.lotSize + ') x ' +
+        (r.premium != null ? fmt2(r.premium) : '--') + (r.money != null ? ' = ' + fmtMoney(r.money) : ''));
+    });
+    return '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">' +
+      '<b style="color:#00d4aa;white-space:nowrap">Required capital:</b>' +
+      '<b style="color:#ffd700;font-size:11px;white-space:nowrap" title="' + esc(tip.join('  |  ')) + '">' +
+        (priced ? fmtMoney(total) : '--') +
+      '</b>' +
+      '<span style="color:#888;white-space:nowrap">' + rows.length + ' unique strike' + (rows.length === 1 ? '' : 's') + ' &middot; qty = ' + rows[0].lots + ' lots x lot size per strike</span>' +
+      (priced !== rows.length ? '<span style="color:#ff9800;font-size:8px">(' + (rows.length - priced) + ' awaiting live premium)</span>' : '') +
+      '</div>';
+  }
+
   /* The charts a strategy runs on, each with its label and an opener. The spot
      chart and the selected-strike option premium charts are listed separately,
      once per symbol the strategy is actually trading on. AI Smart strategies
@@ -578,9 +691,18 @@ window.createPaperRun = function (suffix) {
 
   function chartRowHTML(s, chart, idx) {
     const symOk = chart.sym ? 1 : 0;
+    let moneyChip = '';
+    if (chart.kind === 'premium' && symOk && chart.sym.id != null) {
+      const cap = strikeCapital(chart.sym.id, chart.sym.name || '', chart.sym.premium);
+      const detail = (cap.money != null) ? fmtMoney(cap.money)
+        : (cap.premium != null ? 'qty ' + cap.qty + ' x ' + fmt2(cap.premium) + ' (pending)' : '--');
+      moneyChip = '<span style="color:#ffd700;min-width:86px;text-align:right;font-size:9px;font-weight:700;white-space:nowrap" title="Required: ' + cap.lots + ' lots x ' + cap.lotSize + ' lot size = qty ' + cap.qty + ' x premium ' + (cap.premium != null ? fmt2(cap.premium) : '--') + ' = ' + (cap.money != null ? fmtMoney(cap.money) : '--') + '">' +
+        esc(detail) + '</span>';
+    }
     return '<div style="display:flex;align-items:center;gap:6px;padding:2px 0 2px 10px;font-size:9px;color:#888">' +
       '<span style="color:#66ccff">' + (chart.kind === 'spot' ? 'Spot' : 'Premium') + '</span>' +
       '<span style="color:#aaa;flex:1;min-width:80px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(chart.sym ? chart.sym.name : 'no chart') + '</span>' +
+      moneyChip +
       (symOk
         ? '<button class="btn-action" style="width:auto;padding:1px 6px;margin:0;font-size:8px" onclick="PaperRun.showChart(\'' + safeId(s.id) + '\', \'' + safeId(s.engine) + '\', ' + idx + ')">Show Chart</button>'
         : '<span style="color:#ff9800;font-size:8px">unavailable</span>') +
@@ -669,10 +791,17 @@ window.createPaperRun = function (suffix) {
   async function renderStrategies() {
     const host = $id('ptRunStrategies');
     if (!host) return;
+    const bar = $id('ptRunCapitalBar');
     const list = runningStrategies();
     if (!list.length) {
+      if (bar) { bar.style.display = 'none'; bar.innerHTML = ''; }
       host.innerHTML = emptyHTML('No running strategies. Toggle AI Smart Trading ON in the Paper Trade tab to start strategies.');
       return;
+    }
+    const barHTML = capitalBarHTML();
+    if (bar) {
+      if (barHTML) { bar.style.display = 'flex'; bar.innerHTML = barHTML; }
+      else { bar.style.display = 'none'; bar.innerHTML = ''; }
     }
     const items = list.map(s => ({ s: s, ck: chartCacheKey(s) }));
     host.innerHTML = items.map(({ s }) => strategyRowHTML(s)).join('');

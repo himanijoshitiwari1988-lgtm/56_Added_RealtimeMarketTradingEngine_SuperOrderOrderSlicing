@@ -26,6 +26,28 @@ window.createPaperTrade = function (suffix) {
   let _dirtySave = false;
 
   const SAVE_KEY = 'algodhan_papertrade_v1' + suffix;
+
+  /* NSE cash / F&O session check (09:15 - 15:30 IST, Mon-Fri) on the client
+     clock. Mirrors the AI Smart engine's marketSessionOpen() so every paper
+     entry choke point agrees on the same market-hours rule. */
+  function nseMarketSessionOpen() {
+    const now = new Date(Date.now() + 5.5 * 3600 * 1000);
+    const day = now.getUTCDay();
+    if (day === 0 || day === 6) return false;
+    const minute = now.getUTCHours() * 60 + now.getUTCMinutes();
+    return minute >= 555 && minute < 930;
+  }
+  /* The synthetic market-off simulation stream (SIM / 900001) is exempt from
+     the hours gate - its whole purpose is to keep the algo running a live feed
+     when the real market is closed. */
+  function isSimTradedSymbol(symbol) {
+    if (!symbol) return false;
+    if (symbol.sim === true) return true;
+    if (symbol.id !== undefined && Number(symbol.id) === 900001) return true;
+    const nm = String(symbol.name || '').toUpperCase();
+    const ex = String(symbol.exch || symbol.ocExch || '').toUpperCase();
+    return nm.indexOf('SIM') === 0 || ex === 'SIM';
+  }
   const PT_TPL_KEY = 'algodhan_pt_templates_v1' + suffix;
 
   const INDEX_LOT_SIZE = {
@@ -818,7 +840,8 @@ window.createPaperTrade = function (suffix) {
         pnl >= 0 ? 'buy' : 'sell');
     state.closed.unshift({
       symbol: p.symbol, side: p.side, qty: p.qty, entry: p.entryPrice,
-      exit: cur, pnl: pnl, pnlPct: pnlPct, netPnl: charges ? netPnl : null, charges: charges ? charges.total : 0, at: Date.now(), reason: reason
+      exit: cur, pnl: pnl, pnlPct: pnlPct, netPnl: charges ? netPnl : null, charges: charges ? charges.total : 0, at: Date.now(), reason: reason,
+      entryAt: p.openedAt != null ? p.openedAt : null
     });
     equityCurve.push({ at: Date.now(), y: realizedPnl() });
     state.position = null;
@@ -1138,6 +1161,20 @@ window.createPaperTrade = function (suffix) {
         return false;
       }
       const symbol = opts.symbol || ((typeof selectedSymbol !== 'undefined') ? selectedSymbol : null);
+      /* NSE market-hours gate for AUTO entries on REAL instruments: no new
+         paper auto trade opens while the market is closed (09:15-15:30 IST,
+         Mon-Fri). Off-hours auto entries land on the session P&L statistics
+         after the day's trading has ended and skew the day's numbers, so every
+         auto runner (AI Smart strategies, HFT pool, per-tab runners) is held
+         here - the earlier per-engine gates already block the AI Smart loops,
+         this is the shared catch-all. The synthetic SIM 900001 stream stays
+         exempt (its purpose is the market-off simulation chart). Exits are NOT
+         affected: this gate only refuses NEW entries. */
+      if (symbol && !isSimTradedSymbol(symbol) && !nseMarketSessionOpen()) {
+        this.lastAutoSkip = 'NSE market closed (09:15-15:30 IST) - no new auto entries';
+        log('Auto ' + side + ' ' + (symbol.name || symbol.id) + ' skipped: NSE market closed (09:15-15:30 IST) - no new auto entries after close', 'warn');
+        return false;
+      }
       /* Position identity key. Engines may pass opts.posKey to isolate their
          auto positions per tab / per strategy (e.g. the HFT runner) so several
          strategies can hold the SAME symbol independently instead of sharing
@@ -1279,6 +1316,7 @@ window.createPaperTrade = function (suffix) {
     state.closed.unshift({
       symbol: p.symbol, side: p.side, qty: p.qty, entry: p.entryPrice,
       exit: cur, pnl: pnl, pnlPct: pnlPct, netPnl: charges ? netPnl : null, charges: charges ? charges.total : 0, at: Date.now(), reason: reason,
+      entryAt: p.openedAt != null ? p.openedAt : null,
       autoKey: p.autoKey || null,
       symbolId: p.symbolId != null ? p.symbolId : null,
       symbolExch: p.symbolExch != null ? p.symbolExch : null

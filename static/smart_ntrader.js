@@ -121,7 +121,8 @@
     },
     niftyTf: '5min',
     stockTf: '5min',
-    nifty: { ltp: 0, chg: 0, chgPct: 0, overall: '...', current: '...', reversal: '', bbPct: 0.5, bb: null, bar: 0 },
+    nifty: { ltp: 0, chg: 0, chgPct: 0, overall: '...', current: '...', reversal: '', bbPct: 0.5, bb: null, bar: 0, oper: '', htf: '', pend: '' },
+    niftyConf: null,   // TrendConfirm hysteresis state (confirmed NIFTY direction)
     cond: { bull: true, bear: true },
     stocks: [],
     byName: {},
@@ -280,10 +281,24 @@
      CURRENT (EMA9/21) layer only VETOES when it genuinely CONTRADICTS (overall
      BULL + current BEAR, or overall BEAR + current BULL). CURRENT=FLAT carries
      no vote -> follow the OVERALL regime; overall RANGE -> null (no bias). */
-  function niftyOperative() {
+  function rawNiftyOperative() {
     if (state.nifty.overall === 'BULL') return state.nifty.current === 'BEAR' ? null : 'BULL';
     if (state.nifty.overall === 'BEAR') return state.nifty.current === 'BULL' ? null : 'BEAR';
     return null;
+  }
+  /* CONFIRMED operative direction. The shared TrendConfirm state machine only
+     lets a raw flip commit once the new side has persisted (hold budget) and is
+     backed by the slower 15-min NIFTY regime, with an anti-oscillation cooldown
+     between flips. Every trend-side decision (entry gate, trend-drop exit,
+     reversal exit, Set-Condition regime selection) reads this so momentary
+     EMA/BB noise can never flip the engine onto the wrong strike. */
+  function confirmedOper() {
+    var c = state.niftyConf;
+    return (c && (c.dir === 'BULL' || c.dir === 'BEAR')) ? c.dir : null;
+  }
+  function niftyOperative() {
+    if (window.TrendConfirm && state.niftyConf) return confirmedOper();
+    return rawNiftyOperative();
   }
   function trendSideQualify(stock, cls) {
     if (isCommodity(stock.sym)) return true;
@@ -678,6 +693,32 @@
       state.lastReversal = { dir: '', at: state.lastReversal.at };
     }
     return { overall: overall, current: current, reversal: reversal, bbPct: bb ? bb.pctb : 0.5, bb: bb };
+  }
+
+  /* ---------------- NIFTY 15-min confirmation layer ----------------
+     The fast 5-min NIFTY signal above flips on intraday noise. A second,
+     slower series (15-min) is fetched under its own key and its slow regime
+     (price vs adaptive EMA + slope, TrendConfirm.regime) is what a raw flip
+     must be backed by before the hysteresis machine commits it. */
+  var NIFTY15_KEY = '13:IDX_I:15min';
+  function htfNiftyRegime() {
+    if (!window.TrendConfirm) return null;
+    var c = state.series[NIFTY15_KEY];
+    if (!c) return null;
+    var rg = window.TrendConfirm.regime(c);
+    return (rg && rg.dir) ? rg.dir : null;
+  }
+  function updateNiftyConfirm() {
+    if (!window.TrendConfirm) return;
+    if (!state.niftyConf) state.niftyConf = window.TrendConfirm.create();
+    var raw = rawNiftyOperative();
+    var htf = htfNiftyRegime();
+    window.TrendConfirm.step(state.niftyConf, raw, htf, Date.now());
+    state.nifty.oper = (state.niftyConf.dir === 'BULL' || state.niftyConf.dir === 'BEAR') ? state.niftyConf.dir : '';
+    state.nifty.htf = htf || '';
+    state.nifty.pend = state.niftyConf.pending !== null
+      ? (state.niftyConf.pending === 'BULL' ? 'BULL' : state.niftyConf.pending === 'BEAR' ? 'BEAR' : 'neutral')
+      : '';
   }
 
   /* ---------------- stock scoring / classification ---------------- */
@@ -2247,6 +2288,9 @@
     if (!state.series[niftyKey] || (Date.now() - (state.seriesAt[niftyKey] || 0)) > TREND_REFRESH_MS) {
       ensureCandles(NIFTY, state.niftyTf, niftyKey, TREND_REFRESH_MS);
     }
+    /* 15-min NIFTY series for the confirmation layer (its own key so the 5-min
+       refresh never overwrites it). */
+    ensureCandles(NIFTY, '15min', NIFTY15_KEY, 150000);
     var niftyInd = indicators(state.series[niftyKey]);
     var niftyTrend = detectNifty(niftyInd);
     var nq = quoteForSym(NIFTY);
@@ -2260,6 +2304,7 @@
     state.nifty.reversal = niftyTrend.reversal;
     state.nifty.bbPct = niftyTrend.bbPct;
     state.nifty.bb = niftyTrend.bb;
+    updateNiftyConfirm();
 
     /* NIFTY + BB%B set-condition gate: evaluate both rows against the live
        NIFTY trend and %B snapshot; the row matching the current direction
@@ -2302,8 +2347,14 @@
       act.inPos = !!pos;
       act.posQty = pos ? pos.qty : 0;
       act.posPnl = pos ? livePnl(pos) : 0;
-      if (pos && !isCommodity(act.sym) && niftyTrend.reversal.indexOf(act.cls === 'BULL' ? 'BEARISH' : 'BULLISH') !== -1) {
-        exitPosition(act);
+      if (pos && !isCommodity(act.sym)) {
+        /* Anti-whipsaw flip exit: a position is force-closed only once the
+           CONFIRMED NIFTY direction has actually flipped away from its side
+           (hysteresis + 15-min backing). A raw EMA/BB reversal flag no longer
+           cuts running trades on momentary noise. */
+        var clsDir = (act.cls === 'BULL') ? 'BULL' : 'BEAR';
+        var cdir = confirmedOper();
+        if (cdir && cdir !== clsDir) exitPosition(act, 'nifty flip to ' + cdir);
       }
       /* Entries are BB%b-alert driven ONLY (no per-stock EMA-cross auto
          entries). decideEntry() is intentionally not called here: the armed
@@ -2389,6 +2440,7 @@
     if (!state.series[nk] || (Date.now() - (state.seriesAt[nk] || 0)) > TREND_REFRESH_MS) {
       ensureCandles(NIFTY, state.niftyTf, nk, TREND_REFRESH_MS);
     }
+    ensureCandles(NIFTY, '15min', NIFTY15_KEY, 150000);
     var niftyInd = indicators(state.series[nk]);
     var niftyTrend = detectNifty(niftyInd);
     if (niftyTrend && niftyTrend.current !== '...') {
@@ -2398,6 +2450,7 @@
       state.nifty.bbPct = niftyTrend.bbPct;
       state.nifty.bb = niftyTrend.bb;
     }
+    updateNiftyConfirm();
     var nq = quoteForSym(NIFTY);
     if (nq && nq.ltp) {
       state.nifty.ltp = Number(nq.ltp);
@@ -2588,7 +2641,9 @@
       ' · TF ' + (trendFilterActive() ? 'ON (' + trendPct() + '%)' : 'OFF') +
       ' · TRD ' + (state.tradeCap.auto ? 'AUTO' : (state.tradeCap.enabled ? 'MAX ' + state.tradeCap.count + ' (' + openTradeCount() + ' open)' : 'OFF')) +
       ' · COND ' + (state.condition.enabled ? (niftyOperative() === 'BULL' ? (state.cond.bull ? 'BULL OK' : 'BULL BLOCKED') : niftyOperative() === 'BEAR' ? (state.cond.bear ? 'BEAR OK' : 'BEAR BLOCKED') : (state.cond.bull ? 'FLAT OK' : 'FLAT BLOCKED')) : 'OFF') +
-      ' · NIFTY ' + (niftyOperative() || '--'));
+      ' · NIFTY ' + (niftyOperative() || '--') +
+      (state.nifty.htf ? ' · 15m ' + state.nifty.htf : '') +
+      (state.nifty.pend ? ' · pend ' + state.nifty.pend : ''));
 
     var tt = el('ntrTrendToggle');
     if (tt && tt.textContent !== ('Trend Follow: ' + (state.trend.enabled ? 'ON' : 'OFF'))) {
