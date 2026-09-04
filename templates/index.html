@@ -2485,10 +2485,20 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=56"></script>
+<script src="/static/indicators.js?v=57"></script>
 <script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
+
+/* TEMP DIAGNOSTIC (remove after NIFTY-chart-switch bug diagnosed): report which
+   branch a sidebar symbol click actually reaches so the "NIFTY chart never
+   opens" bug can be seen server-side without a console session. */
+function diagChart(tag, extra){
+  try{
+    fetch('/api/client_error',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({errs:[{type:'diagChart',msg:'[diagChart] '+tag+' :: '+(extra||'')}],url:location.href,ua:'diag'})});
+  }catch(e){}
+}
 
 const SYMBOLS = [
   /* Indices */
@@ -3990,6 +4000,7 @@ function onSymbolChange(){
   document.getElementById("goAtmBtn").disabled = true;
   document.getElementById("goAtmBtn").textContent = "Go to ATM Strike";
   saveState();
+  diagChart('onSymbolChange', 'v='+v+' '+exch+'/'+inst+' name='+(opt.getAttribute("data-symbol-name")||"")+' tab='+(typeof activeTab!=="undefined"?activeTab:"?")+' prevCur='+(window.IndChart?IndChart.curSymKey:"none")+' hasChart='+(window.IndChart?IndChart.hasChart():"-")+' curKey='+(typeof currentChartSymKey==="function"?currentChartSymKey():"-")+' tf='+chartTf);
   loadChart();
   /* Check if we still have cached expiries for the NEW symbol */
   const newOcKey = selectedSymbol.ocId+"|"+selectedSymbol.ocExch;
@@ -4254,10 +4265,16 @@ function loadChart(){
   const container = document.getElementById("chart-container");
   if(!window.LightweightCharts){
     container.innerHTML = '<div id="loading">Chart library failed to load. Check network.</div>';
-    return;
+    return Promise.resolve(false);
   }
   IndChart.setLoading("Loading chart data...");
+  /* Resolve when the refetch reaches a terminal state (data painted, MCX
+     fallback settled, or a hard failure). OC openers await it so downstream
+     work (e.g. ChartGrid deploying overlays) runs only after candles are on
+     screen, exactly like the old bespoke fetch chain did. */
+  return new Promise(resolve => {
   const ck = selectedSymbol.id+"|"+selectedSymbol.exch+"|"+selectedSymbol.inst+"|"+chartTf;
+  const done = () => resolve(true);
   const cached = cacheGet("candles", ck);
   if(cached){
     /* Instant placeholder only: paint the cached candles now so the chart
@@ -4270,10 +4287,78 @@ function loadChart(){
     document.getElementById("status").textContent = "Refreshing "+selectedSymbol.name+" "+chartTf+"...";
   }
   const onSuccess = d => {
+    diagChart('loadChart.onsuccess', 'ck='+ck+' cur='+(typeof currentChartSymKey==="function"?currentChartSymKey():"-")+' len='+(d&&d.data?d.data.length:0));
+    /* Stale-response guard: this fetch may have been launched for a DIFFERENT
+       symbol/timeframe (e.g. an option-chain strike chart opened first, then the
+       user switched the sidebar symbol while it was still loading). Its late
+       response must never overwrite the chart the user is now looking at, and
+       must never stamp the newer symbol's key onto the older symbol's candles —
+       that mismatch let the newer symbol's live tick stretch the older symbol's
+       forming candle (option premium ~250 patched by an index price ~25000) and
+       blow out the main price scale, hiding candles + indicators until reload. */
+    if (typeof currentChartSymKey === "function" && currentChartSymKey() !== ck){ diagChart('guard.bail', 'ck='+ck+' cur='+currentChartSymKey()); done(); return; }
+    /* MCX options have no intraday history from Dhan: an EMPTY success is not an
+       error but still needs the daily-premium fallback (same as the onFail branch
+       below). fetchOptCandles flips chartTf to "day" via setChartTfOnly, so the
+       guard above must have already passed on the intraday ck BEFORE that flip. */
+    if(selectedSymbol && selectedSymbol.exch === "MCX_COMM" && chartTf !== "day"
+        && (!d.data || !d.data.length)){
+      mcxFallback();
+      return;   /* resolves when the fallback settles */
+    }
+    /* Force:1 refetch succeeded but returned NO candles (valid symbol with no
+       trades yet, or market not started). Do NOT wipe the chart - if a cached
+       placeholder was just painted (or an earlier chart for THIS symbol is still
+       up) the empty result would blank it and reproduce the "candles disappear"
+       symptom. Keep it and say so. Only when the chart on screen still belongs to
+       a DIFFERENT symbol (mid-switch, no cache for the new one) do we clear it -
+       otherwise the old symbol's candles would sit under the new symbol's label. */
+    if(!d.data || !d.data.length){
+      const shownIsCurrent = IndChart && IndChart.curSymKey === ck;
+      diagChart('loadChart.empty', 'ck='+ck+' curSymKey='+(window.IndChart?IndChart.curSymKey:"-")+' shownIsCurrent='+shownIsCurrent+' hasChart='+(window.IndChart?IndChart.hasChart():"-"));
+      if(IndChart && IndChart.curSymKey && !shownIsCurrent){
+        IndChart.setCandles([], false);
+        document.getElementById("status").textContent = "No candle data for "+selectedSymbol.name+" "+chartTf;
+      } else {
+        document.getElementById("status").textContent = IndChart.hasChart()
+          ? "No fresh candle data for "+selectedSymbol.name+" "+chartTf+" (keeping last chart)"
+          : "No candle data for "+selectedSymbol.name+" "+chartTf;
+      }
+      done();
+      return;
+    }
     chartPrevClose = d.prev_close != null ? d.prev_close : chartPrevClose;
     cacheSet("candles", ck, {data:d.data, prev_close:d.prev_close});
     IndChart.setCandles(d.data, true);
+    diagChart('loadChart.painted', 'ck='+ck+' curSymKey='+(window.IndChart?IndChart.curSymKey:"-")+' len='+(d.data?d.data.length:0));
     document.getElementById("status").textContent = "Loaded "+d.data.length+" candles | "+selectedSymbol.name+" "+chartTf;
+    done();
+  };
+  /* MCX daily-premium fallback shared by onSuccess (empty intraday result) and
+     onFail (Dhan rejects the intraday request). fetchOptCandles() itself flips
+     the global chartTf to "day" through setChartTfOnly, so after it resolves the
+     expected key is the CURRENT one - compare against the SNAPSHOT of the symbol
+     this fallback was started for (never a live selectedSymbol, which may have
+     moved on, and never a stale intraday ck from before the day-flip, which
+     would discard every fallback). */
+  const mcxFallback = () => {
+    const target = selectedSymbol;
+    const tKey = String(target && target.id) + "|" + (target && target.exch || "") + "|" + (target && target.inst || "");
+    fetchOptCandles(target.id, target.exch, target.inst, chartTf).then(res=>{
+      if(res){
+        const fCk = tKey + "|" + ((res && res.tf) || chartTf || "day");
+        if (typeof currentChartSymKey === "function"
+            && target && currentChartSymKey() !== fCk) { done(); return; }
+        cacheSet("candles", fCk, {data:res.data});
+        IndChart.setCandles(res.data, true);
+        document.getElementById("status").textContent = res.fallback
+          ? "Loaded "+res.data.length+" daily premium candles | "+target.name+" (MCX: intraday unavailable)"
+          : "Loaded "+res.data.length+" candles | "+target.name+" "+res.tf;
+      } else {
+        document.getElementById("status").textContent = "Chart load failed (MCX intraday unavailable)";
+      }
+      done();
+    });
   };
   const onRateLimit = (n, total) => {
     document.getElementById("status").textContent = "Chart data busy / rate-limited. Auto-retrying ("+n+"/"+total+")...";
@@ -4287,35 +4372,33 @@ function loadChart(){
     /* MCX options: Dhan has no intraday history, so fall back to the daily
        premium chart instead of blanking the chart with an alert. */
     if(selectedSymbol && selectedSymbol.exch === "MCX_COMM" && chartTf !== "day"){
-      fetchOptCandles(selectedSymbol.id, selectedSymbol.exch, selectedSymbol.inst, chartTf).then(res=>{
-        if(res){
-          cacheSet("candles", ck, {data:res.data});
-          IndChart.setCandles(res.data, true);
-          document.getElementById("status").textContent = res.fallback
-            ? "Loaded "+res.data.length+" daily premium candles | "+selectedSymbol.name+" (MCX: intraday unavailable)"
-            : "Loaded "+res.data.length+" candles | "+selectedSymbol.name+" "+res.tf;
-        } else {
-          document.getElementById("status").textContent = "Chart load failed: "+msg;
-        }
-      });
+      mcxFallback();
       return;
     }
+    /* No-data failures (illiquid strike, pre-market option with no trades) are
+       expected when opening OC strike charts - show a status line instead of a
+       blocking alert. Only genuine hard errors pop an alert. */
+    const noData = /no data|no candle|does not provide|not available/i.test(msg);
     /* Transient server busy / single-flight messages that exhausted the retry
        budget show in the status line + loading box instead of a blocking alert
        (the chart still appears the moment the in-flight fetch fills the cache
        / the cooldown lifts). Only hard errors pop an alert. */
-    if(!transient) alert(msg);
-    document.getElementById("status").textContent = "Chart load failed: "+msg;
+    if(!transient && !noData) alert(msg);
+    document.getElementById("status").textContent = noData
+      ? "No candle data for "+selectedSymbol.name+" "+chartTf
+      : "Chart load failed: "+msg;
     if(!IndChart.hasChart()){
       container.innerHTML = transient
         ? '<div id="loading">'+msg+' - click Refresh Chart to try again</div>'
         : '<div id="loading">Failed: '+msg+'</div>';
     }
+    done();
   };
   fetchCandlesRetry(
     {security_id:selectedSymbol.id,exchange_segment:selectedSymbol.exch,instrument_type:selectedSymbol.inst,timeframe:chartTf,force:1},
     onSuccess, onRateLimit, onFail, 6, 5000
   );
+  });
 }
 
 function ocRefresh(){
@@ -4990,6 +5073,10 @@ async function openOCStrikeChart(strike, optionType, expiryOverride, sidOverride
     alert("Please load the option chain first"); return;
   }
   document.getElementById("status").textContent = 'Opening '+strike+' '+optionType+' option chart...';
+  /* Underlying the OC was opened from - the slow path below awaits a scrip lookup,
+     during which the user may switch the sidebar symbol. If they did, this open is
+     stale and must abort instead of hijacking the chart back to the old strike. */
+  const openUnderKey = (selectedSymbol.ocId || selectedSymbol.id) + "|" + (selectedSymbol.ocExch || "");
   let sd = null;
   /* Fast path: the loaded option chain already carries each leg's security id,
      so the chart opens instantly without another scrip-master lookup. */
@@ -5029,46 +5116,30 @@ async function openOCStrikeChart(strike, optionType, expiryOverride, sidOverride
       if(sec && sec.status==="success" && sec.data) sd = sec.data;
     } catch(e){}
   }
-  if(!sd){
-    document.getElementById("status").textContent = "Option security not found for "+strike+" "+optionType; return;
+  /* The user may have switched the sidebar underlying while the scrip lookup was
+     in flight - in that case this open is stale: abort rather than paint the old
+     strike's chart over the symbol the user just selected. */
+  if(!sd || (selectedSymbol.ocId || selectedSymbol.id) + "|" + (selectedSymbol.ocExch || "") !== openUnderKey){
+    if(!sd) document.getElementById("status").textContent = "Option security not found for "+strike+" "+optionType;
+    return;
   }
   const optInst = sd.instrument_type || ((selectedSymbol.inst === "INDEX" || selectedSymbol.ocExch === "IDX_I") ? "OPTIDX" : "OPTSTK");
   /* Update selectedSymbol so realtime fetches option candles, not index spot */
   selectedSymbol = { id: sd.security_id, exch: sd.exchange_segment, inst: optInst,
     name: sd.trading_symbol, ocId: selectedSymbol.ocId, ocExch: selectedSymbol.ocExch };
-  if(window.PaperTrade && PaperTrade.onChartOpen) PaperTrade.onChartOpen();
-  const tf = chartTf || "5min";
   document.getElementById("chartSymbolLabel").textContent = sd.trading_symbol;
   document.getElementById("status").textContent = "Loading "+sd.trading_symbol+" option candles...";
-  const ck = sd.security_id+"|"+sd.exchange_segment+"|"+optInst+"|"+tf;
-  /* Instant placeholder from the client cache so the chart never blanks out,
-     but ALWAYS refetch with force:1 below so the option chart carries fresh /
-     realtime data: the server patches the last candle with the live LTP and
-     subscribes the option contract to the WebSocket feed only on force:1.
-     Returning the cache alone is what kept showing stale/old candles on option
-     strike charts (same bug class fixed in loadChart). */
-  const cached = cacheGet("candles", ck);
-  if(cached && cached.data && cached.data.length && window.IndChart){
-    IndChart.setCandles(cached.data, true);
-    document.getElementById("status").textContent = "Refreshing "+sd.trading_symbol+" "+tf+"...";
-  }
-  try {
-    const res = await fetchOptCandles(sd.security_id, sd.exchange_segment, optInst, tf);
-    if(res){
-      cacheSet("candles", ck, {data:res.data});
-      IndChart.setCandles(res.data, true);
-      document.getElementById("status").textContent = res.fallback
-        ? "Loaded "+res.data.length+" daily premium candles | "+sd.trading_symbol+" (MCX: intraday unavailable)"
-        : "Loaded "+res.data.length+" candles | "+sd.trading_symbol+" "+res.tf;
-    } else if(!cached || !cached.data || !cached.data.length){
-      document.getElementById("status").textContent = "No candle data for "+sd.trading_symbol;
-    }
-  } catch(e){
-    if(!cached || !cached.data || !cached.data.length){
-      document.getElementById("status").textContent = "No candle data for "+sd.trading_symbol;
-    }
-  }
+  /* UNIFIED chart-open path: the OC-chain "open chart" funnels through the SAME
+     loadChart() the left-sidebar symbol switch uses - one cache placeholder, one
+     force:1 refetch carrying the realtime patch + WS subscription, the stale-
+     response guard and the MCX daily fallback all live in there. Keeping two
+     parallel candle-fetch implementations is what let an option-chain request
+     and a sidebar-symbol request race each other for the chart surface.
+     Switch to the chart tab first (cached placeholder paints instantly), then
+     await the refetch so callers (e.g. ChartGrid's p.then(deploy)) still run
+     only after the option candles are actually on screen. */
   activateTab("chart");
+  await loadChart();
 }
 
 /* Open the option-premium chart directly from an option security id (CE/PE SID)
@@ -5076,7 +5147,6 @@ async function openOCStrikeChart(strike, optionType, expiryOverride, sidOverride
    detail "open strike chart" button. */
 async function openOptionChartBySid(sid, exch, inst, name, ocId, ocExch){
   if(sid == null || sid === undefined || sid === "null") return;
-  const tf = chartTf || "5min";
   const sd = {
     id: Number(sid),
     exch: exch || "NSE_FNO",
@@ -5086,38 +5156,16 @@ async function openOptionChartBySid(sid, exch, inst, name, ocId, ocExch){
     ocExch: ocExch || null
   };
   selectedSymbol = sd;
-  if(window.PaperTrade && PaperTrade.onChartOpen) PaperTrade.onChartOpen();
   document.getElementById("chartSymbolLabel").textContent = sd.name;
   document.getElementById("status").textContent = "Loading " + sd.name + " option candles...";
-  const ck = sid + "|" + (exch || "NSE_FNO") + "|" + (inst || "OPTIDX") + "|" + tf;
-  /* Instant placeholder from the client cache so the chart never blanks out,
-     but ALWAYS refetch with force:1 below so the option chart carries fresh /
-     realtime data: the server patches the last candle with the live LTP and
-     subscribes the option contract to the WebSocket feed only on force:1.
-     Returning the cache alone is what kept showing stale/old candles on option
-     strike charts (same bug class fixed in loadChart). */
-  const cached = cacheGet("candles", ck);
-  if(cached && cached.data && cached.data.length && window.IndChart){
-    IndChart.setCandles(cached.data, true);
-    document.getElementById("status").textContent = "Refreshing " + sd.name + " " + tf + "...";
-  }
-  try {
-    const res = await fetchOptCandles(Number(sid), exch || "NSE_FNO", inst || "OPTIDX", tf);
-    if(res){
-      cacheSet("candles", ck, {data:res.data});
-      IndChart.setCandles(res.data, true);
-      document.getElementById("status").textContent = res.fallback
-        ? "Loaded " + res.data.length + " daily premium candles | " + sd.name + " (MCX: intraday unavailable)"
-        : "Loaded " + res.data.length + " candles | " + sd.name + " " + res.tf;
-    } else if(!cached || !cached.data || !cached.data.length){
-      document.getElementById("status").textContent = "No candle data for " + sd.name;
-    }
-  } catch(e){
-    if(!cached || !cached.data || !cached.data.length){
-      document.getElementById("status").textContent = "No candle data for " + sd.name;
-    }
-  }
+  /* UNIFIED chart-open path: identical to openOCStrikeChart and the sidebar
+     onSymbolChange - route through loadChart() so one cache placeholder, one
+     force:1 refetch (realtime patch + WS subscribe), the stale-response guard
+     and the MCX daily fallback are shared by every way a chart can be opened.
+     Switch tab first, then await the refetch so ChartGrid's p.then(deploy)
+     runs only after the candles paint. */
   activateTab("chart");
+  await loadChart();
 }
 
 function loadAccount(){
@@ -5989,13 +6037,13 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/autotrail.js?v=2"></script>
 <script src="/static/aitrail.js?v=2"></script>
 <script src="/static/aitrades.js?v=2"></script>
-<script src="/static/strategies.js?v=69"></script>
-<script src="/static/papertrade.js?v=31"></script>
+<script src="/static/strategies.js?v=71"></script>
+<script src="/static/papertrade.js?v=32"></script>
 <script src="/static/strategy_container.js?v=16"></script>
 <script src="/static/autoexperiment.v13.js?v=134"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=134"></script>
+<script src="/static/aismart.js?v=140"></script>
 <script src="/static/paperrun.js?v=22"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
 <script src="/static/hft_pool.js?v=6"></script>

@@ -4015,18 +4015,15 @@
       }
       const tf = s.tf || '5min';
       if (typeof setChartTf === 'function') setChartTf(tf);
-      const d = await fetch('/api/candles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ security_id: sec.security_id, exchange_segment: sec.exchange_segment,
-          instrument_type: optInst, timeframe: tf, force: 1 }) }).then(r => r.json());
-      if (d && d.status === 'success' && d.data && d.data.length && window.IndChart) {
-        IndChart.setCandles(d.data, true);
-        if (typeof activateTab === 'function') activateTab('chart');
-        const label = document.getElementById('chartSymbolLabel');
-        if (label) label.textContent = sec.trading_symbol;
-        document.getElementById('status').textContent = 'Strike chart: ' + sec.trading_symbol + ' (' + leg + ')';
-      } else {
-        alert('No candle data available yet for ' + strike + ' ' + leg);
-      }
+      /* UNIFIED chart-open path: setChartTf(tf) above already funnelled this
+         option chart through loadChart() (cache placeholder + force:1 refetch +
+         stale-response guard + MCX daily fallback + PaperTrade sync). A second
+         bespoke /api/candles fetch here would duplicate that request and could
+         race the sidebar symbol flow for the chart surface, so it is dropped. */
+      const label = document.getElementById('chartSymbolLabel');
+      if (label) label.textContent = sec.trading_symbol;
+      document.getElementById('status').textContent = 'Strike chart: ' + sec.trading_symbol + ' (' + leg + ')';
+      if (typeof activateTab === 'function') activateTab('chart');
     } catch (e) {
       alert('Could not open strike chart: ' + (e && e.message ? e.message : e));
     }
@@ -4290,15 +4287,14 @@
           selectedSymbol = { id: sec.security_id, exch: sec.exchange_segment, inst: sec.instrument_type || 'OPTIDX',
             name: sec.trading_symbol, ocId: selectedSymbol.ocId, ocExch: selectedSymbol.ocExch };
         }
-        const tf = typeof chartTf !== 'undefined' ? chartTf : '5min';
-        const d = await fetch('/api/candles', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ security_id: sec.security_id, exchange_segment: sec.exchange_segment, instrument_type: sec.instrument_type || 'OPTIDX', timeframe: tf })
-        }).then(r => r.json());
-        if (d && d.status === 'success' && d.data && d.data.length && window.IndChart) {
-          IndChart.setCandles(d.data, true);
-          document.getElementById('chartSymbolLabel').textContent = sec.trading_symbol;
-          document.getElementById('status').textContent = 'ATM option chart: ' + sec.trading_symbol;
-        }
+        /* UNIFIED chart-open path: route through loadChart() (cache placeholder +
+           force:1 refetch with realtime patch / WS subscribe, stale-response guard,
+           MCX daily fallback, PaperTrade sync) exactly like openOCStrikeChart and
+           the sidebar symbol switch, instead of a bespoke second /api/candles
+           fetch that could race them for the chart surface. */
+        if (typeof loadChart === 'function') loadChart();
+        document.getElementById('chartSymbolLabel').textContent = sec.trading_symbol;
+        document.getElementById('status').textContent = 'ATM option chart: ' + sec.trading_symbol;
       } catch (e) {
         document.getElementById('status').textContent = 'Could not load ATM option chart';
       }

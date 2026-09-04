@@ -1366,8 +1366,9 @@
       ind._series = out.map(o => applySeries(chart, o));
     });
 
-    candleSeries.setData(candles.map(x => ({ time: x.time, open: x.open, high: x.high, low: x.low, close: x.close })));
-    volSeries.setData(candles.map(x => ({ time: x.time, value: x.volume, color: x.close >= x.open ? '#00d4aa40' : '#ff525240' })));
+    const saneC = candles.filter(x => x && isFinite(x.open) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close) && isFinite(x.time));
+    candleSeries.setData(saneC.map(x => ({ time: x.time, open: x.open, high: x.high, low: x.low, close: x.close })));
+    volSeries.setData(saneC.map(x => ({ time: x.time, value: x.volume, color: x.close >= x.open ? '#00d4aa40' : '#ff525240' })));
     if (vr) chart.timeScale().setVisibleRange(vr); else fitToRecent();
     updateLegend();
     syncRanges(chart);
@@ -1432,8 +1433,9 @@
     if (!chart) { render(); return; }
     let r = null;
     try { r = chart.timeScale().getVisibleLogicalRange(); } catch (e) {}
-    candleSeries.setData(candles.map(x => ({ time: x.time, open: x.open, high: x.high, low: x.low, close: x.close })));
-    volSeries.setData(candles.map(x => ({ time: x.time, value: x.volume, color: x.close >= x.open ? '#00d4aa40' : '#ff525240' })));
+    const saneC = candles.filter(x => x && isFinite(x.open) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close) && isFinite(x.time));
+    candleSeries.setData(saneC.map(x => ({ time: x.time, open: x.open, high: x.high, low: x.low, close: x.close })));
+    volSeries.setData(saneC.map(x => ({ time: x.time, value: x.volume, color: x.close >= x.open ? '#00d4aa40' : '#ff525240' })));
     indicators.forEach(ind => {
       if (!ind._series) return;
       const out = computeFor(ind);
@@ -2225,6 +2227,15 @@
       }
       if (barStart == null) return;
       const last = candles[candles.length - 1];
+      /* Price-sanity guard: a single out-of-range live tick (decimal/scale
+         glitch, wrong-instrument price) used to stretch the forming candle's
+         high/low, blowing out the shared right price scale's autoscale — every
+         normal candle + overlay line got compressed into an invisible sliver
+         while the volume series (own 'vol' scale) stayed visible, and only a
+         page reload recovered. Reject ticks that are not within a generous
+         multiple of the last closed bar's price. */
+      const refClose = candles.length >= 2 ? candles[candles.length - 2].close : (last && last.open > 0 ? last.open : 0);
+      if (!(refClose > 0) || !(ltp > refClose / 50) || !(ltp < refClose * 50)) return;
       if (last.time === barStart) {
         /* Same bar: stretch high/low/close from the live tick. */
         if (ltp > last.high) last.high = ltp;

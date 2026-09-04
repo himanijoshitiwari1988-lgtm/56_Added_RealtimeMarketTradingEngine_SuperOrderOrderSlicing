@@ -1353,7 +1353,7 @@ window.createPaperTrade = function (suffix) {
         // when the price falls to that level, capping the loss on a losing
         // trade. Only active when a positive SL % was set at entry. When a
         // trailing SL is active the level is the ratcheted (peak - trail%) one.
-        if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur <= p.stopLoss) { closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
+        if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur <= p.stopLoss) { try { if (window.__ptDiag !== false) fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ptDiag', msg: 'CLOSE ' + key + ' reason=' + (p.slTrailed ? 'TrailingSL' : 'StopLoss') + ' trailPct=' + (p.slTrailPct || 0) + ' slPct=' + (p.slPct || 0) + ' armed=' + (!!p.slTrailed) + ' entry=' + p.entryPrice + ' peak=' + p.peakPrice + ' stop=' + p.stopLoss + ' cur=' + cur }] }) }).catch(() => {}); } catch (e) {} closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
         // Profit-taking exits close a trade:
         //  - Trailing take-profit banks the profit: it is a % of the running
         //    profit (peak - entry). As the peak profit grows the trail auto-
@@ -1394,7 +1394,7 @@ window.createPaperTrade = function (suffix) {
         }
         // Stop-loss protection for SELL positions: closes when the price rises
         // to the SL % (above entry) level, capping the loss.
-        if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur >= p.stopLoss) { closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
+        if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur >= p.stopLoss) { try { if (window.__ptDiag !== false) fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ptDiag', msg: 'CLOSE ' + key + ' reason=' + (p.slTrailed ? 'TrailingSL' : 'StopLoss') + ' trailPct=' + (p.slTrailPct || 0) + ' slPct=' + (p.slPct || 0) + ' armed=' + (!!p.slTrailed) + ' entry=' + p.entryPrice + ' peak=' + p.peakPrice + ' stop=' + p.stopLoss + ' cur=' + cur }] }) }).catch(() => {}); } catch (e) {} closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
         if (p.tpPct > 0 && cur <= p.tpPrice) { closeAutoPosition(key, 'Take profit hit', p.tpPrice, silent); continue; }
         if (trailPct > 0) {
           const peakProfit = p.entryPrice - p.peakPrice;

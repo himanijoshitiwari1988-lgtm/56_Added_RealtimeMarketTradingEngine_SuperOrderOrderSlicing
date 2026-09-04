@@ -321,6 +321,7 @@ def _patch_marketfeed():
     import websockets
 
     async def _connect(self):
+        global _WS_CONN_AT, _WS_CONN_TICKS
         if self.version == 'v1':
             self.ws = await websockets.connect(MarketFeed.market_feed_wss)
             await self.authorize()
@@ -338,6 +339,11 @@ def _patch_marketfeed():
             )
         else:
             raise ValueError(f"Unsupported version: {self.version}")
+        # Mark when this new socket went live so _ws_on_error can distinguish a
+        # connection Dhan accepts then kills seconds later (slot-exhaustion: park
+        # and back off) from a mid-session network blip (reconnect immediately).
+        _WS_CONN_AT = time.time()
+        _WS_CONN_TICKS = 0
         # Reset the accumulated subscription list to the CURRENT base watchlist
         # before subscribing. The SDK appends every subscribe_symbols() call to
         # self.instruments and that list grows unboundedly over a long session
@@ -913,6 +919,8 @@ _WS_LAST_TICK = 0.0             # timestamp of the last tick received (0 = never
 _WS_REST_FALLBACK_SEC = 2       # resume REST polling quickly when feed drops
 _WS_RL_UNTIL = 0.0              # park reconnects after a server 805 disconnect
 _WS_RL_LOCK = threading.Lock()
+_WS_CONN_AT = 0.0               # when the current feed connection was established
+_WS_CONN_TICKS = 0              # real market-data ticks received on this connection
 # Manual "reset feed" cooldown: how long the frontend waits after a reset
 # before offering to reconnect, so Dhan's stale connection slots expire.
 _WS_MANUAL_COOLDOWN = 90
@@ -1196,7 +1204,7 @@ def _ws_on_tick(feed, data):
     at [0][4]), and a bare string for the market-status packet. A crash here used
     to be swallowed by the reconnect loop and silently dropped the feed, so the
     handler must never raise."""
-    global _WS_LAST_TICK, _WS_RL_UNTIL, _FEED_LAT_LAST, _NIFTY_TICKS
+    global _WS_LAST_TICK, _WS_RL_UNTIL, _FEED_LAT_LAST, _NIFTY_TICKS, _WS_CONN_TICKS
     if isinstance(data, list):
         # Server-initiated disconnect packet (feed response code 50).
         try:
@@ -1255,6 +1263,7 @@ def _ws_on_tick(feed, data):
         if ltp <= 0:
             return
         _WS_LAST_TICK = time.time()
+        _WS_CONN_TICKS += 1
         if key == "IDX_I:13":
             _NIFTY_TICKS += 1
         if typ == "Ticker Data" and key.startswith("IDX_I:") and time.time() - _FEED_LAT_LAST > 30:
@@ -1283,8 +1292,10 @@ def _ws_on_tick(feed, data):
 
 def _ws_on_connect(feed):
     logger.info("ws feed connected")
-    global _WS_LAST_TICK
+    global _WS_LAST_TICK, _WS_CONN_AT, _WS_CONN_TICKS, _WS_SUBSCRIBED
     _WS_LAST_TICK = time.time()
+    _WS_CONN_AT = time.time()
+    _WS_CONN_TICKS = 0
     # Re-subscribe persisted option strikes after a (re)connect. The server drops
     # every subscription when the socket closes, and subscribe_instruments() only
     # re-sends feed.instruments - a strike queued while the feed object was down
@@ -1298,6 +1309,13 @@ def _ws_on_connect(feed):
             feed.subscribe_symbols(persist)
         except Exception as e:
             logger.warning("ws feed: persist re-subscribe failed: %s", e)
+    # _connect() reset feed.instruments to the base watchlist and subscribed it,
+    # then we added the persist set above, so the live wire set is exactly
+    # base | persist. Reconcile _WS_SUBSCRIBED to match instead of letting
+    # entries evicted from _WS_PERSIST while the socket was down linger here and
+    # desync the bookkeeping from what Dhan is actually streaming.
+    with _WS_LOCK:
+        _WS_SUBSCRIBED = set(_ws_instrument_list()) | set(persist)
 
 def _ws_on_error(feed, err):
     # Dhan's WS endpoint rejects the HTTP upgrade with 429 once the per-account
@@ -1317,6 +1335,19 @@ def _ws_on_error(feed, err):
         with _WS_RL_LOCK:
             _WS_RL_UNTIL = time.time() + 60
         logger.warning("ws feed: 429 too many connections, parking reconnect")
+        return
+    # A connection that Dhan accepts but kills within a couple of seconds of
+    # subscribing, before a single market tick arrives ("no close frame received
+    # or sent" right after connect), is the same connection-slot problem as 429:
+    # our reconnect loop opens a new socket faster than Dhan expires the stale
+    # one, stacking connections until the per-account limit is hit again. If the
+    # feed died this soon after connecting, park reconnects too so slots drain.
+    with _WS_RL_LOCK:
+        conn_age = time.time() - _WS_CONN_AT
+    if _WS_CONN_AT > 0 and conn_age < 10 and _WS_CONN_TICKS == 0:
+        with _WS_RL_LOCK:
+            _WS_RL_UNTIL = time.time() + 60
+        logger.warning("ws feed: connection killed %0.1fs after connect with no ticks, parking reconnect", conn_age)
         return
     logger.warning("ws feed error: %s", err)
 
@@ -1488,6 +1519,20 @@ def _ws_persist_add(tup):
     while len(_WS_PERSIST) > _WS_PERSIST_CAP and _WS_PERSIST_ORDER:
         old = _WS_PERSIST_ORDER.pop(0)
         _WS_PERSIST.discard(old)
+        # The persist cap must bound the LIVE feed too, not just the reconnect
+        # re-subscribe list. Previously an LRU-evicted strike stayed subscribed
+        # to Dhan until the next feed (re)connect, so a session of chain
+        # browsing grew the live subscription set into the thousands (measured
+        # 3594 FULL-mode strikes). Dhan drops WebSocket connections with
+        # oversized subscription sets, which is what killed the feed and started
+        # the reconnect storm. Unsubscribe evicted strikes immediately so the
+        # live set tracks the cap.
+        _WS_SUBSCRIBED.discard(old)
+        if _WS_FEED is not None:
+            try:
+                _WS_FEED.unsubscribe_symbols([old])
+            except Exception:
+                pass
 
 def _ws_subscribe_extra(security_id, exchange_segment):
     """Subscribe an instrument that is not in the watchlist (e.g. an option
@@ -1506,6 +1551,11 @@ def _ws_subscribe_extra(security_id, exchange_segment):
         if any(t[0] == code and t[1] == str(security_id) for t in _WS_SUBSCRIBED):
             return
         _ws_persist_add(tup)
+        # Only subscribe when the strike survived the persist cap: a single
+        # subscribe of an evicted tuple would defeat the cap that keeps the live
+        # feed set bounded (Dhan drops oversized subscription sets).
+        if tup not in _WS_PERSIST:
+            return
         feed = _WS_FEED
         if feed is None:
             return
@@ -1539,7 +1589,11 @@ def _ws_subscribe_options(security_ids, exchange_segment):
         for t in tuples:
             _ws_persist_add(t)
         sub_keys = {(x[0], x[1]) for x in _WS_SUBSCRIBED}
-        need = [t for t in tuples if (t[0], t[1]) not in sub_keys]
+        # Only subscribe strikes that survived the persist cap (a batch larger
+        # than the whole cap must not overflow the live feed: persist_add evicts
+        # the oldest entries, so subscribing every tuple unconditionally would
+        # re-grow the live set past the bound that keeps Dhan from dropping us).
+        need = [t for t in tuples if t in _WS_PERSIST and (t[0], t[1]) not in sub_keys]
         if not need:
             return
         feed = _WS_FEED
@@ -1593,6 +1647,12 @@ _DATA_CACHE_MAX = 256
 # key serve the stale snapshot immediately instead of piling on more API calls.
 _DATA_INFLIGHT = set()
 _DATA_INFLIGHT_LOCK = threading.Lock()
+# Monotonic start time of each in-flight entry so a wedged holder (a Dhan fetch
+# that hung on the SDK/serializer and never unwound) can be detected and taken
+# over instead of 503-ing its cache key forever ("Chart data still loading" for
+# every later request - the NIFTY chart that never opened).
+_DATA_INFLIGHT_AT = {}
+_SINGLE_FLIGHT_MAX_SEC = 15.0
 
 # ---- Serialized option-chain REST refresh pipeline ----
 # Dhan /optionchain is throttled to 1 req/3s and an empty response arms a 30s
@@ -3869,7 +3929,9 @@ def api_candles():
     # refetch fills the cache.
     with _DATA_INFLIGHT_LOCK:
         inflight = cache_key in _DATA_INFLIGHT
-        _DATA_INFLIGHT.add(cache_key)
+        if not inflight:
+            _DATA_INFLIGHT.add(cache_key)
+            _DATA_INFLIGHT_AT[cache_key] = time.monotonic()
     if inflight:
         snap, _ = _cache_get_raw(cache_key)
         if snap is not None and snap.get("data"):
@@ -3880,11 +3942,26 @@ def api_candles():
                 "count": snap.get("count"),
                 "prev_close": snap.get("prev_close"),
             })
-        return jsonify({
-            "status": "error",
-            "message": "Chart data still loading - retry in a moment",
-            "retry_after": 3.0,
-        }), 503
+        # No cached snapshot yet and the holder has been running unusually long:
+        # it is wedged (hung Dhan SDK call / stuck serializer) and would 503 this
+        # key forever - every browser retry for e.g. NIFTY 1min landed on the same
+        # stuck holder, so the chart never opened. Take the single-flight over so
+        # a fresh fetch runs. Claiming resets the clock so at most one takeover
+        # slips through per window; the wedge only steals one _HIST slot.
+        with _DATA_INFLIGHT_LOCK:
+            started = _DATA_INFLIGHT_AT.get(cache_key) or 0
+            wedged = (time.monotonic() - started) >= _SINGLE_FLIGHT_MAX_SEC
+            if wedged:
+                _DATA_INFLIGHT_AT[cache_key] = time.monotonic()
+        if wedged:
+            logger.warning("single-flight takeover %s: holder wedged >%ss - fetching fresh",
+                           str(cache_key), _SINGLE_FLIGHT_MAX_SEC)
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Chart data still loading - retry in a moment",
+                "retry_after": 3.0,
+            }), 503
 
     if not _hist_try_acquire():
         if cached is not None:
@@ -3957,6 +4034,7 @@ def api_candles():
         _hist_release()
         with _DATA_INFLIGHT_LOCK:
             _DATA_INFLIGHT.discard(cache_key)
+            _DATA_INFLIGHT_AT.pop(cache_key, None)
 
 
 @app.route("/api/quotes", methods=["POST"])
