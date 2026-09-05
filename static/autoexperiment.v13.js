@@ -7185,6 +7185,22 @@ window.createAutoExperiment = function (suffix) {
       state.runManual = $id('aeRunManualToggle').checked;
       save();
     },
+    /* Programmatic setters used by the AI Brain chat (server-side key model)
+       so it can run a manual-saved-strategy experiment on a chosen side the
+       same way a human clicks the tab. They update engine state + UI without
+       depending on which tab/instance is currently shown. */
+    setRunManual(on) {
+      state.runManual = !!on;
+      save();
+      applyUniversalToUI();
+    },
+    setOptionType(v) {
+      if (v !== 'CE' && v !== 'PE' && v !== 'both') return;
+      if (!state.strike) state.strike = {};
+      state.strike.optionType = v;
+      save();
+      applyUniversalToUI();
+    },
     toggleGroupBy() {
       const el = $id('aeGroupByToggle');
       const next = el ? el.checked : !state.groupByStrategy;

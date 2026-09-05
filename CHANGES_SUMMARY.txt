@@ -1,41 +1,55 @@
-CHANGES_SUMMARY for backup (Direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate + one-trade-per-signal latch + all work since 31-Aug backup)
-Generated: 2026-09-03 UTC
-Diff of committed work between 7140715 and HEAD (612d16a)
+CHANGES_SUMMARY for backup (Algos AI Brain - LLM chat that reads every tab, builds+saves AST strategies, runs AST templates & Auto-Experiment experiments; Trade Stats executed-trades report + IST timestamps; NIFTY Trend-Following confirmed-direction TrendConfirm layer; chart-grid running-strategy mirror; + all work since 31-Aug backup)
+Generated: 2026-09-05 UTC
+Diff of committed work between 7140715 and the current working tree (HEAD 914d9ec + the Algos AI Brain milestone)
 
- static/aismart.js            | 1261 +++++++++++++++++++++---
- app.py                       |  156 ++-
+ .ai-ready/MEMORY.md          |  589 +++++++++++
+ .env.example                 |   17 +
+ app.py                       |  605 ++++++++++-
  data_fetcher.py              |   59 +-
+ static/aipt.js               |   31 +
+ static/aismart.js            | 2304 ++++++++++++++++++++++++++++++++++++------
+ static/algosbrain.js         | 2207 ++++++++++++++++++++++++++++++++++++++++
  static/autoexperiment.js     |   29 +-
- static/autoexperiment.v13.js |  336 ++++++-
- static/autoexperiment.v14.js | 2183 ++++++++++++++++++++++++++++++++++++++++++
+ static/autoexperiment.v13.js |  595 ++++++++---
+ static/autoexperiment.v14.js | 2183 +++++++++++++++++++++++++++++++++++++++
+ static/chart_grid.js         |  540 ++++++++++
  static/fast_live.js          |  210 ++++
  static/hft_pool.js           |  103 +-
- static/indicators.js         |  176 +++-
- static/oitrend.js            | 1239 ++++++++++++++++++++++++
- static/paperrun.js           |  234 +++--
- static/papertrade.js         |   70 +-
- static/smart_ntrader.js      |  910 +++++++++++++-----
- static/strategies.js         |  255 +++--
- templates/index.html         |  444 +++++++--
- .ai-ready/MEMORY.md          |  589 ++++++++++++
- 16 files changed, 7519 insertions(+), 783 deletions(-)
+ static/indicators.js         |  202 +++-
+ static/niftybbp_alert.js     |  428 ++++++++
+ static/oitrend.js            | 1239 +++++++++++++++++++++++
+ static/paperrun.js           |  363 +++++--
+ static/papertrade.js         |  114 ++-
+ static/smart_ntrader.js      |  971 +++++++++++++-----
+ static/strategies.js         |  293 +++---
+ static/tradestats.js         |  824 +++++++++++++++
+ static/trendconfirm.js       |  174 ++++
+ templates/index.html         | 1097 +++++++++++++++++++++++-----
+ 23 files changed, 13913 insertions(+), 1264 deletions(-)
 
 --- name-status ---
 M	.ai-ready/MEMORY.md
+A	.env.example
 M	app.py
 M	data_fetcher.py
+M	static/aipt.js
 M	static/aismart.js
+A	static/algosbrain.js
 M	static/autoexperiment.js
 M	static/autoexperiment.v13.js
 A	static/autoexperiment.v14.js
+A	static/chart_grid.js
 A	static/fast_live.js
 M	static/hft_pool.js
 M	static/indicators.js
+A	static/niftybbp_alert.js
 A	static/oitrend.js
 M	static/paperrun.js
 M	static/papertrade.js
 M	static/smart_ntrader.js
 M	static/strategies.js
+A	static/tradestats.js
+A	static/trendconfirm.js
 M	templates/index.html
 
 --- change description ---
@@ -110,3 +124,41 @@ M	templates/index.html
    Enforced in the normal poll and the HFT scanner (armed on placement, kept
    armed while the trade is open, released only on a false signal after the
    close, cleared each new session day).
+
+10) Chart grid + live-UI fixes: new static/chart_grid.js (Smart Chart List +
+    Open Chart inside Paper Trade) mirrors the running AST engine's resolved
+    instrument rows (open/close as symbols join/leave the universe), and the
+    chart layer purges stale spot-scaled overlays + auto-retries single-flight
+    503s so a transient Dhan failure never strands the chart feed.
+
+11) Trade Stats tab + TrendConfirm layer (repo 41 milestone): static/tradestats.js
+    aggregates every closed paper trade from ALL paper engines (AI Smart base,
+    Pooled Runner, Smart NTrader, each duplicated Paper tab, plus AI Smart mirror
+    ledgers) into a strategy-wise executed-trades report with IST timestamps,
+    de-duplicated; static/trendconfirm.js adds a shared NIFTY trend
+    CONFIRMATION + HYSTERESIS layer (15-min regime, EMA9/21 momentum + RSI/Boll
+    %B reversals are only trusted after confirmation) used across Smart NTrader /
+    AST aismart / Auto Experiment so fast NIFTY signals no longer flip
+    BULL/BEAR on momentary noise; static/aipt.js + static/niftybbp_alert.js and
+    the related aismart/autoexperiment changes ride along.
+
+12) Algos AI Brain (repo 42 milestone - new static/algosbrain.js): an in-tab
+    chat "brain" that can be used OFFLINE (keyword/intent engine) or connected
+    to an OpenAI-compatible LLM (server-side key only, configurable through the
+    tab's gear UI - never shipped in code; .env.example added as a template).
+    The LLM mode is prompted with a live system snapshot every round that lists
+    every engine + saved strategy + per-engine Bull/Bear filter counts, so it
+    answers as a human would. It can read any tab, switch timeframes, run/toggle
+    Auto-Experiment (incl. new duplicated AE clones ae1..aeN), run saved AST
+    strategy templates on paper engines, build + save real bearish/bullish
+    strategies programmatically (algodhan_strategies_v1, same shape as the
+    Strategies tab) and run one-shot Auto-Experiment side experiments
+    (ae_experiment) that auto-create the missing-side strategy, enable
+    "run on manually saved strategies", lock the CE/PE direction and fire the
+    experiment - no more "saved strategies khali hai, go create them yourself"
+    punts. Trading side-effects always ask for confirmation unless the user says
+    "auto". New AE engine API: setRunManual(on) / setOptionType('CE'|'PE'|'both')
+    (autoexperiment.v13.js). Indicators/get-directives, read_tab/open_tab UI
+    ops and action chaining (multi-step flows in one reply) included.
+    app.py: _BRAIN_SYS/_BRAIN_ACTIONS/_BRAIN_UIOPS allow-lists + /api/brain/*
+    proxy that keeps the API key on the server.

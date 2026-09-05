@@ -1,78 +1,98 @@
-# Backup: 38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode
+# Backup: 42_Added_AiBrainAlgo
 
 Complete snapshot backup of the project (working directory
-`36_fixed_SmartNTrader_AddedOiTrend`) pushed to
-`himanijoshitiwari1988-lgtm/38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode` (branch `main`).
+`repo_preview`, full history from the 31-Aug backup point) pushed to
+`himanijoshitiwari1988-lgtm/42_Added_AiBrainAlgo` (branch `main`).
 
 ## Contents
 
-- **Complete project files** — the full committed working tree as of `612d16a`
-  (HEAD), including:
+- **Complete project files** — the full committed working tree as of the Algos
+  AI Brain milestone commit (HEAD), including:
   - `app.py`, `main.py`, `broker.py`, `charts.py`, `data_fetcher.py`, `requirements.txt`
-  - `static/` (aismart.js, smart_ntrader.js, autoexperiment*.js, oitrend.js,
-    indicators.js, papertrade.js, paperrun.js, strategies.js, fast_live.js, ...)
+  - `.env.example` (config template - the real `.env` with any key is never
+    tracked or shipped)
+  - `static/` (algosbrain.js, aismart.js, smart_ntrader.js,
+    autoexperiment*.js, oitrend.js, trendconfirm.js, tradestats.js,
+    niftybbp_alert.js, chart_grid.js, aipt.js, fast_live.js, indicators.js,
+    papertrade.js, paperrun.js, strategies.js, ...)
   - `templates/index.html`
   - `CHANGELOG.md`, `HANDOFF.md`, `SESSION.md`
 - **CHANGES_COMPLETE.patch** — the complete unified diff of every change between
-  the previous backup point `7140715` and HEAD `612d16a` (nothing missed),
-  generated with `git diff 7140715 HEAD`, excluding the regenerated doc files
-  themselves.
+  the previous backup point `7140715` and the current working tree (HEAD
+  `914d9ec` + the Algos AI Brain milestone), generated with
+  `git diff 7140715`, excluding the regenerated doc files themselves.
 - **CHANGES_SUMMARY.txt** — `git diff --stat` plus `--name-status` of the same,
   with a plain-language change description.
 
 ## Modified files (in CHANGES_COMPLETE.patch)
 
 ```
- static/aismart.js            | 1261 +++++++++++++++++++++---
- app.py                       |  156 ++-
+ .ai-ready/MEMORY.md          |  589 +++++++++++
+ .env.example                 |   17 +
+ app.py                       |  605 ++++++++++-
  data_fetcher.py              |   59 +-
+ static/aipt.js               |   31 +
+ static/aismart.js            | 2304 ++++++++++++++++++++++++++++++++++++------
+ static/algosbrain.js         | 2207 ++++++++++++++++++++++++++++++++++++++++
  static/autoexperiment.js     |   29 +-
- static/autoexperiment.v13.js |  336 ++++++-
- static/autoexperiment.v14.js | 2183 ++++++++++++++++++++++++++++++++++++++++++
+ static/autoexperiment.v13.js |  595 ++++++++---
+ static/autoexperiment.v14.js | 2183 +++++++++++++++++++++++++++++++++++++++
+ static/chart_grid.js         |  540 ++++++++++
  static/fast_live.js          |  210 ++++
  static/hft_pool.js           |  103 +-
- static/indicators.js         |  176 +++-
- static/oitrend.js            | 1239 ++++++++++++++++++++++++
- static/paperrun.js           |  234 +++--
- static/papertrade.js         |   70 +-
- static/smart_ntrader.js      |  910 +++++++++++++-----
- static/strategies.js         |  255 +++--
- templates/index.html         |  444 +++++++--
- .ai-ready/MEMORY.md          |  589 ++++++++++++
-  16 files changed, 7519 insertions(+), 783 deletions(-)
+ static/indicators.js         |  202 +++-
+ static/niftybbp_alert.js     |  428 ++++++++
+ static/oitrend.js            | 1239 +++++++++++++++++++++++
+ static/paperrun.js           |  363 +++++--
+ static/papertrade.js         |  114 ++-
+ static/smart_ntrader.js      |  971 +++++++++++++-----
+ static/strategies.js         |  293 +++---
+ static/tradestats.js         |  824 +++++++++++++++
+ static/trendconfirm.js       |  174 ++++
+ templates/index.html         | 1097 +++++++++++++++++++++++-----
+ 23 files changed, 13913 insertions(+), 1264 deletions(-)
 ```
 
-This backup includes (highlights of `7140715..612d16a`, 25 commits):
+This backup includes (highlights of `7140715..HEAD`, cumulative):
 
+- **Algos AI Brain (new `static/algosbrain.js`)** — an in-tab chat "brain" that
+  works OFFLINE (keyword/intent engine) or connected to an OpenAI-compatible
+  LLM (key kept server-side only, configured via the tab's gear UI / `.env`,
+  template in `.env.example`). Each LLM round is fed a live system snapshot
+  (every engine, saved strategies, per-engine Bull/Bear filter counts, quote
+  state), so it reads any tab and answers like a human: read tabs, open tabs,
+  set AST timeframes, run/toggle Auto-Experiment (incl. duplicated AE clones),
+  run saved AST strategy templates on paper engines, build + save real
+  bearish/bullish strategies programmatically into the shared
+  `algodhan_strategies_v1` store, and run one-shot Auto-Experiment side
+  experiments (`ae_experiment`) that auto-create the missing-side strategy,
+  enable "run on manually saved strategies", lock CE/PE direction and start the
+  run - no more "go create a strategy yourself" dead-ends. Multi-step action
+  chaining in one reply; every trade side-effect asks confirmation unless the
+  user said "auto". AE engine gained `setRunManual(on)` / `setOptionType(v)`.
+  `app.py`: `_BRAIN_SYS`/`_BRAIN_ACTIONS`/`_BRAIN_UIOPS` allow-lists +
+  `/api/brain/*` proxy.
+- **Trade Stats tab (`static/tradestats.js`)** — strategy-wise executed-trades
+  report across all paper engines + AI Smart mirror ledgers, IST timestamps.
+- **NIFTY Trend-Following confirmed-direction layer (`static/trendconfirm.js`)**
+  — shared 15-min regime + hysteresis so fast EMA/RSI/Boll signals cannot flip
+  the trend side on noise; used across Smart NTrader / AST / AE.
+- **Chart grid mirror (`static/chart_grid.js`)** + chart fixes (stale overlay
+  purge, single-flight 503 auto-retry).
 - **Direct chart-based trade execution (AST indicator-filter + strategy normal
-  mode)** — an option premium chart entry trades that same leg/strike; a spot
-  chart entry resolves a single ATM option of the signal side (bullish -> CE,
-  bearish -> PE) instead of a plain underlying long. Every symbol's chain
-  collapses to one nearest-ATM CE + one PE (`firstPerSide`), so no multi-strike
-  fan-out entries (e.g. 2160 PE + 2180 PE together).
-- **NSE market-hours entry gate** — `marketSessionOpen()` (Mon-Fri IST
-  09:15-15:30) blocks every new paper entry while the exchange is closed, so
-  frozen post-close candles can no longer place losing "after-market" trades
-  that corrupt the paper PnL. Enforced in `allowedTradesFor()` (normal poll +
-  HFT scanner), `hftScan()`, and the normal entry loop. Open positions are still
-  managed to their SL/TP/trail.
-- **AI trail SL intent fix** — a typed Trail SL % on the Overall SL floor now
-  auto-enables trailing (one-time migration) so green trades lock profit; UI
-  Trail SL % default is blank (no phantom 1%).
-- **OI Trend direction filter + OI Trend & Levels overlay** — new `static/oitrend.js`
-  (OI walls, Max Pain, ATM-IV range, PCR, EMA-regime trend state, per-strike
-  CE/PE OI fuse, premium-chain OI strip); new OI Trend filter wired into AI
-  Smart Trading and Auto Experiment.
-- **Auto Experiment strict-AND indicator-filter runs** (`autoexperiment.v13.js`
-  v130-v131) plus the new `autoexperiment.v14.js` engine; strict results kept for
-  every backtested symbol.
-- **SmartNTrader BB%b alert -> auto trade overhaul** (v52-v58) — draft vs armed
-  config, Set Alert & Execute Trade lock, draggable overlay bars, dashed
-  previews, fixed popovers, negative level support, NIFTY-side-gated CE/PE fire.
+  mode)** — option premium chart entries trade that same leg/strike; spot chart
+  entries resolve a single ATM CE/PE of the signal side (`firstPerSide`, no
+  multi-strike fan-out).
+- **NSE market-hours entry gate** — `marketSessionOpen()` blocks new entries
+  after hours; open positions still managed to SL/TP/trail.
+- **AI trail SL intent fix** — typed Trail SL % now auto-enables trailing.
+- **OI Trend direction filter + OI Trend & Levels overlay** — `static/oitrend.js`
+  (OI walls, Max Pain, ATM-IV range, PCR, EMA-regime state, CE/PE fuse).
+- **Auto Experiment strict-AND runs** (`autoexperiment.v13.js` v130-v131) +
+  `autoexperiment.v14.js` engine.
+- **SmartNTrader BB%b alert -> auto trade overhaul** (v52-v58).
+- **One-trade-per-signal latch** — a condition opens exactly one trade per
+  meeting; no instant re-buy after an SL/TP exit.
 - **Rate-limit/persistence + live UI fixes** — per-surface quote cooldowns,
-  1000ms poll, reload-survival chain/pick snapshots, immediate closed-trade
-  repaint, non-blinking running-strategy rows, FastLive WS candle store.
-- **One-trade-per-signal latch** — a strategy+instrument condition opens exactly
-  one trade per meeting; after an SL/TP exit the still-true condition cannot
-  instantly re-buy (APLAPOLLO 2140 PE was churned 24x in one session), it must
-  reset FALSE and meet again fresh.
+  reload-survival chain/pick snapshots, FastLive WS candle store, non-blinking
+  running rows, immediate closed-trade repaint.

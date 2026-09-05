@@ -2298,6 +2298,13 @@
     },
     removeIndicator,
     removeAll,
+    /* Remove every deployed instance whose def id matches (used by the AI Brain
+       ui tool so it can drop e.g. all EMA overlays without knowing uids). */
+    removeAllOf(id) {
+      const ids = indicators.filter(i => i.def.id === id).map(i => i.uid);
+      ids.forEach(u => removeIndicator(u));
+      return ids.length;
+    },
     openSettings,
     closeModal,
     applySettings,

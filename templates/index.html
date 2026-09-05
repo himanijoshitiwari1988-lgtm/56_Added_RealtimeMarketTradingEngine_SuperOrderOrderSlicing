@@ -988,6 +988,17 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <span id="ptAeTplReceived" style="font-size:9px;color:#ccc;display:flex;flex-wrap:wrap;gap:4px;align-items:center"></span>
           </div>
         </div>
+        <div class="monitor-toolbar" id="ptAstTplRunSection" style="border:1px solid #4a2d7e;border-radius:4px;margin:4px 8px">
+          <div class="monitor-toolbar-row" style="flex-wrap:wrap;align-items:center">
+            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#b39ddb">AST saved templates quick run:</b></div>
+            <select id="ptAstTplRun" title="AI Smart Trading Engine ke saved setting templates - dropdown me har template apni run mode (normal / filter) ke saath dikhta hai" style="min-width:250px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px"></select>
+            <button class="btn-action" id="ptAstTplRunBtn" style="width:auto;padding:5px 14px;margin:0 4px;font-size:10px;background:#b39ddb;color:#0a0a18;font-weight:700" onclick="AISmartTrading.quickRunTemplate()">Run saved template</button>
+            <span style="font-size:8px;color:#666">Dropdown me se saved template chuno aur Run dabao - AI Smart Trading engine khud us template ki saved settings (SL/trail/TP, strikes, filters, symbols) apply karke strategy ya Indicator-filters mode me trades start kar dega.</span>
+          </div>
+          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:4px;align-items:center">
+            <span id="ptAstTplRunStatus" style="font-size:9px;color:#888"></span>
+          </div>
+        </div>
         <div class="account-section" style="flex:1;overflow-y:auto">
           <div style="border-top:1px solid #1e1e40;margin-top:8px;padding-top:6px">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -2657,7 +2668,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=57"></script>
+<script src="/static/indicators.js?v=58"></script>
 <script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
@@ -6214,10 +6225,10 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/trendconfirm.js?v=1"></script>
 <script src="/static/papertrade.js?v=33"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=138"></script>
+<script src="/static/autoexperiment.v13.js?v=139"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=145"></script>
+<script src="/static/aismart.js?v=147"></script>
 <script src="/static/paperrun.js?v=22"></script>
 <script src="/static/paperstrategies.js?v=5"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6287,5 +6298,6 @@ function TabEnginesInit(){
 }
 TabEnginesInit();
 </script>
+<script src="/static/algosbrain.js?v=11"></script>
 </body>
 </html>

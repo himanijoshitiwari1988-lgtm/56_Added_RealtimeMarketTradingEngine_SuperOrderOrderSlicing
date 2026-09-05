@@ -1,9 +1,48 @@
 # AlgoDhan Trading System — Change Log & Continuation Guide
 
-Backup target: `himanijoshitiwari1988-lgtm/38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`
-Source history: `36_fixed_SmartNTrader_AddedOiTrend` (earlier backups: `33algodhan`..`39algodhan`, `36_fixed_SmartNTrader_AddedOiTrend`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`)
+Backup target: `himanijoshitiwari1988-lgtm/42_Added_AiBrainAlgo`
+Source history: `41_added_TradeStats_NiftyTrendFollowingFixed` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`)
 
-## Latest backup (2026-09-03) — direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate + one-trade-per-signal latch
+## Latest backup (2026-09-05) — Algos AI Brain (LLM/offline chat that reads every tab, builds+saves strategies, runs AST templates & Auto-Experiment) + Trade Stats + NIFTY TrendConfirm layer + chart-grid
+
+Full diff: `7140715..current` (23 files, +13913/-1264), regenerated
+`CHANGES_COMPLETE.patch` / `CHANGES_SUMMARY.txt` / `BACKUP_README.md` /
+`CHANGELOG.md` for the full window. Complete code state is pushed to
+`42_Added_AiBrainAlgo` `main`.
+
+- **Algos AI Brain (`static/algosbrain.js`)** — a new chat "brain" inside the
+  Algos tab. OFFLINE mode runs a keyword/intent engine; OPTIONAL LLM mode talks
+  to any OpenAI-compatible endpoint whose key lives server-side only
+  (`/api/brain/*` proxy, `.env` / in-tab gear UI; `.env.example` added as the
+  template - the real `.env` is never tracked). Every round is prompted with a
+  LIVE SYSTEM SNAPSHOT (per-engine `key=` lines, saved strategies,
+  per-engine Bull/Bear filter counts, quote state) so the model reads the actual
+  state instead of hallucinating. It opens/reads tabs, sets AST timeframes,
+  runs/toggles Auto-Experiment (incl. duplicated AE clones ae1..aeN), runs saved
+  AST strategy templates on paper engines, and builds + saves REAL bearish/
+  bullish strategies programmatically into the shared `algodhan_strategies_v1`
+  store (EMA-9/21 cross, RSI reversal, Supertrend, MACD cross, BB reversion)
+  with the same shape as human-built strategies, so they appear in Strategies,
+  AST paper runs and AE "run on manual strategies". One-shot `ae_experiment`
+  {side} auto-creates the missing-side strategy, flips AE to manual-strategy
+  runs, locks CE/PE direction and starts the experiment - no more "saved
+  strategies khali hai, Strategies tab me khud create karo" punts. Actions chain
+  (multi-step in one reply, capped at 5 rounds); every trade side-effect asks
+  for confirmation unless the user says "auto". Auto-Experiment engine gained
+  `setRunManual(on)` / `setOptionType('CE'|'PE'|'both')`. Server: `_BRAIN_SYS` /
+  `_BRAIN_ACTIONS` / `_BRAIN_UIOPS` allow-lists validate action/ui/data kinds.
+- **Trade Stats tab (`static/tradestats.js`)** — strategy-wise executed-trades
+  report aggregating closed paper trades from all paper engines + AI Smart
+  mirror ledgers, with IST timestamps, de-duplicated.
+- **NIFTY Trend-Following confirmed-direction layer (`static/trendconfirm.js`)**
+  — shared 15-min NIFTY trend confirmation + hysteresis across Smart NTrader /
+  AST / Auto Experiment, so momentary EMA9/21 / RSI / Boll %B reversals no
+  longer flip the trade side on noise.
+- **Chart grid (`static/chart_grid.js`)** — Smart Chart List + Open Chart inside
+  Paper Trade mirroring the running AST engine's resolved instruments; chart
+  stale-overlay purge + single-flight 503 auto-retry fixes.
+
+## Backup (2026-09-03) — direct chart-based single-strike CE/PE execution for Indicator-Filter & Strategy Normal mode + NSE market-hours entry gate + one-trade-per-signal latch
 
 Full diff: `7140715..612d16a` (25 commits, 16 files, +7519/-783). Complete code
 state is pushed to `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode` `main`.

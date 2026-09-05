@@ -7287,13 +7287,122 @@ window.createAISmartTrading = function (suffix) {
     if (!el) return;
     el.innerHTML = '<option value="">-- none --</option>' + tplLoad().map(t =>
       '<option value="' + esc(t.id) + '">' + esc(t.name) + ' (' + esc(t.mode) + ')</option>').join('');
+    refreshQuickRunSelects();
+  }
+
+  /* Fill one "AST saved templates quick run" <select> with every saved engine
+     template. Each option shows the template name, its market mode, the run
+     mode it was saved under and how many ticked strategies it carries, so the
+     user knows exactly what the Run button will start. Repopulation is skipped
+     when the template set did not change (dataset.tplIds cache). */
+  function fillQuickRunSelect(sel) {
+    if (!sel) return;
+    const list = tplLoad();
+    const cur = sel.value;
+    const modeLabel = (rm) => rm === 'filter' ? 'Indicator-filters run' : (rm === 'aipick' ? 'AI auto-pick run' : 'strategies run');
+    const rows = list.map(t => {
+      const st = (t.settings && typeof t.settings === 'object') ? t.settings : {};
+      const rm = st.runMode || (st.filterMode === true ? 'filter' : (st.aiPick === true ? 'aipick' : 'normal'));
+      const n = Array.isArray(st.selected) ? st.selected.length : 0;
+      return {
+        id: String(t.id),
+        label: esc(String(t.name)) + ' (' + esc(t.mode || '') + ') · ' + modeLabel(rm) + (n ? ' · ' + n + ' strat' : '')
+      };
+    });
+    const sig = rows.map(r => r.id + '~' + r.label).join('|');
+    if (sel.dataset.tplIds === sig) {
+      if (cur && sel.querySelector('option[value="' + cur + '"]')) sel.value = cur;
+      return;
+    }
+    sel.dataset.tplIds = sig;
+    if (!rows.length) {
+      sel.innerHTML = '<option value="">-- no saved templates --</option>';
+      return;
+    }
+    sel.innerHTML = '<option value="">-- select template --</option>' + rows.map(r =>
+      '<option value="' + r.id + '">' + r.label + '</option>').join('');
+    if (cur && sel.querySelector('option[value="' + cur + '"]')) sel.value = cur;
+  }
+
+  /* Fill this engine instance's own quick-run dropdown (the suffixed element
+     when running inside a cloned paper tab). */
+  function populateQuickRunSelect() {
+    fillQuickRunSelect($id('ptAstTplRun'));
+  }
+
+  /* Templates are shared across every paper tab, so a save / delete / boot on
+     any engine refreshes EVERY quick-run dropdown in the document (the base
+     Paper Trade tab + all cloned paper-tab copies). */
+  function refreshQuickRunSelects() {
+    if (!document.querySelectorAll) { populateQuickRunSelect(); return; }
+    const sels = document.querySelectorAll('select[id^="ptAstTplRun"]');
+    if (!sels.length) return;
+    for (let i = 0; i < sels.length; i++) fillQuickRunSelect(sels[i]);
+  }
+
+  /* Fill the "AST saved templates quick run" dropdown (this tab's own copy;
+     cloned paper tabs carry their suffixed element and each engine instance
+     fills its own) with every saved engine-settings template. Each option
+     shows the template name, its market mode, the run mode it was saved under
+     and how many ticked strategies it carries, so the user knows exactly what
+     the Run button will start. */
+  function populateQuickRunSelect() {
+    const el = $id('ptAstTplRun');
+    if (!el) return;
+    const list = tplLoad();
+    const cur = el.value;
+    const joined = list.map(t => String(t.id)).join('|');
+    if (el.dataset.tplIds === joined) {
+      if (cur && el.querySelector('option[value="' + cur + '"]')) el.value = cur;
+      return;
+    }
+    el.dataset.tplIds = joined;
+    if (!list.length) {
+      el.innerHTML = '<option value="">-- no saved templates --</option>';
+      return;
+    }
+    const modeLabel = (rm) => rm === 'filter' ? 'Indicator-filters run' : (rm === 'aipick' ? 'AI auto-pick run' : 'strategies run');
+    el.innerHTML = '<option value="">-- select template --</option>' + list.map(t => {
+      const st = (t.settings && typeof t.settings === 'object') ? t.settings : {};
+      const rm = st.runMode || (st.filterMode === true ? 'filter' : (st.aiPick === true ? 'aipick' : 'normal'));
+      const n = Array.isArray(st.selected) ? st.selected.length : 0;
+      return '<option value="' + esc(String(t.id)) + '">' + esc(String(t.name)) + ' (' + esc(t.mode || '') + ') · ' + modeLabel(rm) + (n ? ' · ' + n + ' strat' : '') + '</option>';
+    }).join('');
+    if (cur && el.querySelector('option[value="' + cur + '"]')) el.value = cur;
+  }
+
+  /* Deep copies of every strategy currently TICKED (state.selected[id] true)
+     across all four engine sources (saved library / imported / manual / AI
+     picks). Stored inside a saved engine-settings template so the "quick run"
+     control can restore the exact ticked strategy set it was saved with - even
+     when the library has changed since - before starting the engine. */
+  function tickedDefsSnapshot() {
+    const out = [];
+    const seen = {};
+    const push = (s) => {
+      if (!s || s.id == null) return;
+      const k = String(s.id);
+      if (seen[k]) return;
+      seen[k] = 1;
+      try { out.push(JSON.parse(JSON.stringify(s))); } catch (e) {}
+    };
+    savedByGroup().forEach(s => { if (s && state.selected[s.id]) push(s); });
+    (state.imported || []).forEach(s => { if (s && state.selected[s.id]) push(s); });
+    (state.manual || []).forEach(s => { if (s && state.selected[s.id]) push(s); });
+    (state.aiPicks || []).forEach(s => { if (s && state.selected[s.id]) push(s); });
+    return out;
   }
 
   /* Snapshot the current live engine settings (state already mirrors the UI
      because every input change calls its read* handler). Includes the current
      instrument pick set (the symbols this engine trades under the configured
-     selection rules) so saved templates carry their own symbol universe. */
+     selection rules) so saved templates carry their own symbol universe. The
+     active run mode (normal / filter) plus the currently ticked strategy
+     definitions are captured too, so a template can be re-run with one click:
+     the quick-run control applies these settings and starts the engine exactly
+     as it was when the template was saved. */
   function captureEngineSettings() {
+    const ri = state.runIntent && state.runIntent.active;
     return {
       universal: JSON.parse(JSON.stringify(state.universal)),
       strike: JSON.parse(JSON.stringify(state.strike)),
@@ -7306,7 +7415,16 @@ window.createAISmartTrading = function (suffix) {
       niftyTf: _niftyTf,
       commodity: state.commodity ? JSON.parse(JSON.stringify(state.commodity)) : { enabled: false, sids: [] },
       symbols: experimentSymbols(),
-      allInOne: state.allInOne === true
+      allInOne: state.allInOne === true,
+      /* Which run the template was saved under: 'normal' (Run Paper Trading on
+         ticked strategies), 'filter' (Indicator-filters mode) or 'aipick'
+         (Smart AI trader auto-pick). */
+      runMode: ri ? ri.mode : (state.filterMode === true ? 'filter' : (state.aiPick === true ? 'aipick' : 'normal')),
+      aiPick: state.aiPick === true,
+      aiPickN: Math.max(1, Number(state.aiPickN) || 5),
+      aiPickBull: state.aiPickBull !== false,
+      aiPickBear: state.aiPickBear !== false,
+      selected: tickedDefsSnapshot()
     };
   }
 
@@ -7398,6 +7516,119 @@ window.createAISmartTrading = function (suffix) {
     tplSave(tplLoad().filter(x => String(x.id) !== String(id)));
     renderTemplateSelect();
     log('Template deleted', 'ok');
+  }
+
+  /* ---------------- quick run: saved engine template ----------------
+     "AST saved templates quick run" section (above the Running Strategies list
+     in the Paper Trade tab). Pick a saved engine-settings template from the
+     dropdown and press Run: the engine applies that template's full settings
+     (universal defaults / SL / trail SL / TP / AI risk / strikes / run-in /
+     indicator filters / movers / captured symbols), restores the strategies
+     that were ticked when the template was saved, then starts the exact run
+     mode the template was saved under - Run Paper Trading (ticked strategies)
+     or Indicator-filters mode (filter-AND trades on the captured universe). */
+
+  /* Start the engine in the Smart AI trader auto-pick mode (the template
+     variant of runPaper - keeps aiPick ON so activeStrategies() re-picks the
+     top-N strategies every tick instead of only running manual ticks). */
+  function startAiPickRun() {
+    readUniversal();
+    state.filterMode = false;
+    state.aiPick = true;
+    state.callManual = true;
+    applyModeToUI();
+    applyRunModeUI();
+    state.enabled = true;
+    state.runIntent = { active: true, mode: 'normal', at: Date.now() };
+    _userFastDataOff = false;
+    save();
+    applyUniversalToUI();
+    render();
+    log('Smart AI trader auto-pick run started - engine picks the top strategies every tick', 'ok');
+    tick();
+  }
+
+  /* Make sure every saved ticked-strategy definition is present in the engine
+     so the run can evaluate it. A strategy still in the saved library keeps its
+     library identity; one that no longer exists anywhere in the engine is
+     re-materialized into the imported list under the same id, then ticked. */
+  function ensureTickedDefs(defs) {
+    if (!Array.isArray(defs) || !defs.length) return 0;
+    const known = {};
+    const mark = (arr) => (Array.isArray(arr) ? arr : []).forEach(s => { if (s && s.id != null) known[String(s.id)] = true; });
+    mark(savedByGroup());
+    mark(state.imported || []);
+    mark(state.manual || []);
+    mark(state.aiPicks || []);
+    let restored = 0;
+    defs.forEach(def => {
+      if (!def || def.id == null) return;
+      const idStr = String(def.id);
+      if (!known[idStr]) {
+        try {
+          const copy = JSON.parse(JSON.stringify(def));
+          copy._fromTemplate = true;
+          if (copy.createdAt == null) copy.createdAt = Date.now();
+          state.imported.push(copy);
+          known[idStr] = true;
+        } catch (e) { return; }
+      }
+      state.selected[idStr] = true;
+      restored++;
+    });
+    return restored;
+  }
+
+  /* Apply a saved engine template and start the engine running it. Shared by
+     the quick-run control (runTemplateById(id)) and reusable programmatically. */
+  function runTemplateById(id) {
+    const t = tplLoad().find(x => String(x.id) === String(id));
+    if (!t) {
+      log('Template not found - save it again from the AI Smart Template bar', 'warn');
+      return { ok: false, name: '', mode: '', runMode: '', restored: 0 };
+    }
+    const st = (t.settings && typeof t.settings === 'object') ? t.settings : {};
+    applyEngineSettings(st);
+    let restored = 0;
+    if (Array.isArray(st.selected) && st.selected.length) restored = ensureTickedDefs(st.selected);
+    const runMode = st.runMode || (st.filterMode === true ? 'filter' : (st.aiPick === true ? 'aipick' : 'normal'));
+    save();
+    render();
+    if (runMode === 'filter') {
+      runFilterPaper();
+    } else if (runMode === 'aipick') {
+      if (st.aiPick === true) { state.aiPick = true; const aEl = $id('astAiPick'); if (aEl) aEl.checked = true; }
+      startAiPickRun();
+    } else {
+      runPaper();
+    }
+    const label = runMode === 'filter' ? 'Indicator-filters mode' : (runMode === 'aipick' ? 'AI auto-pick run' : 'Run Paper Trading');
+    if (runMode === 'normal' && !restored) {
+      log('Template "' + t.name + '" (' + t.mode + ') applied - Run Paper Trading started with NO ticked strategy stored in it (tick a strategy and re-save the template to capture the full run)', 'warn');
+    } else {
+      log('Template "' + t.name + '" (' + t.mode + ') applied - ' + label + ' started' + (restored ? ' with ' + restored + ' strategy(s) restored from the template' : ''), 'ok');
+    }
+    return { ok: true, name: t.name, mode: t.mode, runMode: runMode, restored: restored };
+  }
+
+  /* Run button of the "AST saved templates quick run" section: reads the
+     selected template from this tab's dropdown and starts the engine on it. */
+  function quickRunTemplate() {
+    const el = $id('ptAstTplRun');
+    const id = el ? String(el.value || '') : '';
+    const statusEl = $id('ptAstTplRunStatus');
+    if (!id) {
+      log('Select a saved template from the quick-run dropdown first', 'warn');
+      if (statusEl) statusEl.innerHTML = '<span style="color:#ff9800">Please select a saved template from the dropdown first.</span>';
+      return { ok: false };
+    }
+    const res = runTemplateById(id);
+    if (statusEl) {
+      statusEl.innerHTML = res.ok
+        ? '<span style="color:#b39ddb;font-weight:700">RUN</span> template <b style="color:#fff">' + esc(res.name) + '</b> (' + esc(res.mode || '') + ') started in <b style="color:#00d4aa">' + (res.runMode === 'filter' ? 'Indicator-filters' : (res.runMode === 'aipick' ? 'AI auto-pick' : 'normal strategies')) + '</b> mode' + (res.restored ? ' · <span style="color:#ffd700">' + res.restored + ' strategy(s) restored</span>' : '') + ' <span style="color:#666">- engine ON, running live (details in the AST log below)</span>'
+        : '<span style="color:#ef5350">Run failed - see the AI Smart log below.</span>';
+    }
+    return res;
   }
 
 
@@ -7596,6 +7827,12 @@ window.createAISmartTrading = function (suffix) {
     saveTemplate,
     openTemplate,
     deleteTemplate,
+    /* Quick run of a saved engine-settings template ("AST saved templates
+       quick run" section): quickRunTemplate() reads this tab's dropdown and
+       starts the engine; runTemplateById(id) is the programmatic variant. */
+    quickRunTemplate,
+    runTemplateById,
+    startAiPickRun,
     /* Resolve the ATM option contract of an F&O STOCK (Smart NTrader). The
        engine's own run-in mode keeps stocks on their spot chart, but the
        NTrader deliberately trades stock OPTION premiums, so this forces a
@@ -7674,6 +7911,37 @@ window.createAISmartTrading = function (suffix) {
     renderRunning();
     renderClosed();
     renderSummary();
+  };
+
+  /* P&L summary for external consumers (AI Brain chat / status). Realized is
+     summed from the closed-trade ledger (net of charges) so it always matches
+     the Closed Positions table; open (unrealized) P&L is priced with the exact
+     same chart close the Running Trades row uses, so a still-running trade is
+     never reported as a flat zero. */
+  api.pnlSummary = function () {
+    let realized = 0, charges = 0, count = 0, wins = 0;
+    (state.closed || []).forEach((t) => {
+      const v = (typeof t.netPnl === 'number') ? t.netPnl : (typeof t.pnl === 'number' ? t.pnl : 0);
+      realized += v;
+      if (typeof t.charges === 'number') charges += t.charges;
+      count++;
+      if (v > 0) wins++;
+    });
+    let openPnlSum = 0, open = 0;
+    const openCount = Object.keys(state.positions || {}).length;
+    Object.keys(state.positions || {}).forEach((k) => {
+      const p = state.positions[k];
+      if (!p) return;
+      const cur = positionCurrentPrice(p);
+      if (cur != null && p.entryPrice != null && p.qty) {
+        open++;
+        openPnlSum += (p.side === 'BUY' ? (cur - p.entryPrice) : (p.entryPrice - cur)) * p.qty;
+      }
+    });
+    return { realized: realized, charges: charges, count: count, wins: wins,
+             winRate: count ? (wins / count * 100) : null,
+             openPnl: (openCount && !open) ? null : openPnlSum,
+             open: open, openCount: openCount };
   };
 
   /* Per-tab instance registry + active-tab facade (same tab-id key scheme as

@@ -18,6 +18,7 @@ import logging
 import gzip as _gzip
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
+import requests as _requests
 
 from broker import DhanBroker
 from data_fetcher import DataFetcher, TIMEFRAME_CONFIG, _unwrap_sdk_response, rate_limit_cooldown_active, rate_limit_cooldown_remaining, _throttle, auth_error, _market_open_now, oc_rate_limited, quote_rate_limited
@@ -2491,6 +2492,358 @@ def api_connect():
 def api_status():
     return jsonify({"connected": broker.is_connected, "client_id": broker.client_id,
                     "auth_error": auth_error()})
+
+
+# ---------------------------------------------------------------------------
+# Algos AI Brain - optional LLM backend (key stays server-side)
+# ---------------------------------------------------------------------------
+# The project never hard-codes an API key. Whoever runs the app supplies their
+# own key through a USER_-prefixed env var (or a .env file in this folder):
+#   USER_LLM_API_KEY    your OpenAI-compatible API key
+#   USER_LLM_BASE_URL   default https://api.openai.com/v1
+#   USER_LLM_MODEL      default gpt-4o-mini
+# When no key is present the frontend keeps running in fully-offline brain mode.
+def _load_dotenv_file():
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(p):
+        return
+    try:
+        for line in open(p, "r", encoding="utf-8"):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and not os.environ.get(k):
+                os.environ[k] = v
+    except Exception:
+        pass
+
+
+_load_dotenv_file()
+
+
+_BRAIN_ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+# Runtime overrides set from the Brain tab settings UI. They win over env vars
+# without needing a server restart; they are also persisted to .env so the key
+# survives restarts. The key value itself is NEVER returned to the browser.
+_BRAIN_RUNTIME = {}
+
+
+def _env_val(name, default=""):
+    return (os.environ.get(name) or default).strip()
+
+
+def _brain_cfg():
+    key = str(_BRAIN_RUNTIME.get("key") or _env_val("USER_LLM_API_KEY") or "").strip()
+    base = str(_BRAIN_RUNTIME.get("base") or _env_val("USER_LLM_BASE_URL") or "https://api.openai.com/v1").strip().rstrip("/")
+    model = str(_BRAIN_RUNTIME.get("model") or _env_val("USER_LLM_MODEL") or "gpt-4o-mini").strip()
+    return key, base, model
+
+
+def _brain_persist():
+    """Write the current runtime LLM config (key, base, model) to .env so it
+    survives a server restart. No other content of .env is touched."""
+    try:
+        key = str(_BRAIN_RUNTIME.get("key") or _env_val("USER_LLM_API_KEY") or "").strip()
+        base = str(_BRAIN_RUNTIME.get("base") or _env_val("USER_LLM_BASE_URL") or "https://api.groq.com/openai/v1").strip().rstrip("/")
+        model = str(_BRAIN_RUNTIME.get("model") or _env_val("USER_LLM_MODEL") or "openai/gpt-oss-120b").strip()
+        keep = {}
+        if os.path.exists(_BRAIN_ENV_FILE):
+            try:
+                for line in open(_BRAIN_ENV_FILE, "r", encoding="utf-8"):
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k2, _, _ = line.partition("=")
+                    keep[k2.strip()] = line
+            except Exception:
+                pass
+        keep["USER_LLM_API_KEY"] = "USER_LLM_API_KEY=" + (key if key else "")
+        keep["USER_LLM_BASE_URL"] = "USER_LLM_BASE_URL=" + base
+        keep["USER_LLM_MODEL"] = "USER_LLM_MODEL=" + model
+        with open(_BRAIN_ENV_FILE, "w", encoding="utf-8") as f:
+            f.write("# Algos AI Brain LLM config - set from the AI Brain tab.\n")
+            f.write("# Values below are the ONLY thing this tool manages in this file.\n\n")
+            f.write(keep["USER_LLM_API_KEY"] + "\n")
+            f.write(keep["USER_LLM_BASE_URL"] + "\n")
+            f.write(keep["USER_LLM_MODEL"] + "\n")
+    except Exception:
+        pass
+
+
+_BRAIN_ACTIONS = ("stop_all", "reset_pnl", "run_strategies", "ae_to_paper", "set_timeframe", "simulator",
+                  "run_ast_template", "ae_run", "ae_toggle", "build_saved_strategy", "ae_experiment")
+_BRAIN_TOPICS = ("overview", "pnl_all", "pnl", "indices", "tf_status", "templates_list", "strategies_list")
+_BRAIN_UIOPS = ("open_chart", "add_indicator", "remove_indicator", "open_tab", "read_tab")
+
+_BRAIN_SYS = (
+    "You are 'Algos AI Brain', the built-in assistant of a Dhan algo-trading web app. "
+    "You chat like a smart, friendly trading co-pilot and you ACT on the app's settings through actions. "
+    "Language: reply in the SAME natural language the user used - mixed Hinglish/Hindi/English is perfectly fine. "
+    "Be short and useful (2-6 lines), numbers in INR, use words like 'kar diya / ho gaya / dekh raha hoon' naturally. "
+    "The LIVE SYSTEM SNAPSHOT below tells you the current state of every engine, strategy, template, quote, chart and setting. "
+    "Rules:\n"
+    "- If the user asks about data/status/P&L etc, answer directly from the snapshot. If you need fresher numbers call "
+    "kind=data with topic from: overview, pnl_all, pnl, indices, tf_status, templates_list, strategies_list.\n"
+    "- If the user wants you to CHANGE something (run/stop/reset/send to paper/timeframe/simulator) return "
+    "kind=action with action.type one of: stop_all, reset_pnl, run_strategies, ae_to_paper, set_timeframe, simulator, "
+    "run_ast_template, ae_run, ae_toggle, "
+    "and action.params fitting that type (engine keys look like 'papertrade'/'paper2'/'autoexperiment'). "
+    "set_timeframe params {engine?, tf:'1min'|'5min'|'both'}. "
+    "run_strategies params: {engine?, phrase:'top 2 bullish'} or {names:['<exact saved strategy name>']}. "
+    "run_ast_template params {engine?, template:'<exact saved AST template name>'} - runs a saved engine-settings "
+    "template (from the snapshot's per-engine templates list) and starts the engine on it. "
+    "ae_run params {engine?} - starts an Auto Experiment run on that AE tab. "
+    "ae_toggle params {engine?, on:true|false} - enables/disables the AE auto strategy engine. simulator params {on:true}. "
+    "If the user asks to run/experiment a strategy but NO saved strategy of that side exists, DO NOT tell the user to "
+    "create one manually - create it yourself first with build_saved_strategy "
+    "params {side:'bearish'|'bullish', name?, setup?, symbol?, tf?} where setup is one of "
+    "ema_cross (EMA-9/21 cross), rsi_reversal (RSI-14 oversold/overbought), supertrend (10,3), macd_cross (12,26,9), "
+    "bb_reversion (Bollinger %B 20,2); defaults are chosen sensibly when omitted. Then run it. "
+    "For an AST paper run chain build_saved_strategy then run_strategies {names:['<the strategy you just created>']}. "
+    "For an AE experiment of one side use ONE action instead of chaining: "
+    "ae_experiment params {side:'bearish'|'bullish'|'both', engine?, name?, setup?, symbol?, tf?} - it creates a saved "
+    "strategy if none of that side exists, switches the AE engine to 'run on manually saved strategies', locks the "
+    "direction (PE for bearish / CE for bullish / untouched for both) and starts the experiment run. "
+    "The UI will ask the user to confirm before any trading change unless the user said 'auto'. The engine param is "
+    "optional; when omitted the active engine is used.\n"
+    "- CHART UI work (open a symbol in the main chart from the left sidebar, add/remove indicators like EMA) you CAN "
+    "also do yourself with kind=ui - never tell the user to do it manually. Return kind=ui with op from: "
+    "open_chart, add_indicator, remove_indicator, and params:\n"
+    "  open_chart     params {symbol:'NIFTY'|'RELIANCE'|'<exact sidebar name>', optional tf:'1min'|'5min'|'15min'|'day'}\n"
+    "    add_indicator  params {ind:'ema', length:9, optional source:'close'}   (ema length 9 = EMA-9; "
+    "supported ind ids: ema, ma, smma, bb (bollinger bands), supertrend, vwap, rsi, macd, atr, adx, obv, ao)\n"
+    "    remove_indicator params {ind:'ema'} or {all:true}\n"
+    "    open_tab       params {tab:'autoexperiment'|'papertrade'|'backup'|'account'|'tradestats'|'optionchain'|"
+    "'strategies'|'monitor'|'indextrend'|'smartntrader'|'simulator'|'chart'|'<paperN/ae tab key>'} - switch the app to that tab\n"
+    "    read_tab       params {tab:'<same ids>'|engine:'papertrade'|'paper2'|'autoexperiment'} - returns a live, accurate "
+    "text readout of that tab's/settings panel content (engine states, toggles, lists, templates). Use it whenever you need "
+    "details that are not in the snapshot before acting or answering.\n"
+    "  The snapshot's 'Chart:' line tells you the current chart symbol, timeframe and which indicators are already "
+    "deployed. If the chart is already showing the requested symbol, skip open_chart. If an identical indicator is "
+    "already listed, do not add it again - just say it is already there. Do one ui op per turn; the loop continues "
+    "until the whole request is done.\n"
+    "- Never invent numbers that are not in the snapshot - if you do not know, use kind=data.\n"
+    "Reply STRICTLY as one JSON object, no markdown fences, no prose around it: "
+    '{"kind":"reply","text":"..."} or {"kind":"data","topic":"pnl_all","text":"..."} or '
+    '{"kind":"action","text":"ek second...","action":{"type":"...","params":{...}}} or '
+    '{"kind":"ui","text":"ek second...","op":"add_indicator","params":{"ind":"ema","length":9}}'
+)
+
+
+def _parse_json_obj(s):
+    if not s:
+        return None
+    s = str(s).strip()
+    a = s.find("{")
+    b = s.rfind("}")
+    if a >= 0 and b > a:
+        s = s[a:b + 1]
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        try:
+            start = s.find('{"')
+            if start < 0:
+                return None
+            depth = 0
+            for i in range(start, len(s)):
+                c = s[i]
+                if c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        obj = json.loads(s[start:i + 1])
+                        return obj if isinstance(obj, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+@app.route("/api/brain/config", methods=["GET"])
+def api_brain_config():
+    key, base, model = _brain_cfg()
+    return jsonify({
+        "enabled": bool(key),
+        "model": model if key else "",
+        "base": base if key else "",
+        "hint": "Set env USER_LLM_API_KEY (optional USER_LLM_BASE_URL / USER_LLM_MODEL) on the server, or add them to .env in the app folder."
+    })
+
+
+def _llm_provider_err(resp):
+    """Pull a short, human-readable reason out of a non-200 provider response
+    (Groq/OpenAI style JSON error bodies). Never includes the API key."""
+    msg = ""
+    try:
+        d = resp.json()
+        e = d.get("error") or {}
+        msg = e.get("message") or d.get("message") or ""
+        if not msg and e.get("code"):
+            msg = "code=%s" % e.get("code")
+    except Exception:
+        try:
+            msg = (resp.text or "").strip()[:240]
+        except Exception:
+            msg = ""
+    if not msg:
+        msg = "HTTP %s" % resp.status_code
+    return str(msg)[:240]
+
+
+def _test_llm_key(key, base, model):
+    """One tiny completion call to validate the key/base/model at save time."""
+    try:
+        r = _requests.post(
+            base + "/chat/completions",
+            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": "ping"}],
+                  "max_tokens": 1, "temperature": 0},
+            timeout=(10, 30),
+        )
+        if r.status_code == 200:
+            return True, ""
+        return False, _llm_provider_err(r)
+    except Exception as e:
+        return False, str(e)[:240]
+
+
+@app.route("/api/brain/models", methods=["GET"])
+def api_brain_models():
+    """List chat-capable model ids available to the currently stored key/base.
+    Never exposes the key itself."""
+    key, base, model = _brain_cfg()
+    if not key or not base:
+        return jsonify({"models": [], "current": "", "error": "Pehle settings me key save karo (Save & connect), phir models list aayegi."})
+    try:
+        r = _requests.get(base.rstrip("/") + "/models",
+                          headers={"Authorization": "Bearer " + key}, timeout=(10, 30))
+    except Exception as e:
+        return jsonify({"models": [], "current": "", "error": str(e)[:240]})
+    if r.status_code != 200:
+        return jsonify({"models": [], "current": "", "error": _llm_provider_err(r)})
+    ids = []
+    try:
+        for m in (r.json().get("data") or []):
+            i = str(m.get("id") or "")
+            low = i.lower()
+            if any(x in low for x in ("whisper", "tts", "speech", "embed", "guard", "rerank", "image", "playai", "stable")):
+                continue
+            if i:
+                ids.append(i)
+    except Exception:
+        ids = []
+    ids = sorted(set(ids))
+    return jsonify({"models": ids[:250], "current": model if model in ids else ""})
+
+
+@app.route("/api/brain/config", methods=["POST"])
+def api_brain_config_save():
+    """Save LLM settings from the AI Brain tab. The API key is stored only on
+    the server (runtime + .env) and is never echoed back in any response."""
+    data = request.get_json(silent=True) or {}
+    if data.get("disconnect"):
+        _BRAIN_RUNTIME.pop("key", None)
+        _brain_persist()
+        key, base, model = _brain_cfg()
+        return jsonify({"status": "ok", "enabled": False, "model": "", "base": base})
+    new_key = str(data.get("key") or "").strip().strip('"').strip("'")
+    if new_key:
+        _BRAIN_RUNTIME["key"] = new_key
+    if data.get("base"):
+        _BRAIN_RUNTIME["base"] = str(data["base"]).strip().strip('"').strip("'").rstrip("/")
+    if data.get("model"):
+        _BRAIN_RUNTIME["model"] = str(data["model"]).strip().strip('"').strip("'")
+    key, base, model = _brain_cfg()
+    if key and (not base or not model):
+        _BRAIN_RUNTIME["base"] = base or "https://api.groq.com/openai/v1"
+        _BRAIN_RUNTIME["model"] = model or "openai/gpt-oss-120b"
+        key, base, model = _brain_cfg()
+    _brain_persist()
+    test_ok, test_detail = True, ""
+    if new_key and key and base and model:
+        test_ok, test_detail = _test_llm_key(key, base, model)
+    enabled = bool(key) and test_ok
+    if enabled:
+        message = "LLM connected - chat ab GPT mode me chalega."
+    elif new_key:
+        message = "Key save ho gayi, lekin provider ne reject kar diya: " + test_detail
+    else:
+        message = "LLM disconnected - brain offline mode me hai."
+    return jsonify({
+        "status": "ok" if enabled else "error",
+        "enabled": enabled,
+        "model": model if enabled else "",
+        "base": base if enabled else "",
+        "tested": bool(new_key),
+        "message": message,
+    })
+
+
+@app.route("/api/brain/chat", methods=["POST"])
+def api_brain_chat():
+    data = request.get_json(silent=True) or {}
+    key, base, model = _brain_cfg()
+    if not key:
+        return jsonify({"enabled": False, "kind": "reply", "text": ""}), 200
+    msgs_in = data.get("messages")
+    snapshot = str(data.get("snapshot") or "")
+    system = _BRAIN_SYS
+    if snapshot.strip():
+        system += "\n\n==== LIVE SYSTEM SNAPSHOT (current state - use this) ====\n" + snapshot
+    if not isinstance(msgs_in, list) or not msgs_in:
+        return jsonify({"kind": "reply", "text": "Kuch batao to sahi!"}), 200
+    messages = [{"role": "system", "content": system}]
+    for h in msgs_in[-24:]:
+        if not isinstance(h, dict):
+            continue
+        role = h.get("role")
+        content = str(h.get("content") or "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    if len(messages) < 2:
+        return jsonify({"kind": "reply", "text": "Kuch batao to sahi!"}), 200
+    try:
+        resp = _requests.post(
+            base + "/chat/completions",
+            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+            json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": 900, "stream": False},
+            timeout=(15, 120),
+        )
+        if resp.status_code != 200:
+            return jsonify({"kind": "reply", "text": "LLM provider error (HTTP %s): %s\n\nKey/base/model check karo, ya AI Brain tab ke gear (&#9881;) me 'Disconnect' karke sahi key dobara daalo." % (resp.status_code, _llm_provider_err(resp))}), 200
+        content = (resp.json().get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
+    except Exception as e:
+        return jsonify({"kind": "reply", "text": "LLM call fail hui: %s" % str(e)}), 200
+    obj = _parse_json_obj(content)
+    if not obj:
+        return jsonify({"kind": "reply", "text": content}), 200
+    kind = str(obj.get("kind") or "reply")
+    if kind == "action":
+        a = obj.get("action") or {}
+        at = str(a.get("type") or "")
+        params = a.get("params")
+        params = params if isinstance(params, dict) else {}
+        if at not in _BRAIN_ACTIONS:
+            kind = "reply"
+        return jsonify({"kind": kind, "action": {"type": at, "params": params}, "text": obj.get("text") or ""})
+    if kind == "ui":
+        op = str(obj.get("op") or "")
+        params = obj.get("params")
+        params = params if isinstance(params, dict) else {}
+        if op not in _BRAIN_UIOPS:
+            kind = "reply"
+        return jsonify({"kind": kind, "op": op, "params": params, "text": obj.get("text") or ""})
+    if kind == "data":
+        topic = str(obj.get("topic") or "")
+        if topic not in _BRAIN_TOPICS:
+            topic = ""
+        return jsonify({"kind": "data", "topic": topic, "text": obj.get("text") or ""})
+    return jsonify({"kind": "reply", "text": obj.get("text") or content})
 
 
 @app.route("/api/feed/reset", methods=["POST"])
