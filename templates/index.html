@@ -1015,6 +1015,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               </div>
               <div style="flex:1;min-width:280px">
                 <div style="font-size:10px;color:#66ccff;font-weight:700;margin:4px 0 2px">Running Trades</div>
+                <div id="ptRunTradeCapitalBar" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;font-size:9px;padding:3px 7px;margin:2px 0 4px;border:1px solid #3d3d7e;border-radius:3px;background:#12122a"></div>
                 <div id="ptRunTrades" style="max-height:220px;overflow-y:auto"></div>
               </div>
             </div>
@@ -1042,6 +1043,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           </div>
           <div id="astDataPoolBody" style="display:none;margin-top:6px;max-height:240px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a"></div>
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
+          <div id="astMarginBar" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;font-size:9px;padding:3px 7px;margin:2px 0 4px;border:1px solid #3d3d7e;border-radius:3px;background:#12122a"></div>
           <div style="max-height:220px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="astRunningTable">
               <thead><tr><th>Option</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&amp;L (gross)</th><th>SL/Trail</th><th>Guard</th><th></th></tr></thead>
@@ -1364,6 +1366,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVolDown" onchange="AISmartTrading.onFiltersInput()"> Volume decreasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullFakeBreakout" onchange="AISmartTrading.onFiltersInput()"> Fake breakout</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullReversal" onchange="AISmartTrading.onFiltersInput()"> Reversal</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullGreenCandle" onchange="AISmartTrading.onFiltersInput()"> Strategy entry on green candle</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneCrossUp" onchange="AISmartTrading.onFiltersInput()"> Pane crossover</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneIncUpAll" onchange="AISmartTrading.onFiltersInput()"> Pane all lines increasing upward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullBbwInc" onchange="AISmartTrading.onFiltersInput()"> BBW increasing</label>
@@ -1396,8 +1399,9 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseVwap" onchange="AISmartTrading.onFiltersInput()"> Close above VWAP (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetPaneCross" onchange="AISmartTrading.onFiltersInput()"> Pane crossed line pair still above (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCross" onchange="AISmartTrading.onFiltersInput()"> Crossed-above indicator pair still above (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close above BB middle (level, bands expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close above PC middle line (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close above BB middle (level, middle rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close above PC middle line (level, middle rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line above Signal (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullCandle" onchange="AISmartTrading.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullElliott" onchange="AISmartTrading.onFiltersInput()"> Elliott Wave</label>
@@ -1421,6 +1425,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVolDown" onchange="AISmartTrading.onFiltersInput()"> Volume decreasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearFakeBreakout" onchange="AISmartTrading.onFiltersInput()"> Fake breakout</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearReversal" onchange="AISmartTrading.onFiltersInput()"> Reversal</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearRedCandle" onchange="AISmartTrading.onFiltersInput()"> Strategy entry on red candle</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneCrossDown" onchange="AISmartTrading.onFiltersInput()"> Pane crossover</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneIncDownAll" onchange="AISmartTrading.onFiltersInput()"> Pane all lines increasing downward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearBbwInc" onchange="AISmartTrading.onFiltersInput()"> BBW increasing</label>
@@ -1453,8 +1458,9 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseVwap" onchange="AISmartTrading.onFiltersInput()"> Close below VWAP (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetPaneCross" onchange="AISmartTrading.onFiltersInput()"> Pane crossed line pair still below (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCross" onchange="AISmartTrading.onFiltersInput()"> Crossed-below indicator pair still below (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close below BB middle (level, bands expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close below PC middle line (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close below BB middle (level, middle falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close below PC middle line (level, middle falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line below Signal (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearCandle" onchange="AISmartTrading.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearElliott" onchange="AISmartTrading.onFiltersInput()"> Elliott Wave</label>
@@ -2096,6 +2102,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullVolDown" onchange="AutoExperiment.onFiltersInput()"> Volume decreasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullFakeBreakout" onchange="AutoExperiment.onFiltersInput()"> Fake breakout</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullReversal" onchange="AutoExperiment.onFiltersInput()"> Reversal</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullGreenCandle" onchange="AutoExperiment.onFiltersInput()"> Strategy entry on green candle</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneCrossUp" onchange="AutoExperiment.onFiltersInput()"> Pane crossover</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneIncUpAll" onchange="AutoExperiment.onFiltersInput()"> Pane all lines increasing upward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullBbwInc" onchange="AutoExperiment.onFiltersInput()"> BBW increasing</label>
@@ -2128,8 +2135,9 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseVwap" onchange="AutoExperiment.onFiltersInput()"> Close above VWAP (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetPaneCross" onchange="AutoExperiment.onFiltersInput()"> Pane crossed line pair still above (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCross" onchange="AutoExperiment.onFiltersInput()"> Crossed-above indicator pair still above (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close above BB middle (level, bands expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close above PC middle line (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close above BB middle (level, middle rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close above PC middle line (level, middle rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetVl" onchange="AutoExperiment.onFiltersInput()"> Volume Line above Signal (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullCandle" onchange="AutoExperiment.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullElliott" onchange="AutoExperiment.onFiltersInput()"> Elliott Wave</label>
@@ -2153,6 +2161,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearVolDown" onchange="AutoExperiment.onFiltersInput()"> Volume decreasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearFakeBreakout" onchange="AutoExperiment.onFiltersInput()"> Fake breakout</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearReversal" onchange="AutoExperiment.onFiltersInput()"> Reversal</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearRedCandle" onchange="AutoExperiment.onFiltersInput()"> Strategy entry on red candle</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneCrossDown" onchange="AutoExperiment.onFiltersInput()"> Pane crossover</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneIncDownAll" onchange="AutoExperiment.onFiltersInput()"> Pane all lines increasing downward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearBbwInc" onchange="AutoExperiment.onFiltersInput()"> BBW increasing</label>
@@ -2185,8 +2194,9 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseVwap" onchange="AutoExperiment.onFiltersInput()"> Close below VWAP (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetPaneCross" onchange="AutoExperiment.onFiltersInput()"> Pane crossed line pair still below (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCross" onchange="AutoExperiment.onFiltersInput()"> Crossed-below indicator pair still below (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close below BB middle (level, bands expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close below PC middle line (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close below BB middle (level, middle falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close below PC middle line (level, middle falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetVl" onchange="AutoExperiment.onFiltersInput()"> Volume Line below Signal (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearCandle" onchange="AutoExperiment.onFiltersInput()"> Candlestick patterns</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearElliott" onchange="AutoExperiment.onFiltersInput()"> Elliott Wave</label>
@@ -2416,6 +2426,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Picked Stocks &amp; Strikes <span style="text-transform:none;color:#666;font-weight:normal">(manual selection)</span></h3>
           <div id="ntrPicked" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Every manually enabled F&O stock and its picked strike. Blue = open position, amber = strike resolved, gray = still resolving."></div>
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
+          <div id="ntrMarginBar" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;font-size:9px;padding:3px 7px;margin:2px 0 4px;border:1px solid #3d3d7e;border-radius:3px;background:#12122a"></div>
           <div style="max-height:180px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="ntrRun">
               <thead><tr><th>Option</th><th>Qty</th><th>Entry</th><th>LTP</th><th>P&L (gross)</th><th>SL/Trail</th><th>Guard</th></tr></thead>
@@ -2668,7 +2679,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=58"></script>
+<script src="/static/indicators.js?v=59"></script>
 <script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
@@ -6223,19 +6234,19 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/aitrades.js?v=2"></script>
 <script src="/static/strategies.js?v=71"></script>
 <script src="/static/trendconfirm.js?v=1"></script>
-<script src="/static/papertrade.js?v=33"></script>
+<script src="/static/papertrade.js?v=66"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=139"></script>
+<script src="/static/autoexperiment.v13.js?v=144"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=147"></script>
-<script src="/static/paperrun.js?v=22"></script>
-<script src="/static/paperstrategies.js?v=5"></script>
+<script src="/static/aismart.js?v=156"></script>
+<script src="/static/paperrun.js?v=25"></script>
+<script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
 <script src="/static/fast_live.js?v=2"></script>
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=3"></script>
-<script src="/static/smart_ntrader.js?v=62"></script>
+<script src="/static/smart_ntrader.js?v=65"></script>
 <script src="/static/niftybbp_alert.js?v=5"></script>
 <script src="/static/chart_grid.js?v=9"></script>
 <script src="/static/tradestats.js?v=1"></script>

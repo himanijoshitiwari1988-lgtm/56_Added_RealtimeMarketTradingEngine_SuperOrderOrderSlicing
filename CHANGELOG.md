@@ -1,9 +1,73 @@
 # AlgoDhan Trading System — Change Log & Continuation Guide
 
-Backup target: `himanijoshitiwari1988-lgtm/42_Added_AiBrainAlgo`
-Source history: `41_added_TradeStats_NiftyTrendFollowingFixed` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`)
+Backup target: `himanijoshitiwari1988-lgtm/43_Added_vLindicatorFilter`
+Source history: `42_Added_AiBrainAlgo` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`)
 
-## Latest backup (2026-09-05) — Algos AI Brain (LLM/offline chat that reads every tab, builds+saves strategies, runs AST templates & Auto-Experiment) + Trade Stats + NIFTY TrendConfirm layer + chart-grid
+## Latest backup (2026-09-05) — Volume Line (vl) indicator level filter + green/red candle entry gates + per-engine margin wallet (PaperMarginModal + Running-Trade margin bars) + BB/PC middle (level) gates reworked + NIFTY index includeIndices + chain pre-warm + VWAP trend-leg anchored + daily-fill CPU fix
+
+Full diff: `ac432ec..current` (9 files, +921/-189), regenerated
+`CHANGES_COMPLETE.patch` / `CHANGES_SUMMARY.txt` / `BACKUP_README.md` /
+`CHANGELOG.md` for the full window. Complete code state is pushed to
+`43_Added_vLindicatorFilter` `main`.
+
+- **Volume Line (vl) indicator level filter** — new "Volume Line above/below
+  Signal (level)" Meet filter in AI Smart Trading AND Auto Experiment: vl v0
+  must hold above/below its own vl v1 Signal as a LEVEL (`logic: crossAbove` /
+  `crossBelow`, `cmpType: smoothed`), mirroring the SMF level gate. The chart
+  overlay now deploys the vl line/signal whenever `MeetVl` is ticked (before it
+  only deployed on the rising/falling `bullVl`/`bearVl` trend gate).
+- **Green/red candle entry gates** — new "Strategy entry on green candle"
+  (bull) / "red candle" (bear) indicator-filter toggles (AST + AE): the entry
+  fires only while the forming decision-bar candle is green (close > open) /
+  red (close < open), so the engine never enters into a candle moving the wrong
+  way. `evalCondAt` handles `greenCandle`/`redCandle` as a plain candle-shape
+  check (no indicator needed).
+- **BB & Price-Channel (level) middle gates reworked** — `(level, middle
+  rising/falling)` MeetCloseBb / MeetClosePc now require the close on the side
+  AND the middle band rising (bull) / falling (bear) over its own 10-period
+  window (analysed + deployed `midLength` 20 -> 10); the "Close crossed
+  above/below middle band (upper+lower expanding)" cross gates keep the
+  band-expansion semantics. The Price Channel indicator's midpoint middle now
+  follows its own Mid Band Period (`midLength`) window, not the outer `length`
+  window.
+- **Per-engine margin wallet** — every paper engine reads its margin ONLY from
+  its own Margin input (`marginFieldRootFor`: `ntrMargin` for Smart NTrader,
+  `astMargin` for AI Smart + cloned paper tabs); when a bound input exists it is
+  the SOLE budget (never a broker/default substitute in any mode). New
+  `PaperMarginModal` global "MARGIN KAM PAD GAYA" popup whenever an engine
+  blocks a next auto entry because required margin > available (non-stacking,
+  Close + overlay-click dismiss, re-armable). Margin bars above Running Trades:
+  Paper Trade (`ptRunTradeCapitalBar`), AI Smart (`astMarginBar` - AE-imported
+  trades excluded from the AST wallet and shown as their own AE-locked readout),
+  Smart NTrader (`ntrMarginBar` incl. a "last trade BLOCKED" note). AE-created
+  strategies carry `marginCap` (the AE margin they were created under), kept
+  through paperstrategies import and passed to `autoEntry` as
+  `marginCap`/`sCap`, so AE experiments never spend the AI Smart / manual
+  wallet.
+- **NIFTY trend-following indices fix** — `+Add`-ing an index now turns on the
+  "Include indices for trading" gate automatically and applies to the UI right
+  away; explicitly-added indices keep trading even when NIFTY overall/current
+  layers disagree or the bias is still unknown (only auto directional F&O
+  picking pauses). `prewarmChain()` pre-warms an index's option chain at add
+  time and `resolveInstruments()` re-arms the warm-up for any index that
+  resolved no strikes, so a cold / one-off-empty chain no longer silently drops
+  the index for the whole session; universe status messages list the added
+  indices.
+- **VWAP trend-leg anchored line** — VWAP's default anchor is now `trend`: ONE
+  continuous (never per-session faded/split) VWAP that re-anchors on every
+  confirmed fractal swing leg, so a close cross above/below VWAP fires near the
+  START of a fresh leg instead of half-way through the move; causal /
+  no-repaint (a pivot is adopted only `pivotLen` bars after it forms);
+  `pivotLen` setting added; `session`/`all` anchors preserved. AST, Auto
+  Experiment and the Live Data Pool VWAP conditions now read the trend anchor
+  (single current series - also removes the stale oldest-session `v0` read).
+- **app.py daily-fill CPU-spin fix** — `_daily_fill_loop`'s skip path now
+  advances `_DAILY_FILL_IDX` under `_DAILY_FILL_LOCK` and sleeps before
+  `continue` (a bare `continue` re-processed the same symbol forever and spun
+  one core at ~88-100%).
+- indicators.js cache-bust `v=58` -> `v=59`.
+
+## Backup (2026-09-05) — Algos AI Brain (LLM/offline chat that reads every tab, builds+saves strategies, runs AST templates & Auto-Experiment) + Trade Stats + NIFTY TrendConfirm layer + chart-grid
 
 Full diff: `7140715..current` (23 files, +13913/-1264), regenerated
 `CHANGES_COMPLETE.patch` / `CHANGES_SUMMARY.txt` / `BACKUP_README.md` /

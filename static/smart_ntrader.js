@@ -94,6 +94,7 @@
   var state = {
     running: false,
     visible: false,
+    autoExec: true,   // BB%b Alert -> Auto Trade master switch (NIFTY-direction gated)
     bullCount: 3,
     bearCount: 2,
     count: 5,
@@ -212,6 +213,7 @@
         state.strike.positiveOnly = j.strike.positiveOnly !== false;
       }
       if (j.premiumChart != null) state.premiumChart = !!j.premiumChart;
+      if (j.autoExec != null) state.autoExec = !!j.autoExec;
       if (j.limitOrder && typeof j.limitOrder === 'object') {
         state.limitOrder.enabled = !!j.limitOrder.enabled;
       }
@@ -235,6 +237,7 @@
         margin: state.margin, niftyTf: state.niftyTf, stockTf: state.stockTf,
         lotSize: state.lotSize, lots: state.lots, strike: state.strike,
         premiumChart: state.premiumChart,
+        autoExec: state.autoExec,
         limitOrder: state.limitOrder,
         enabledStocks: state.stocks.filter(function (s) { return s.enabled; }).map(function (s) { return s.sym.name; })
       }));
@@ -828,15 +831,78 @@
 
   function entryPlan(stock, fillRef) {
     var lotSz = (Number(state.lotSize) > 0) ? Math.max(1, Number(state.lotSize)) : lotSizeFor(stock);
-    var marginAvail = Math.max(0, Number(state.margin) || 0);
+    var budget = Math.max(0, Number(state.margin) || 0);
+    /* The margin wallet already locked by OPEN running trades is subtracted, so
+       the affordability cap below sizes against what is ACTUALLY left - two
+       trades can never together overshoot the margin, and when not even one lot
+       fits the remaining balance the plan is rejected (blocked + popup). */
+    var marginAvail = budget > 0 ? Math.max(0, budget - marginLocked()) : 0;
     var wantLots = Math.max(1, Math.round(Number(state.lots) || 1));
     if (!(fillRef > 0) || lotSz <= 0) return null;
-    if (marginAvail > 0) {
+    if (budget > 0 && marginAvail <= 0) return null;
+    if (budget > 0 && marginAvail > 0) {
       var afford = Math.floor(marginAvail / (lotSz * fillRef));
       if (afford < 1) return null;
       return { lotSz: lotSz, wantLots: wantLots, lotsN: Math.min(wantLots, afford), fillRef: fillRef, capped: wantLots > afford };
     }
     return { lotSz: lotSz, wantLots: wantLots, lotsN: wantLots, fillRef: fillRef, capped: false };
+  }
+
+  /* Money the Smart NTrader margin wallet has locked inside the OPEN running
+     trades (its own isolated _ntrader paper engine only): qty x entry. */
+  function marginLocked() {
+    var st = (ntPaper() && ntPaper().getState) ? ntPaper().getState() : null;
+    var sum = 0;
+    if (st && st.autoPositions) {
+      Object.keys(st.autoPositions).forEach(function (k) {
+        if (k.indexOf('ntd:') !== 0) return;
+        var p = st.autoPositions[k];
+        if (p && p.qty && p.entryPrice) sum += p.qty * p.entryPrice;
+      });
+    }
+    return sum;
+  }
+
+  /* Balance / locked / available for the Running Trades margin bar. */
+  function marginInfo() {
+    var budget = Math.max(0, Number(state.margin) || 0);
+    var locked = marginLocked();
+    return { budget: budget, locked: locked, available: budget > 0 ? Math.max(0, budget - locked) : 0, capped: budget > 0 };
+  }
+
+  /* Show the insufficient-margin popup (Close button) when a next trade was
+     refused because the running trades already ate the balance. Throttled so a
+     repeated crossing does not re-spam the user every tick. */
+  function warnMarginBlock(d) {
+    try {
+      if (window.PaperMarginModal && typeof window.PaperMarginModal.show === 'function') {
+        window.PaperMarginModal.show(d);
+      }
+    } catch (e) {}
+  }
+
+  /* Live top-of-list margin bar for the Running Trades table. */
+  function renderMarginBar() {
+    var host = el('ntrMarginBar');
+    if (!host) return;
+    var mi = marginInfo();
+    var openN = openTradeCount();
+    var recentBlock = (state._lastNtrBlock && (Date.now() - state._lastNtrBlock.at) < 90000) ? state._lastNtrBlock : null;
+    if (!mi.capped && openN === 0 && !recentBlock) {
+      host.style.display = 'none';
+      host.innerHTML = '';
+      return;
+    }
+    host.style.display = 'flex';
+    var html = '<b style="color:#00d4aa;white-space:nowrap">Margin balance:</b>' +
+      '<b style="color:#ffd700;font-size:11px;white-space:nowrap">' + fmtMoney(mi.budget) + '</b>' +
+      '<span style="color:#888;white-space:nowrap">Locked by ' + openN + ' running trade' + (openN === 1 ? '' : 's') + ': <b style="color:#ffd700">' + fmtMoney(mi.locked) + '</b></span>' +
+      '<span style="color:#888;white-space:nowrap">Available now: <b style="color:' + (mi.available > 0 ? '#00d4aa' : '#ef5350') + '">' + fmtMoney(mi.available) + '</b></span>' +
+      (recentBlock
+        ? '<span style="color:#ef5350;white-space:nowrap" title="' + String(recentBlock.symbol || '').replace(/"/g, '&quot;') + '">Last trade BLOCKED: needs ' + fmtMoney(recentBlock.required) + ' > available ' + fmtMoney(recentBlock.available) + '</span>'
+        : '') +
+      '<span style="color:#666;font-size:8px">next trade is blocked + warned when its required margin &gt; available</span>';
+    if (host.innerHTML !== html) host.innerHTML = html;
   }
 
   /* Commodity entry: BUY the FUTCOM futures contract directly on the live
@@ -859,7 +925,20 @@
     var fillRef = (q && q.ltp) ? Number(q.ltp) : 0;
     if (!(fillRef > 0)) { stock.status = 'entry: no live price'; return; }
     var plan = entryPlan(stock, fillRef);
-    if (!plan) { stock.status = 'entry: margin too low for 1 lot'; return; }
+    if (!plan) {
+      var miU = marginInfo();
+      var lotSzU = (Number(state.lotSize) > 0) ? Math.max(1, Number(state.lotSize)) : lotSizeFor(stock);
+      var need1U = lotSzU * fillRef;
+      if (miU.capped && (miU.locked > 0 || miU.available < need1U)) {
+        stock.status = 'entry: margin insufficient - running trades lock ' + fmtMoney(miU.locked) + ', only ' + fmtMoney(miU.available) + ' left';
+        state._lastNtrBlock = { at: Date.now(), symbol: sym.name, required: need1U, available: miU.available };
+        renderMarginBar();
+        warnMarginBlock({ engine: 'ntrader', budget: miU.budget, used: miU.locked, required: need1U, symbol: sym.name });
+      } else {
+        stock.status = 'entry: margin too low for 1 lot';
+      }
+      return;
+    }
     var lotsN = plan.lotsN;
     var lotSz = plan.lotSz;
     var marginAvail = Math.max(0, Number(state.margin) || 0);
@@ -904,7 +983,20 @@
     var fillRef = (q && q.ltp) ? Number(q.ltp) : Number(opt.premium);
     if (!(fillRef > 0)) { diagNtr('[entry-opt] no-fill ' + stock.sym.name + ' prem=' + (opt && opt.premium)); return; }
     var plan = entryPlan(stock, fillRef);
-    if (!plan) { stock.status = 'entry: margin too low for 1 lot'; return; }
+    if (!plan) {
+      var miO = marginInfo();
+      var lotSzO = (Number(state.lotSize) > 0) ? Math.max(1, Number(state.lotSize)) : lotSizeFor(stock);
+      var need1O = lotSzO * fillRef;
+      if (miO.capped && (miO.locked > 0 || miO.available < need1O)) {
+        stock.status = 'entry: margin insufficient - running trades lock ' + fmtMoney(miO.locked) + ', only ' + fmtMoney(miO.available) + ' left';
+        state._lastNtrBlock = { at: Date.now(), symbol: opt.name || opt.strike || stock.sym.name, required: need1O, available: miO.available };
+        renderMarginBar();
+        warnMarginBlock({ engine: 'ntrader', budget: miO.budget, used: miO.locked, required: need1O, symbol: opt.name || stock.sym.name });
+      } else {
+        stock.status = 'entry: margin too low for 1 lot';
+      }
+      return;
+    }
     var lotsN = plan.lotsN;
     var lotSz = plan.lotSz;
     var marginAvail = Math.max(0, Number(state.margin) || 0);
@@ -1203,8 +1295,8 @@
 
     function defaultAlertCfg() {
       return {
-        bull: { enabled: false, cond: 'crossed_above', value: 0.8, side: 'CE' },
-        bear: { enabled: false, cond: 'crossed_below', value: 0.2, side: 'PE' }
+        bull: { enabled: true, cond: 'crossed_above', value: 0.8, side: 'CE' },
+        bear: { enabled: true, cond: 'crossed_below', value: 0.2, side: 'PE' }
       };
     }
     function loadAlertCfg() {
@@ -1215,13 +1307,13 @@
           def.bull.enabled = !!j.bull.enabled;
           def.bull.cond = (j.bull.cond === 'crossed_below') ? 'crossed_below' : 'crossed_above';
           def.bull.value = (Number(j.bull.value) >= ALERT_MIN && Number(j.bull.value) <= ALERT_MAX) ? Number(j.bull.value) : 0.8;
-          def.bull.side = (j.bull.side === 'PE') ? 'PE' : 'CE';
+          def.bull.side = 'CE';
         }
         if (j && j.bear) {
           def.bear.enabled = !!j.bear.enabled;
           def.bear.cond = (j.bear.cond === 'crossed_above') ? 'crossed_above' : 'crossed_below';
           def.bear.value = (Number(j.bear.value) >= ALERT_MIN && Number(j.bear.value) <= ALERT_MAX) ? Number(j.bear.value) : 0.2;
-          def.bear.side = (j.bear.side === 'CE') ? 'CE' : 'PE';
+          def.bear.side = 'PE';
         }
       } catch (e) {}
       return def;
@@ -1585,22 +1677,36 @@
       }
       return out;
     }
-    /* Execute a BB%b alert trade: NIFTY bullish -> BUY CE (bullish stocks),
-       NIFTY bearish -> BUY PE (bearish stocks). The row's own "side" dropdown
-       acts as a filter - a bullish-CE row only fires while NIFTY is BULL, a
-       bearish-PE row only while NIFTY is BEAR (no EMA-cross signal involved).
-       When the Trend Following toggle is OFF the row's own side still gates,
-       but the matching NIFTY regime is no longer required. */
+    /* Execute a BB%b alert trade. BB%b is the ONLY auto-trade alert in the
+       engine: execution direction ALWAYS follows the live NIFTY regime (never
+       a per-row dropdown) - NIFTY BULL -> only the BULLISH row fires and buys
+       CE on the active bullish stocks; NIFTY BEAR -> only the BEARISH row fires
+       and buys PE on the active bearish stocks; a clear BULL/BEAR is required
+       so the wrong side can never be traded. The whole path is governed by the
+       "Auto Execute Trade" master switch (state.autoExec): when it is OFF the
+       level crossing only notifies - no trade is placed. "Set Condition" box
+       settings do not gate these alert entries. */
     function fireAlertTrade(k, cfg) {
       if (!cfg || !cfg.enabled) return;
       if (!state.running) { toast('BB%b alert: engine RUNNING nahi hai'); return; }
+      if (!state.autoExec) {
+        toast('BB%b ' + (k === 'bull' ? 'BULLISH' : 'BEARISH') + ' alert crossed @ ' + fmtV(cfg.value) + ' - Auto Execute Trade OFF hai, koi trade nahi.');
+        diagNtr('[alert] SKIP auto-exec-off k=' + k + ' val=' + cfg.value);
+        return;
+      }
       var op = niftyOperative();
-      var execSide = (cfg.side === 'PE') ? 'PE' : 'CE';
-      diagNtr('[alert] FIRE k=' + k + ' side=' + execSide + ' trendEnabled=' + (state.trend && state.trend.enabled) + ' niftyOp=' + op + ' val=' + cfg.value + ' running=' + state.running);
-      if (state.trend.enabled) {
-        if (op !== 'BULL' && op !== 'BEAR') { toast('BB%b alert @ ' + fmtV(cfg.value) + ': NIFTY trend clear nahi (BULL/BEAR)'); diagNtr('[alert] SKIP no-clear-op ' + op); return; }
-        var want = (op === 'BULL') ? 'CE' : 'PE';
-        if (execSide !== want) { toast('BB%b alert skipped: NIFTY ' + op + ' me ' + execSide + ' side fire nahi (expected ' + want + ')'); diagNtr('[alert] SKIP trend-mismatch exec=' + execSide + ' want=' + want); return; }
+      if (op !== 'BULL' && op !== 'BEAR') {
+        toast('BB%b alert @ ' + fmtV(cfg.value) + ': NIFTY trend clear nahi (BULL/BEAR), koi trade nahi.');
+        diagNtr('[alert] SKIP no-clear-op ' + op);
+        return;
+      }
+      var execSide = (op === 'BULL') ? 'CE' : 'PE';
+      /* Only the row that MATCHES the live NIFTY direction may trade: NIFTY BULL
+         -> bull row (CE), NIFTY BEAR -> bear row (PE). The other row crossing
+         while the opposite regime is live never opens anything. */
+      if ((k === 'bull') !== (execSide === 'CE')) {
+        diagNtr('[alert] SKIP non-matching-row k=' + k + ' nifty=' + op + ' exec=' + execSide + ' (alert notified only)');
+        return;
       }
       var targets = alertTradeTargets(execSide === 'CE' ? 'bull' : 'bear');
       if (!targets.length) {
@@ -1619,24 +1725,60 @@
       }
       if (remaining < targets.length) targets = targets.slice(0, remaining);
       for (var i = 0; i < targets.length; i++) {
-        var st = targets[i];
-        st.status = 'BB%b alert ' + fmtV(cfg.value) + ' -> ' + (execSide === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish');
-        try { resolveAndEnter(st, execSide, null); } catch (e) { diagNtr('[alert] enter-exc ' + st.sym.name + ': ' + e); }
+        var st0 = targets[i];
+        st0.status = (execSide === 'CE' ? 'BB%b alert -> BUY CE bullish' : 'BB%b alert -> BUY PE bearish') + ' @ ' + fmtV(cfg.value);
+        try { resolveAndEnter(st0, execSide, null); } catch (e) { diagNtr('[alert] enter-exc ' + st0.sym.name + ': ' + e); }
       }
-      diagNtr('[alert] ENTER-ATTEMPTED targets=' + targets.length + ' names=' + targets.map(function (t) { return t.sym.name; }).join(','));
-      /* Option resolution + entry run async, so verify a moment later and toast
-         the REAL outcome instead of claiming the trade opened up front. */
-      setTimeout(function () {
-        var opened = [], still = [];
-        for (var j = 0; j < targets.length; j++) {
-          var t = targets[j];
-          if (posAt('ntd:' + t.sym.name)) opened.push(t.sym.name);
-          else still.push(t.sym.name + '=' + (t.status || '--'));
+      diagNtr('[alert] ENTER-ATTEMPTED nifty=' + op + ' side=' + execSide + ' targets=' + targets.length + ' names=' + targets.map(function (t) { return t.sym.name; }).join(','));
+      /* A crossing fires exactly ONCE, but the shared paper engine only fills
+         against a LIVE quote and the contract's feed is subscribed lazily by
+         candle fetch - so the first autoEntry() can legitimately reject with
+         "No live quote yet". The AST loops retry every poll; this alert has no
+         next poll, so keep re-attempting the unfilled targets on a short
+         backoff (pre-subscribing each resolved option's candles so the feed
+         lands) until they fill or the window closes. */
+      var fillDone = false;
+      var fillAttempts = 0;
+      var fillTimer = setInterval(function () {
+        fillAttempts++;
+        if (!state.running || fillAttempts >= 10) {
+          clearInterval(fillTimer);
+          reportAlertResult(targets, fillAttempts >= 10);
+          return;
         }
-        diagNtr('[alert] RESULT opened=' + opened.join(',') + ' | failed=' + still.join(' | '));
-        if (opened.length) toast('BB%b trade OPENED (' + opened.length + '/' + targets.length + '): ' + opened.join(', '));
-        else toast('BB%b alert fired par trade OPEN nahi hui - stock status check karo (' + still.join(' | ') + ')');
-      }, 2500);
+        var pending = targets.filter(function (t) { return !posAt('ntd:' + t.sym.name); });
+        if (!pending.length) {
+          clearInterval(fillTimer);
+          reportAlertResult(targets, false);
+          return;
+        }
+        for (var r = 0; r < pending.length; r++) {
+          var p = pending[r];
+          if (p.opt && p.opt.id) {
+            var okey = String(p.opt.id) + ':' + (p.opt.exch || 'NSE_FNO');
+            if (!state.series[okey]) {
+              ensureCandles({ id: p.opt.id, exch: p.opt.exch || 'NSE_FNO', name: p.opt.name || '', inst: p.opt.inst || 'OPTIDX' }, state.stockTf, okey, TREND_REFRESH_MS);
+            }
+          }
+          if (p.opt) {
+            p.status = (execSide === 'CE' ? 'BUY CE bullish' : 'BUY PE bearish') + ' retry ' + fillAttempts;
+            try { resolveAndEnter(p, execSide, null); } catch (e) { diagNtr('[alert] retry-exc ' + p.sym.name + ': ' + e); }
+          }
+        }
+      }, 1200);
+    }
+    /* Report what actually opened after an alert, including the per-stock status
+       of the failures so the reason is visible on the row (not silent). */
+    function reportAlertResult(targets, timedOut) {
+      var opened = [], still = [];
+      for (var j = 0; j < targets.length; j++) {
+        var t = targets[j];
+        if (posAt('ntd:' + t.sym.name)) opened.push(t.sym.name);
+        else still.push(t.sym.name + '=' + (t.status || '--'));
+      }
+      diagNtr('[alert] RESULT opened=' + opened.join(',') + ' | failed=' + still.join(' | '));
+      if (opened.length) toast('BB%b trade OPENED (' + opened.length + '/' + targets.length + '): ' + opened.join(', '));
+      else toast('BB%b alert fired par trade OPEN nahi hui - stock status check karo (' + still.join(' | ') + ')' + (timedOut ? ' (feed/entry timeout)' : ''));
     }
     /* "+" button popover: the BULLISH ... OR ... BEARISH alert auto-trade form.
        The popover is rendered as a FIXED overlay anchored under the "+" button
@@ -1706,6 +1848,29 @@
       chip.textContent = '--';
       hdr.appendChild(chip);
       box.appendChild(hdr);
+      var aeRow = document.createElement('label');
+      aeRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin:2px 0 6px;padding:4px 6px;background:#10102a;border:1px solid #2d2d50;border-radius:3px;cursor:pointer;user-select:none';
+      var aeCb = document.createElement('input');
+      aeCb.type = 'checkbox';
+      aeCb.id = 'ntrBbpAutoExec';
+      aeCb.checked = !!state.autoExec;
+      aeCb.style.cssText = 'width:13px;height:13px;accent-color:#00d4aa;cursor:pointer';
+      var aeTxt = document.createElement('span');
+      aeTxt.textContent = 'Auto Execute Trade';
+      aeTxt.style.cssText = 'font-size:10px;font-weight:700;color:' + (state.autoExec ? '#00d4aa' : '#ff4d6a') + ';line-height:1.3';
+      var aeSub = document.createElement('span');
+      aeSub.textContent = state.autoExec ? 'ON' : 'OFF';
+      aeSub.style.cssText = 'font-size:9px;padding:1px 5px;border-radius:3px;background:' + (state.autoExec ? 'rgba(0,212,170,.18)' : 'rgba(255,77,106,.18)') + ';color:' + (state.autoExec ? '#00d4aa' : '#ff4d6a');
+      aeRow.appendChild(aeCb);
+      aeRow.appendChild(aeTxt);
+      aeRow.appendChild(aeSub);
+      aeCb.addEventListener('change', function () {
+        state.autoExec = aeCb.checked;
+        saveSettings();
+        refreshAlertStatus();
+        toast('Auto Execute Trade ' + (state.autoExec ? 'ON - BB%b alert par trade khud execute honge' : 'OFF - sirf alert notify hoga, koi trade nahi'));
+      });
+      box.appendChild(aeRow);
       var rows = [
         { key: 'bull', label: 'BULLISH', color: '#00d4aa' },
         { key: 'bear', label: 'BEARISH', color: '#ff4d6a' }
@@ -1734,7 +1899,7 @@
       setBtn.onclick = setArmedAlert;
       box.appendChild(setBtn);
       var note = document.createElement('div');
-      note.textContent = 'BULLISH row (NIFTY BULL) -> BUY CE, BEARISH row (NIFTY BEAR) -> BUY PE. Trend Follow ON par sirf matching side fire hoti hai; engine RUNNING hona zaroori hai.';
+      note.textContent = 'Execution direction hamesha NIFTY trend se decide hota hai: NIFTY BULL -> sirf BULLISH row fire karegi (BUY CE), NIFTY BEAR -> sirf BEARISH row (BUY PE). Row/levels wahi alert points hain. Auto Execute Trade ON ho, engine RUNNING ho, aur matching side ke enabled stocks hon to trade sidhe place hoti hai (Set Condition box isko gate nahi karta).';
       note.style.cssText = 'font-size:9px;color:#888;margin-top:6px;border-top:1px solid #1e1e40;padding-top:4px';
       box.appendChild(note);
       var hint = document.createElement('div');
@@ -1763,10 +1928,10 @@
         }
         return out.length ? out.join('  |  ') : 'none';
       }
-      if (sum) sum.innerHTML = 'ACTIVE: ' + fmtRows(alertCfg) + '<br>BOX: ' + fmtRows(draftCfg);
+      if (sum) sum.innerHTML = 'AUTO EXEC: ' + (state.autoExec ? '<b style="color:#00d4aa">ON</b>' : '<b style="color:#ff4d6a">OFF</b>') + '<br>ACTIVE: ' + fmtRows(alertCfg) + '<br>BOX: ' + fmtRows(draftCfg);
       var txt, fg, bg;
       if (!hasDraft) { txt = 'NO ALERT'; fg = '#888'; bg = 'transparent'; }
-      else if (locked) { txt = hasArm ? 'SET & EXECUTING' : 'SET (rows OFF)'; fg = '#0b0b1a'; bg = hasArm ? '#00d4aa' : 'transparent'; if (!hasArm) fg = '#888'; }
+      else if (locked) { txt = hasArm ? (state.autoExec ? 'SET & EXECUTING' : 'SET · EXEC OFF') : 'SET (rows OFF)'; fg = '#0b0b1a'; bg = hasArm ? (state.autoExec ? '#00d4aa' : '#ffb300') : 'transparent'; if (!hasArm) fg = '#888'; }
       else { txt = 'CHANGED - SET NAHI'; fg = '#0b0b1a'; bg = '#ffb300'; }
       chip.textContent = txt;
       chip.style.cssText = 'font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;letter-spacing:.3px;white-space:nowrap;color:' + fg + ';background:' + bg + ';border:1px solid ' + (bg === 'transparent' ? '#2d2d50' : bg);
@@ -1827,27 +1992,16 @@
       val.title = 'BB%b value (' + ALERT_MIN + ' to ' + ALERT_MAX + ')';
       val.style.cssText = 'width:56px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px';
       ctl.appendChild(val);
+      var fixSide = (meta.key === 'bull') ? 'CE' : 'PE';
+      cfg.side = fixSide;
       var ar = document.createElement('span');
       ar.textContent = '->';
       ar.style.cssText = 'font-size:9px;color:#888';
       ctl.appendChild(ar);
       var trade = document.createElement('span');
-      trade.textContent = 'trade';
-      trade.style.cssText = 'font-size:9px;color:#888';
+      trade.textContent = 'BUY ' + (fixSide === 'CE' ? 'Bullish CE' : 'Bearish PE');
+      trade.style.cssText = 'font-size:9px;font-weight:700;color:' + meta.color + ';white-space:nowrap';
       ctl.appendChild(trade);
-      var side = document.createElement('select');
-      var opts = [
-        ['CE', 'BUY Bullish CE'],
-        ['PE', 'BUY Bearish PE']
-      ];
-      opts.forEach(function (p) {
-        var o = document.createElement('option');
-        o.value = p[0]; o.textContent = p[1];
-        if (p[0] === cfg.side) o.selected = true;
-        side.appendChild(o);
-      });
-      styleAlertSel(side);
-      ctl.appendChild(side);
       var tip = document.createElement('span');
       tip.style.cssText = 'font-size:8px;color:#666;white-space:nowrap';
       ctl.appendChild(tip);
@@ -1856,12 +2010,12 @@
       function persist() { saveDraftCfg(); refreshAlertStatus(); }
       function syncDisabled() {
         var on = en.checked;
-        cond.disabled = !on; val.disabled = !on; side.disabled = !on;
+        cond.disabled = !on; val.disabled = !on;
         wrap.style.opacity = on ? '1' : '0.55';
         var op = niftyOperative();
-        tip.textContent = state.trend.enabled
-          ? ('NIFTY ' + (op === 'BULL' ? 'BULL' : op === 'BEAR' ? 'BEAR' : '--') + ' par ' + (cfg.side === 'CE' ? 'CE' : 'PE') + ' fire')
-          : 'Trend Follow OFF: apni side par fire';
+        tip.textContent = (meta.key === 'bull')
+          ? ('NIFTY BULL ho tab hi ye row CE trade karegi (abhi NIFTY ' + (op === 'BULL' ? 'BULL' : op === 'BEAR' ? 'BEAR' : '--') + ')')
+          : ('NIFTY BEAR ho tab hi ye row PE trade karegi (abhi NIFTY ' + (op === 'BULL' ? 'BULL' : op === 'BEAR' ? 'BEAR' : '--') + ')');
       }
       en.onchange = function () { cfg.enabled = en.checked; syncDisabled(); persist(); };
       enl.onclick = function () { en.checked = !en.checked; en.onchange(); };
@@ -1881,7 +2035,6 @@
           refreshAlertStatus();
         }
       });
-      side.onchange = function () { cfg.side = side.value; syncDisabled(); persist(); };
       syncDisabled();
     }
     /* Gear button: popover with the BB%b pane settings (Length, Std.dev mult,
@@ -2921,6 +3074,7 @@
 
   function renderPositions() {
     watchPaperVanish();
+    renderMarginBar();
     var st = (ntPaper() && ntPaper().getState) ? ntPaper().getState() : null;
     var tb = el('ntrRunBody');
     if (tb) {
@@ -3102,7 +3256,25 @@
   function onSlChange() { state.slPct = Math.max(0, parseFloat(el('ntrSl').value) || 0); saveSettings(); }
   function onTpChange() { state.tpPct = Math.max(0, parseFloat(el('ntrTp').value) || 0); saveSettings(); }
   function onFixedTpChange() { state.fixedTp = Math.max(0, parseFloat(el('ntrFixedTp').value) || 0); saveSettings(); }
-  function onMarginChange() { state.margin = Math.max(0, parseFloat(el('ntrMargin').value) || 0); saveSettings(); }
+  function onMarginChange() { state.margin = Math.max(0, parseFloat(el('ntrMargin').value) || 0); saveSettings(); renderMarginBar(); }
+
+  /* Engine-level margin-block fallback (limit-order overshoot / engine guard):
+     reflect it on the bar and pop the Close-button warning. */
+  function onPaperAutoMarginBlock(ev) {
+    var d = ev && ev.detail;
+    if (!d || d.engine !== 'ntrader') return;
+    state._lastNtrBlock = {
+      at: d.at || Date.now(),
+      symbol: d.symbol || '',
+      required: Number(d.required) || 0,
+      available: Math.max(0, (Number(d.budget) || 0) - (Number(d.used) || 0))
+    };
+    renderMarginBar();
+    warnMarginBlock(d);
+  }
+  if (typeof document !== 'undefined' && document.addEventListener && window.CustomEvent) {
+    document.addEventListener('paperAutoMarginBlock', onPaperAutoMarginBlock);
+  }
   function onLotSizeChange() {
     var v = parseInt(el('ntrLotSize').value, 10);
     state.lotSize = (v > 0) ? v : null;

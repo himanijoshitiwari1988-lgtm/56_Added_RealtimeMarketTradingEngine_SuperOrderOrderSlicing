@@ -160,7 +160,8 @@ window.createPaperStrategies = function (suffix) {
       entryThreshold: r.entryThreshold != null ? r.entryThreshold : null,
       candlestick: r.candlestick || { enabled: false, entry: [], exit: [] },
       refSlPct: (r.refSlPct != null) ? r.refSlPct : (r.autoSlPct != null ? r.autoSlPct : null),
-      refTrailSlPct: (r.refTrailSlPct != null) ? r.refTrailSlPct : null
+      refTrailSlPct: (r.refTrailSlPct != null) ? r.refTrailSlPct : null,
+      marginCap: (r.marginCap != null && isFinite(Number(r.marginCap)) && Number(r.marginCap) > 0) ? Number(r.marginCap) : null
     };
   }
 
@@ -222,7 +223,8 @@ window.createPaperStrategies = function (suffix) {
          Container can display what the AE engine used. AST execution ignores
          these - it runs on its own settings basis. */
       refSlPct: (s.refSlPct != null) ? s.refSlPct : (s.autoSlPct != null ? s.autoSlPct : null),
-      refTrailSlPct: (s.refTrailSlPct != null) ? s.refTrailSlPct : null
+      refTrailSlPct: (s.refTrailSlPct != null) ? s.refTrailSlPct : null,
+      marginCap: (s.marginCap != null && isFinite(Number(s.marginCap)) && Number(s.marginCap) > 0) ? Number(s.marginCap) : null
     })).filter(s => s && s.key);
     if (!payload.length) return 0;
     const n = AISmartTrading.importFromPaperTrade(payload);

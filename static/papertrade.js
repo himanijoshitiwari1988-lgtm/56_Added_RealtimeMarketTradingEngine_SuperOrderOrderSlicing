@@ -19,11 +19,74 @@ window.slPercentFromInput = function (v) {
   return n < 1 ? n * 100 : n;
 };
 
+/* Global "insufficient margin" warning modal. Every paper-engine instance that
+   refuses a next auto trade because its margin wallet is exhausted dispatches a
+   document-level paperAutoMarginBlock event; the tab UIs (Paper Trade tab's
+   Running view, Smart NTrader) surface the same numbers through this popup with
+   a Close button. While a modal is open a later block never stacks another one
+   on top; after Close, a fresh block can re-open it (with a short pause). */
+window.PaperMarginModal = (function () {
+  let _el = null;
+  let _lastShow = 0;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const _fmt = n => (n === null || n === undefined || isNaN(n)) ? '--' : '₹' + Math.round(Number(n)).toLocaleString('en-IN');
+  function close() {
+    if (_el && _el.parentNode) _el.parentNode.removeChild(_el);
+    _el = null;
+  }
+  function show(d) {
+    if (!d) return;
+    if (_el) return;
+    const now = Date.now();
+    if (_lastShow && now - _lastShow < 8000) return;
+    _lastShow = now;
+    const budget = Number(d.budget) || 0;
+    const used = Number(d.used) || 0;
+    const required = Number(d.required) || 0;
+    const avail = Math.max(0, budget - used);
+    const short = Math.max(0, required - avail);
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(5,5,15,.74);z-index:2147483000;display:flex;align-items:center;justify-content:center;font-family:Arial,Helvetica,sans-serif';
+    const box = document.createElement('div');
+    box.style.cssText = 'width:min(430px,92vw);background:#12122a;border:1px solid #ff4d6a;border-radius:8px;padding:14px 16px;box-shadow:0 10px 44px rgba(0,0,0,.65);color:#ccc;font-size:12px;line-height:1.55';
+    box.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+        '<span style="color:#ff4d6a;font-size:15px;font-weight:800;letter-spacing:.3px">MARGIN KAM PAD GAYA</span>' +
+        '<span style="margin-left:auto;font-size:9px;color:#666;text-transform:uppercase;letter-spacing:.5px">' + esc(String(d.engine || 'paper')) + '</span>' +
+      '</div>' +
+      (d.symbol ? '<div style="font-size:12px;color:#fff;margin-bottom:8px">Next trade <b>' + esc(String(d.symbol)) + '</b> place NAHI hui - margin kafi nahi.</div>'
+                : '<div style="font-size:12px;color:#fff;margin-bottom:8px">Next trade place NAHI hui - margin kafi nahi.</div>') +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 12px">' +
+        '<div style="color:#888">Available balance (margin)</div><div style="text-align:right;color:#fff">' + _fmt(budget) + '</div>' +
+        '<div style="color:#888">Locked in running trades</div><div style="text-align:right;color:#ffd700">' + _fmt(used) + '</div>' +
+        '<div style="color:#888">Available now</div><div style="text-align:right;color:#00d4aa">' + _fmt(avail) + '</div>' +
+        '<div style="color:#888">Next trade needs</div><div style="text-align:right;color:#fff">' + _fmt(required) + '</div>' +
+        '<div style="color:#ff4d6a;font-weight:700">Kam hai</div><div style="text-align:right;color:#ff4d6a;font-weight:700">' + _fmt(short) + '</div>' +
+      '</div>' +
+      '<div style="margin-top:8px;font-size:10px;color:#888">Margin badhao, running trade close karo, ya lot/quantity kam karo. Engine next attempt par dobara check karke hi trade lega.</div>' +
+      '<div style="display:flex;justify-content:flex-end;margin-top:11px">' +
+        '<button id="paperMarginModalClose" style="background:#ef5350;color:#fff;border:none;border-radius:4px;padding:7px 18px;font-size:11px;font-weight:700;cursor:pointer">Close</button>' +
+      '</div>';
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+    _el = ov;
+    const btn = box.querySelector('#paperMarginModalClose');
+    if (btn) btn.addEventListener('click', close);
+    ov.addEventListener('mousedown', ev => { if (ev.target === ov) close(); });
+  }
+  return { show: show, close: close };
+})();
+
 window.createPaperTrade = function (suffix) {
   'use strict';
   suffix = suffix || '';
 
   let _dirtySave = false;
+
+  /* Instance registry key (same scheme used at the bottom when registering the
+     engine), so margin-block events know which wallet/tab they came from. */
+  const _instKey = suffix.replace(/^_/, '') || 'papertrade';
 
   const SAVE_KEY = 'algodhan_papertrade_v1' + suffix;
 
@@ -536,6 +599,9 @@ window.createPaperTrade = function (suffix) {
   /* Pull the real paper-margin from the live broker account balance so the
      margin used / total price of lot checks reflect the actual account. */
   async function syncMargin() {
+    /* A wallet bound to its own Margin input (AI Smart / NTrader) is never
+       re-budgeted from the live broker account - only the user's field rules. */
+    if (marginEl()) return;
     try {
       const r = await fetch('/api/account').then(x => x.json());
       if (r && r.status === 'success' && r.data && r.data.balance) {
@@ -574,6 +640,7 @@ window.createPaperTrade = function (suffix) {
      open - but never override a margin the user set for this session. */
   async function autoSyncMargin() {
     if (_marginTouched) return;
+    if (marginEl()) return;
     try {
       const r = await fetch('/api/account').then(x => x.json());
       if (r && r.status === 'success' && r.data && r.data.balance) {
@@ -593,7 +660,35 @@ window.createPaperTrade = function (suffix) {
   function lotSize() { const el = $id('paperLotSize'); return Math.max(1, el ? (parseFloat(el.value || '1') || 1) : defaultLotSize()); }
   function qty() { return Math.round(lots() * lotSize()); }
   function ltp() { const q = currentQuote(); return (q && q.ltp) ? Number(q.ltp) : null; }
-  function margin() { const el = $id('paperMargin'); return Math.max(0, el ? (parseFloat(el.value || '0') || 0) : state.margin); }
+  /* Wallet-budget source for this engine instance. Every trade this engine
+     places - auto strategies, manual buys, every entry method - must run ONLY
+     on the margin the user set in that engine's own field. AI Smart (base +
+     cloned paper tabs) reads the AI Smart universal Margin input; Smart
+     NTrader reads its own Margin input. When a bound input exists it is the
+     ONLY budget: the engine never substitutes a broker balance or an internal
+     default in any mode ("no engine sets its own margin"). */
+  function marginFieldRootFor(k) {
+    if (k === 'ntrader') return 'ntrMargin';
+    if (k === 'papertrade' || /^paper\d+$/.test(k)) return 'astMargin';
+    return null;
+  }
+  function marginEl() {
+    const root = marginFieldRootFor(_instKey);
+    if (!root) return null;
+    if (suffix) { const el = document.getElementById(root + suffix); if (el) return el; }
+    return document.getElementById(root) || null;
+  }
+  function margin() {
+    const el = marginEl();
+    if (el) {
+      const raw = String(el.value == null ? '' : el.value).trim();
+      if (raw !== '') {
+        const v = Number(raw);
+        if (isFinite(v)) { const m = Math.max(0, v); state.margin = m; return m; }
+      }
+    }
+    return Math.max(0, state.margin);
+  }
   function targetPct() { const el = $id('paperTargetPct'); return el ? (parseFloat(el.value || '0') || 0) : 0; }
   function slPct() { const el = $id('paperSlPct'); return Math.abs(window.slPercentFromInput(el ? el.value : '0')); }
   function slTrailOn() { const el = $id('paperSlTrail'); return !!(el && el.checked); }
@@ -623,16 +718,35 @@ window.createPaperTrade = function (suffix) {
     return p.side === 'BUY' ? live > p.entryPrice : live < p.entryPrice;
   }
 
-  function marginUsed() {
+  /* Margin LOCKED by the AI Smart / manual wallet: the manual position, the
+     open auto positions WITHOUT a per-origin margin cap, and any pending limit
+     order. Auto positions opened under an AE-imported strategy (budgetCap set)
+     are excluded - they run on the AE origin's own margin, not this wallet's. */
+  function walletUsed() {
     let used = 0;
     if (state.position) used += state.position.qty * state.position.entryPrice;
     for (const k in (state.autoPositions || {})) {
       const ap = state.autoPositions[k];
-      if (ap) used += ap.qty * ap.entryPrice;
+      if (!ap || ap.budgetCap > 0) continue;
+      used += ap.qty * ap.entryPrice;
     }
     if (state.pending) used += state.pending.qty * (state.pending.price || 0);
     return used;
   }
+  /* Same-origin usage for an AE-imported group: the sum of open auto positions
+     that were entered under the SAME per-origin margin cap. Each distinct cap
+     value is its own independent budget. */
+  function cappedUsed(cap) {
+    if (!(cap > 0)) return 0;
+    let used = 0;
+    for (const k in (state.autoPositions || {})) {
+      const ap = state.autoPositions[k];
+      if (ap && ap.budgetCap > 0 && ap.budgetCap === cap) used += ap.qty * ap.entryPrice;
+    }
+    return used;
+  }
+
+  function marginUsed() { return walletUsed(); }
 
   function recompute() {
     autoFillLots();
@@ -1077,7 +1191,7 @@ window.createPaperTrade = function (suffix) {
       const t = api.getTemplates().find(x => String(x.id) === String(id));
       if (!t) return false;
       if ($id('paperLots')) $id('paperLots').value = t.lots;
-      if ($id('paperMargin')) $id('paperMargin').value = t.margin;
+      if (marginEl()) marginEl().value = t.margin;
       if ($id('paperTargetPct')) $id('paperTargetPct').value = t.tpPct;
       if ($id('paperSlPct')) $id('paperSlPct').value = t.slPct;
       /* Switch the chart symbol to the template's symbol when available. */
@@ -1221,14 +1335,45 @@ window.createPaperTrade = function (suffix) {
          flag via the cushion branch (autoTrail) and never the give-back branch. */
       const autoTrail = opts.autoTrail === true;
       const slTrailShow = autoTrail ? Math.max(sl, slTrail) : slTrail;
-      const used = marginUsed();
-      if (used + qtyN * fillPx > m) {
-        this.lastAutoSkip = 'Insufficient margin (needs ' + Math.round(qtyN * fillPx).toLocaleString('en-IN') + ')';
+      /* Per-origin margin cap (AE-created strategies). A capped entry is held
+         to ITS OWN margin against ONLY its own group's open trades, so an
+         Auto-Experiment-imported strategy can never spend the AI Smart /
+         manual wallet margin nor be blocked by it - every origin keeps an
+         independent budget even inside this shared paper engine. */
+      const marginCap = (opts.marginCap != null) ? Math.max(0, Number(opts.marginCap)) : 0;
+      let budget = m;
+      let used;
+      if (marginCap > 0) {
+        budget = marginCap;
+        used = cappedUsed(marginCap);
+      } else {
+        used = marginUsed();
+      }
+      const required = qtyN * fillPx;
+      if (used + required > budget) {
+        this.lastAutoSkip = 'Insufficient margin (needs ' + Math.round(required).toLocaleString('en-IN') + ')';
         log('Auto ' + side + ' ' + (symbol.name || symbol.id) + ' skipped: insufficient margin', 'warn');
+        this._lastMarginBlock = { engine: _instKey, at: Date.now(), budget: budget, used: used, required: required, symbol: symbol.name || symbol.id };
+        try {
+          if (typeof document !== 'undefined' && document.dispatchEvent && window.CustomEvent) {
+            document.dispatchEvent(new CustomEvent('paperAutoMarginBlock', { detail: this._lastMarginBlock }));
+          }
+        } catch (e) {}
         return false;
       }
       const name = symbol.name || ('Symbol ' + symbol.id);
       const existing = state.autoPositions[key];
+      /* A capped (AE-origin) trade and an uncapped (AI Smart / manual) trade
+         cannot be merged into one bucket on the same symbol - each origin owns
+         an independent margin budget, so averaging them would silently mix the
+         two wallets. */
+      const existingClass = existing ? (((existing.budgetCap || 0) > 0) ? existing.budgetCap : 0) : 0;
+      const newClass = marginCap > 0 ? marginCap : 0;
+      if (existing && existingClass !== newClass) {
+        this.lastAutoSkip = 'AI Smart and Auto Experiment margins cannot combine on one symbol - close the open ' + name + ' position first';
+        log('Auto ' + side + ' ' + name + ' skipped: AI Smart and Auto Experiment margins cannot combine on one symbol (close the open position first)', 'warn');
+        return false;
+      }
       if (existing && existing.side !== side) {
         // Opposite-side auto position on this symbol is squared off first.
         closeAutoPosition(key, 'Reversed');
@@ -1241,6 +1386,7 @@ window.createPaperTrade = function (suffix) {
         p.targetPct = tp; p.slPct = sl;
         p.slTrailPct = slTrailShow; p.slTrailed = false;
         p.autoTrail = autoTrail;
+        p.budgetCap = newClass;
         if (p.peakPrice == null) p.peakPrice = p.entryPrice;
         p.targetPrice = p.entryPrice;
         p.stopLoss = side === 'BUY' ? p.entryPrice * (1 - effectiveSlPct(sl, slTrail) / 100) : p.entryPrice * (1 + effectiveSlPct(sl, slTrail) / 100);
@@ -1270,6 +1416,7 @@ window.createPaperTrade = function (suffix) {
         ocExch: symbol.ocExch != null ? symbol.ocExch : null,
         auto: true, autoKey: opts.key || null,
         autoTrail: autoTrail,
+        budgetCap: newClass,
         status: 'OPEN', openedAt: Date.now()
       };
       log('Auto ' + side + ' ' + name + ' ' + qtyN + ' @ ' + fmt(fillPx, 2) + (orderType === 'LIMIT' ? ' [LIMIT]' : '') + ' (trail ' + fmt(state.autoPositions[key].targetPrice, 2) + ' / SL ' + fmt(state.autoPositions[key].stopLoss, 2) + ')', side === 'BUY' ? 'buy' : 'sell');
@@ -1501,6 +1648,15 @@ window.createPaperTrade = function (suffix) {
   /* Expose position snapshots for the chart overlay + dashboard render. */
   api.getAutoPositions = function () { return state.autoPositions || {}; };
   api.getManualPosition = function () { return state.position || null; };
+
+  /* Margin wallet readout for the running-trade margin bars: the balance
+     (paperMargin / per-instance margin), what the open positions lock, and the
+     available remainder. */
+  api.marginStats = function () {
+    const budget = margin();
+    const used = marginUsed();
+    return { margin: budget, used: used, available: Math.max(0, budget - used) };
+  };
 
   /* Per-tab instance registry + active-tab facade, mirroring the Auto
      Experiment engine: the base tab registers as "papertrade" and keeps full

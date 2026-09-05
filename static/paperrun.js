@@ -835,9 +835,68 @@ window.createPaperRun = function (suffix) {
     }
   }
 
+  /* Margin/balance bar for the Running Trades list, mirroring the Required
+     capital bar above the Running Strategies list. The balance is the AI Smart
+     engine's own Margin input; the locked amount is the total cost (qty x entry)
+     of the open running trades shown in the list, so the "Available now" number
+     always reflects what a NEXT trade could still use. */
+  function tradeMarginStats() {
+    const st = aismartState();
+    const u = (st && st.universal) || {};
+    const budget = (Number(u.margin) > 0) ? Number(u.margin)
+      : (() => { const el = document.getElementById('astMargin'); return el ? (Number(el.value) || 0) : 0; })();
+    /* AE-imported strategies run on their own AE margin (per-origin cap), so
+       their trades never lock the AI Smart budget - they are reported in a
+       separate AE readout below the bar. */
+    const wAP = (() => {
+      try {
+        const reg = window.TabEngines && window.TabEngines.papertrade;
+        const base = reg && reg.papertrade;
+        return (base && base.getAutoPositions) ? (base.getAutoPositions() || {}) : {};
+      } catch (e) { return {}; }
+    })();
+    let locked = 0, count = 0, aeLocked = 0, aeCount = 0;
+    const list = runningTrades();
+    for (const t of list) {
+      const p = t && t.pos;
+      if (p && p.qty && p.entryPrice) {
+        const b = wAP[t.key];
+        if (b && b.budgetCap > 0) { aeLocked += p.qty * p.entryPrice; aeCount++; continue; }
+        locked += p.qty * p.entryPrice; count++;
+      }
+    }
+    const avail = budget > 0 ? Math.max(0, budget - locked) : 0;
+    return { budget, locked, count, available: avail, capped: budget > 0, aeLocked, aeCount };
+  }
+
+  function updateTradeMarginBar() {
+    const bar = $id('ptRunTradeCapitalBar');
+    if (!bar) return;
+    const m = tradeMarginStats();
+    const openN = runningTrades().length;
+    if (!m.capped && openN === 0) {
+      bar.style.display = 'none';
+      bar.innerHTML = '';
+      return;
+    }
+    const tip = 'Balance (AI Smart Margin) - Locked in ' + m.count + ' running trade' + (m.count === 1 ? '' : 's') + ' = Available now.';
+    bar.style.display = 'flex';
+    let h =
+      '<b style="color:#00d4aa;white-space:nowrap">Trade margin:</b>' +
+      '<b style="color:#ffd700;font-size:11px;white-space:nowrap">' + fmtMoney(m.budget) + '</b>' +
+      '<span style="color:#888;white-space:nowrap">Locked by ' + m.count + ' running trade' + (m.count === 1 ? '' : 's') + ': <b style="color:#ffd700">' + fmtMoney(m.locked) + '</b></span>' +
+      '<span style="color:#888;white-space:nowrap">Available now: <b style="color:' + (m.available > 0 ? '#00d4aa' : '#ef5350') + '">' + fmtMoney(m.available) + '</b></span>' +
+      '<span title="' + esc(tip) + '" style="color:#666;font-size:8px">next trade is blocked + warned when its required margin &gt; available</span>';
+    if (m.aeCount) {
+      h += '<span style="color:#b39ddb;white-space:nowrap" title="AE-imported strategies run on the Auto Experiment margin they were created under">AE trades (' + m.aeCount + '): <b style="color:#b39ddb">' + fmtMoney(m.aeLocked) + ' locked</b></span>';
+    }
+    bar.innerHTML = h;
+  }
+
   function renderTrades() {
     const host = $id('ptRunTrades');
     if (!host) return;
+    updateTradeMarginBar();
     const list = runningTrades();
     if (!list.length) {
       host.innerHTML = emptyHTML('No running trades. AI Smart paper trades that are still open appear here.');
@@ -971,12 +1030,25 @@ window.createPaperRun = function (suffix) {
     }
   };
 
-  /* Per-tab instance registry + active-tab facade (same tab-id key scheme as
-     the other paper engines). */
   if (!window.TabEngines) window.TabEngines = {};
   if (!window.TabEngines.paperrun) window.TabEngines.paperrun = {};
   const instKey = suffix.replace(/^_/, '') || 'papertrade';
   window.TabEngines.paperrun[instKey] = api;
+
+  /* Pop the Close-button margin warning for this tab's own paper engine wallet
+     when the engine refuses a NEXT auto trade (insufficient margin). The base
+     AI Smart engine instance is registered as 'papertrade', so only the base
+     Running view listens (duplicated paper tabs share that engine instance). */
+  if (instKey === 'papertrade' && typeof document !== 'undefined' && document.addEventListener && window.CustomEvent) {
+    document.addEventListener('paperAutoMarginBlock', (ev) => {
+      const d = ev && ev.detail;
+      if (!d || d.engine !== 'papertrade') return;
+      if (window.PaperMarginModal && typeof window.PaperMarginModal.show === 'function') {
+        try { window.PaperMarginModal.show(d); } catch (e) {}
+      }
+      render(true);
+    });
+  }
 
   if (!window._PaperRunFacade) {
     const base = api;

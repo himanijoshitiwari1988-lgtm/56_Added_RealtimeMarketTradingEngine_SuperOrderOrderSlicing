@@ -776,14 +776,23 @@ def _daily_fill_loop():
             # it with the daily-candle backfill. Overwriting it (or leaving the
             # backfill out of the broadcast buffer) is what made LTP / gain / %
             # flicker between two values on the watchlist and chart header.
+            # NOTE: this is gated with `skip`, never `continue` - a `continue`
+            # here skips the _DAILY_FILL_IDX increment + sleep at the bottom of
+            # the loop, so the thread re-processes the SAME symbol forever and
+            # spins one core at ~100% (the symptom was hours of 88% CPU and
+            # sluggish data fetching for every client request).
+            skip = False
             if entry and entry.get("live"):
-                if entry.get("close"):
-                    continue
-            else:
-                if entry and entry.get("close") and entry.get("ltp") and \
-                        entry["close"] != entry["ltp"] and \
-                        (time.time() - entry.get("at", 0)) <= 30:
-                    continue
+                skip = bool(entry.get("close"))
+            elif entry and entry.get("close") and entry.get("ltp") and \
+                    entry["close"] != entry["ltp"] and \
+                    (time.time() - entry.get("at", 0)) <= 30:
+                skip = True
+            if skip:
+                with _DAILY_FILL_LOCK:
+                    _DAILY_FILL_IDX = idx + 1
+                time.sleep(_DAILY_FILL_SLEEP)
+                continue
             ltp_d, pc = _last_two_daily(sid, seg, "EQUITY" if seg == "NSE_EQ" else "FUTCOM")
             if pc:
                 ltp = (entry or {}).get("ltp") or ltp_d

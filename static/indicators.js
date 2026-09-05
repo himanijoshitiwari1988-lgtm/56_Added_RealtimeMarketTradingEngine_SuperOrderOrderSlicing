@@ -1017,58 +1017,120 @@
 
     vwap: {
       id: 'vwap', name: 'VWAP', fullName: 'Volume Weighted Average Price', cat: 'Overlay', type: 'overlay',
-      inputs: [{ key: 'anchor', label: 'Anchor', def: 'session', options: [['session', 'Session'], ['all', 'All data']] }],
+      inputs: [
+        { key: 'anchor', label: 'Anchor', def: 'trend', options: [['trend', 'Trend leg'], ['session', 'Session'], ['all', 'All data']] },
+        { key: 'pivotLen', label: 'Pivot bars', def: 5, min: 1, max: 200, step: 1 }
+      ],
       style: [
         { key: 'color', label: 'Color', def: '#ff9800' },
         { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
       ],
       compute(c, o) {
-        const sessionMode = o.anchor === 'session';
-        const groups = [];
-        let cur = null;
-        for (let i = 0; i < c.length; i++) {
-          const key = sessionMode
-            ? new Date(c[i].time * 1000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10)
-            : 'all';
-          if (!cur || cur.key !== key) {
-            cur = { key, rows: [], cumPV: 0, cumV: 0, sumTP: 0, nTP: 0 };
-            groups.push(cur);
+        const mode = o.anchor || 'trend';
+        /* Feed one bar into a running cumulative accumulator: volume-weighted
+           typical price when volume exists, plain typical-price average as a
+           fallback so the line still tracks price on volume-less feeds. */
+        const feed = (i, st) => {
+          const tp = (c[i].high + c[i].low + c[i].close) / 3;
+          const v = c[i].volume || 0;
+          if (v > 0) { st.cumPV += tp * v; st.cumV += v; }
+          st.sumTP += tp; st.nTP++;
+          return st.cumV > 0 ? st.cumPV / st.cumV : st.sumTP / st.nTP;
+        };
+        if (mode !== 'trend') {
+          const sessionMode = mode === 'session';
+          const groups = [];
+          let cur = null;
+          for (let i = 0; i < c.length; i++) {
+            const key = sessionMode
+              ? new Date(c[i].time * 1000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10)
+              : 'all';
+            if (!cur || cur.key !== key) {
+              cur = { key, rows: [], cumPV: 0, cumV: 0, sumTP: 0, nTP: 0 };
+              groups.push(cur);
+            }
+            cur.rows.push(i);
           }
-          cur.rows.push(i);
-        }
-        const out = [];
-        groups.forEach((sess, si) => {
-          const isCurrent = si === groups.length - 1;
-          const col = isCurrent ? o.color : fadeColor(o.color, 0.35);
-          const data = [];
-          sess.rows.forEach(i => {
-            const tp = (c[i].high + c[i].low + c[i].close) / 3;
-            const v = c[i].volume || 0;
-            sess.cumPV += tp * v;
-            sess.cumV += v;
-            sess.sumTP += tp; sess.nTP++;
-            let val;
-            if (sess.cumV > 0) val = sess.cumPV / sess.cumV;
-            else if (sess.nTP > 0) val = sess.sumTP / sess.nTP;
-            else val = 0;
-            data.push({ time: c[i].time, value: val });
+          const out = [];
+          groups.forEach((sess, si) => {
+            const isCurrent = si === groups.length - 1;
+            const col = isCurrent ? o.color : fadeColor(o.color, 0.35);
+            const data = [];
+            sess.rows.forEach(i => data.push({ time: c[i].time, value: feed(i, sess) }));
+            const series = { type: 'line', color: col, lineWidth: o.lineWidth, data };
+            if (!isCurrent) series.noRead = true;
+            out.push(series);
           });
-          const series = { type: 'line', color: col, lineWidth: o.lineWidth, data };
-          if (!isCurrent) series.noRead = true;
-          out.push(series);
-        });
-        /* Project the current session's VWAP forward to the present time, like TradingView */
-        const lastSeries = out[out.length - 1];
-        if (lastSeries && lastSeries.data.length) {
-          const lastPt = lastSeries.data[lastSeries.data.length - 1];
-          const now = Math.floor(Date.now() / 1000);
-          const nowIst = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-          const lastIst = new Date(lastPt.time * 1000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
-          if (now > lastPt.time && nowIst === lastIst) {
-            lastSeries.data.push({ time: now, value: lastPt.value });
+          /* Project the current session's VWAP forward to the present time, like TradingView */
+          const lastSeries = out[out.length - 1];
+          if (lastSeries && lastSeries.data.length) {
+            const lastPt = lastSeries.data[lastSeries.data.length - 1];
+            const now = Math.floor(Date.now() / 1000);
+            const nowIst = new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+            const lastIst = new Date(lastPt.time * 1000 + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
+            if (now > lastPt.time && nowIst === lastIst) {
+              lastSeries.data.push({ time: now, value: lastPt.value });
+            }
+          }
+          return out;
+        }
+        /* Trend-leg anchor: ONE continuous VWAP line (never faded, never split
+           per session) that re-anchors every time a new swing leg confirms. A
+           bar is a pivot when it is a strict fractal high/low over pivotLen bars
+           on EACH side. Confirmation needs the pivotLen bars AFTER the bar, so
+           bar i only adopts pivots with j + pivotLen <= i: the series is causal,
+           does not repaint, and never anchors on a leg that has not actually
+           turned yet. Each confirmed pivot starts a fresh cumulative VWAP, which
+           makes the line hug the current move - a close cross above/below it
+           happens near the START of the new leg instead of half-way through. */
+        const n = c.length;
+        const W = Math.max(1, Math.min(200, Math.round(o.pivotLen || 5)));
+        const pivotAt = new Array(n).fill(0);
+        if (n >= 2 * W + 1) {
+          for (let j = 0; j < n; j++) {
+            const a = Math.max(0, j - W), b = Math.min(n - 1, j + W);
+            let hi = true, lo = true;
+            const hv = c[j].high, lv = c[j].low;
+            for (let k = a; k <= b && (hi || lo); k++) {
+              if (k === j) continue;
+              if (c[k].high >= hv) hi = false;
+              if (c[k].low <= lv) lo = false;
+            }
+            if (hi !== lo) pivotAt[j] = hi ? 1 : -1;
           }
         }
-        return out;
+        /* Zig-zag the raw fractals into an alternating high/low pivot chain:
+           a later pivot of the same type replaces the earlier one only when it
+           is more extreme, and an opposite pivot only counts once price actually
+           broke the previous extreme (so minor wiggles never restart the line). */
+        const piv = [];
+        for (let j = 0; j < n; j++) {
+          const t = pivotAt[j];
+          if (!t) continue;
+          const last = piv[piv.length - 1];
+          if (!last) { piv.push({ i: j, t }); continue; }
+          if (t === last.t) {
+            const better = t === 1 ? c[j].high >= c[last.i].high : c[j].low <= c[last.i].low;
+            if (better) last.i = j;
+            continue;
+          }
+          const broke = t === 1 ? c[j].high > c[last.i].high : c[j].low < c[last.i].low;
+          if (broke) piv.push({ i: j, t });
+        }
+        const data = [];
+        if (n) {
+          const st = { cumPV: 0, cumV: 0, sumTP: 0, nTP: 0 };
+          let pi = -1;
+          for (let i = 0; i < n; i++) {
+            while (pi + 1 < piv.length && piv[pi + 1].i + W <= i) {
+              pi++;
+              st.cumPV = 0; st.cumV = 0; st.sumTP = 0; st.nTP = 0;
+              for (let k = piv[pi].i; k < i; k++) feed(k, st);
+            }
+            data.push({ time: c[i].time, value: feed(i, st) });
+          }
+        }
+        return [{ type: 'line', color: o.color, lineWidth: o.lineWidth, data }];
       }
     },
 
@@ -1090,13 +1152,25 @@
         const ll = lowestArr(srcArr(c, 'low'), o.length);
         const midLen = o.midLength || o.length || 20;
         let midSrc = null;
+        /* Midpoint middle: the rolling midpoint of the high/low extremes over
+           the Mid Band Period (midLength) window - NOT the outer length window -
+           so the Mid Band Period setting actually moves the middle line. When
+           midLength equals length this reduces to the classic (upper+lower)/2
+           channel centre. */
+        let midExt = null;
         if (o.midType === 'sma') midSrc = smaArr(srcArr(c, 'close'), midLen);
         else if (o.midType === 'ema') midSrc = emaArr(srcArr(c, 'close'), midLen);
+        else {
+          const mh = highestArr(srcArr(c, 'high'), midLen);
+          const ml = lowestArr(srcArr(c, 'low'), midLen);
+          midExt = new Array(c.length).fill(null);
+          for (let i = midLen - 1; i < c.length; i++) midExt[i] = (mh[i] + ml[i]) / 2;
+        }
         const up = [], mid = [], dn = [];
         for (let i = o.length - 1; i < c.length; i++) {
           up.push({ time: c[i].time, value: hh[i] });
           dn.push({ time: c[i].time, value: ll[i] });
-          mid.push({ time: c[i].time, value: (midSrc && midSrc[i] != null) ? midSrc[i] : (hh[i] + ll[i]) / 2 });
+          mid.push({ time: c[i].time, value: (midSrc && midSrc[i] != null) ? midSrc[i] : ((midExt && midExt[i] != null) ? midExt[i] : (hh[i] + ll[i]) / 2) });
         }
         return [
           { type: 'line', color: o.upperColor, lineWidth: o.lineWidth, data: up },

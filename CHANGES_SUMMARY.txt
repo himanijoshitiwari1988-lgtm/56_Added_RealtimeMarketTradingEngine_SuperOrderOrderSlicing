@@ -1,164 +1,119 @@
-CHANGES_SUMMARY for backup (Algos AI Brain - LLM chat that reads every tab, builds+saves AST strategies, runs AST templates & Auto-Experiment experiments; Trade Stats executed-trades report + IST timestamps; NIFTY Trend-Following confirmed-direction TrendConfirm layer; chart-grid running-strategy mirror; + all work since 31-Aug backup)
+CHANGES_SUMMARY for backup (Volume Line (vl) indicator level filter + green/red candle entry gates + per-engine margin wallet (PaperMarginModal / Running-Trade margin bars) + BB/PC middle (level) gates reworked + NIFTY index includeIndices + chain pre-warm + VWAP trend-leg anchored + daily-fill CPU spin fix)
 Generated: 2026-09-05 UTC
-Diff of committed work between 7140715 and the current working tree (HEAD 914d9ec + the Algos AI Brain milestone)
+Diff of committed work between ac432ec and the current working tree (HEAD ac432ec + the Volume Line indicator filter milestone)
 
- .ai-ready/MEMORY.md          |  589 +++++++++++
- .env.example                 |   17 +
- app.py                       |  605 ++++++++++-
- data_fetcher.py              |   59 +-
- static/aipt.js               |   31 +
- static/aismart.js            | 2304 ++++++++++++++++++++++++++++++++++++------
- static/algosbrain.js         | 2207 ++++++++++++++++++++++++++++++++++++++++
- static/autoexperiment.js     |   29 +-
- static/autoexperiment.v13.js |  595 ++++++++---
- static/autoexperiment.v14.js | 2183 +++++++++++++++++++++++++++++++++++++++
- static/chart_grid.js         |  540 ++++++++++
- static/fast_live.js          |  210 ++++
- static/hft_pool.js           |  103 +-
- static/indicators.js         |  202 +++-
- static/niftybbp_alert.js     |  428 ++++++++
- static/oitrend.js            | 1239 +++++++++++++++++++++++
- static/paperrun.js           |  363 +++++--
- static/papertrade.js         |  114 ++-
- static/smart_ntrader.js      |  971 +++++++++++++-----
- static/strategies.js         |  293 +++---
- static/tradestats.js         |  824 +++++++++++++++
- static/trendconfirm.js       |  174 ++++
- templates/index.html         | 1097 +++++++++++++++++++++++-----
- 23 files changed, 13913 insertions(+), 1264 deletions(-)
+ app.py                       |  23 ++--
+ static/aismart.js            | 239 ++++++++++++++++++++++++++++++-----
+ static/autoexperiment.v13.js |  99 ++++++++++++---
+ static/indicators.js         | 162 +++++++++++++++++-------
+ static/paperrun.js           |  76 ++++++++++-
+ static/paperstrategies.js    |   6 +-
+ static/papertrade.js         | 170 +++++++++++++++++++++++--
+ static/smart_ntrader.js      | 294 ++++++++++++++++++++++++++++++++++---------
+ templates/index.html         |  41 +++---
+ 9 files changed, 921 insertions(+), 189 deletions(-)
 
 --- name-status ---
-M	.ai-ready/MEMORY.md
-A	.env.example
 M	app.py
-M	data_fetcher.py
-M	static/aipt.js
 M	static/aismart.js
-A	static/algosbrain.js
-M	static/autoexperiment.js
 M	static/autoexperiment.v13.js
-A	static/autoexperiment.v14.js
-A	static/chart_grid.js
-A	static/fast_live.js
-M	static/hft_pool.js
 M	static/indicators.js
-A	static/niftybbp_alert.js
-A	static/oitrend.js
 M	static/paperrun.js
+M	static/paperstrategies.js
 M	static/papertrade.js
 M	static/smart_ntrader.js
-M	static/strategies.js
-A	static/tradestats.js
-A	static/trendconfirm.js
 M	templates/index.html
 
 --- change description ---
-1) Direct chart-based execution (AST) - indicator-filter mode AND strategy
-   normal mode now trade directly on the evaluated chart. An option premium
-   chart (CE/PE) open for the strategy trades that SAME leg/strike; a spot /
-   underlying chart entry resolves a single ATM option of the signal side
-   (bullish -> CE, bearish -> PE) instead of a plain underlying long. Each
-   symbol's option chain collapses to ONE nearest-ATM contract per side (CE, PE)
-   via firstPerSide(), so no more multi-strike fan-out entries (e.g. 2160 PE +
-   2180 PE both opening). New signalSideFor() derives the leg direction from the
-   strategy category or the ticked Bullish/Bearish indicator-filter direction
-   (_filterBuilt synthetic strategy).
+1) Volume Line (vl) indicator level filter (AI Smart + Auto Experiment): the new
+   "Volume Line above/below Signal (level)" Meet filters (bullMeetVl/bearMeetVl)
+   hold vl v0 above/below its own vl v1 Signal as a LEVEL - logic crossAbove /
+   crossBelow with cmpType 'smoothed', mirroring the SMF (level) gate rather than
+   the rising/falling bullVl/bearVl trend gate. The chart overlay deployment now
+   also triggers on MeetVl (has(d+'MeetVl')), so the Volume Line + Signal are
+   painted when this filter runs. Kept the exact user-facing label "Volume Line
+   above/below Signal (level)" in the AI Smart and Auto Experiment filter UIs.
 
-2) NSE market-hours entry gate (AST): marketSessionOpen() blocks ANY new paper
-   entry while the exchange is closed (Mon-Fri IST 09:15-15:30). After 15:30 the
-   candlestick feed freezes but stale candles + quotes kept satisfying entry
-   conditions, so the engine kept BUY-ing dead legs after market hours and those
-   phantom fills corrupted the paper PnL. Gate enforced in allowedTradesFor()
-   (shared by normal poll + HFT scanner), hftScan() early-return, and a clear
-   'Blocked: NSE market closed' progress message per strategy. Open positions
-   are untouched (still managed to SL/TP/trail).
+2) Candle-colour entry gates (AI Smart + Auto Experiment): new "Strategy entry on
+   green candle" (bullish) and "red candle" (bearish) indicator-filter toggles.
+   The entry may fire only while the candle at the decision bar is green
+   (close > open) / red (close < open), so a strategy cannot open a trade into a
+   candle that is currently falling against the signal. evalCondAt / buildSignal
+   handle logic 'greenCandle' / 'redCandle' as a straight candle-shape check with
+   no indicator required; the toggles join the filter key sets (FILTER_EXTRA_KEYS,
+   BULL/BEAR_FILTER_KEYS, filter active/enabled gating and the human-readable
+   summaries) in both engines.
 
-3) AI trail SL intent fix (AST): a typed Trail SL % on top of the Overall SL
-   floor is now treated as real intent (one-time load migration) so profitable
-   trades ratchet and lock profit instead of giving the whole run back to zero.
-   The Overall SL %/Trail SL % UI defaults were also corrected (blank box instead
-   of phantom 1%).
+3) BB & Price-Channel middle (level) gates reworked: the MeetCloseBb / MeetClosePc
+   (level) gates no longer require band EXPANSION (expand:true). A (level) gate is
+   now two conditions ANDed together: the close on the correct side of the middle
+   band (closeCrossAbove / closeCrossBelow) PLUS the middle band itself rising
+   (incUp) for bullish / falling (incDown) for bearish. Both middles are analysed
+   on a 10-period mid band (midLength 20 -> 10) and the deployed chart overlays
+   for these filters use the same 10-period middle. The separate cross gates
+   (bullBbCrossAbove etc.) keep their original band-expansion meaning. Price
+   Channel indicator's midpoint middle now follows its own Mid Band Period
+   (midLength) window - decoupled from the outer length window - so the Mid Band
+   Period setting actually moves the middle line (midLength == length reduces to
+   the classic (upper+lower)/2 channel centre). UI labels updated to "(level,
+   middle rising/falling)" / "(upper+lower expanding)".
 
-4) Indicator-filter strict runs (autoexperiment): 'All together (strict AND)'
-   now runs pure indicator-filter strategies (one per enabled side) instead of
-   ignoring the checkbox; strict results are tagged strictFilter:true and are
-   kept for every backtested symbol (the drop-unprofitable pass no longer hides
-   the strict outcome). autoexperiment.v13.js v130-v131; new autoexperiment.v14.js
-   engine added.
+4) Per-engine margin wallet: every paper-engine instance reads its budget ONLY
+   from its own Margin input. marginFieldRootFor() maps the engine key to its
+   input root (ntrader -> ntrMargin; papertrade / paper<N> clones -> astMargin);
+   when that bound input exists it is the SOLE budget - the engine never falls
+   back to a broker balance or an internal default in any mode. A shared global
+   PaperMarginModal ("MARGIN KAM PAD GAYA") shows once per block (8s throttle,
+   non-stacking, Close button + overlay click) whenever an engine refuses a next
+   auto entry because required margin > available. Margin bars are rendered above
+   the Running Trades tables: Paper Trade tab (ptRunTradeCapitalBar), AI Smart
+   (astMarginBar - AE-imported strategy trades are excluded from the AST wallet
+   because they run on their own AE margin, and reported separately as an AE
+   readout) and Smart NTrader (ntrMarginBar, including a 'last trade BLOCKED:
+   needs X > available Y' note). Every engine enforces the cap before autoEntry
+   and surfaces a clear 'entry: margin insufficient' status. AE-created
+   strategies now carry marginCap (the Auto Experiment margin they were created
+   under): paperstrategies import keeps it, strategyMarginCap() reads it back,
+   and every autoEntry call passes margin = (sCap > 0 ? sCap : u.margin) plus
+   marginCap, so AE experiments never spend the AI Smart / manual wallet and their
+   margin bars show the right locked/available numbers.
 
-5) OI Trend direction filter + OI Trend & Levels overlay: new static/oitrend.js
-   (v1-v3) paints OI support/resistance from CE/PE OI walls, Max Pain, ATM-IV
-   expected range, PCR and an EMA-regime trend-state line; per-strike CE vs PE OI
-   fuses into trend/consolidation detection (reversal warnings when a trend
-   presses a fresh/heavy wall, 'OI squeeze' consolidation, OI Bias arrows);
-   premium option charts get an OI-ordered strip (CE left / PE right / spot
-   centre). New OI Trend direction indicator filter added to AI Smart Trading
-   and Auto Experiment (590e66d). indicators.js v50-v52.
+5) NIFTY trend-following indices fix: +Add-ing an index (Top Gainers/Losers or
+   NIFTY trend-following) now automatically turns on 'Include indices for
+   trading', applies it to the UI immediately, and pre-warms the index option
+   chain (prewarmChain at add time, throttled 15s + single-flight). Explicitly
+   added indices keep trading even when NIFTY has no confirmed directional bias
+   or the overall/current layers disagree - only the auto directional F&O
+   picking pauses (status messages now say 'no directional F&O stocks picked' but
+   list the added indices that still trade). resolveInstruments() re-arms the
+   warm-up for any index that resolved no strikes on a pass (cold chain / one-off
+   empty /api/auto_strikes response), so an index is never silently dropped for
+   the whole session just because its chain was still building.
 
-6) SmartNTrader BB%b alert -> auto trade overhaul (v52-v58): draft-vs-armed
-   config with 'Set Alert & Execute Trade' lock button, smooth-draggable overlay
-   level bars with live value chip, dashed draft-preview lines, fixed overlay
-   popovers (Set button never clipped), negative BB%b alert levels (-3..3), and
-   NIFTY-trend-side gated CE/PE firing. Cross-and-hold (meet-style) conditions
-   added to AST + AE indicator-filter key sets with checkbox UI.
+6) VWAP trend-leg anchored line (indicators.js vwap + engine reads): the vwap
+   indicator's default anchor is now 'trend' instead of 'session'. Trend mode
+   returns ONE continuous line (no per-session split, no fadeColor/noRead prior
+   sessions, no session boundary gaps) that re-anchors on every confirmed swing
+   leg: a strict fractal pivot over pivotLen bars on each side is adopted only
+   once pivotLen bars AFTER it exist (causal, no repaint, no future leak), the
+   zig-zag chain alternates high/low and only accepts an opposite pivot after the
+   price actually broke the previous extreme, and each confirmed pivot restarts a
+   fresh cumulative volume-weighted typical-price VWAP. This makes close-vs-VWAP
+   crosses fire near the START of a fresh leg instead of half-way through the
+   move (the trend-leg anchored option chosen for the VWAP fix). A new pivotLen
+   input (default 5, 1-200) tunes the pivot strength; 'session' and 'all' anchors
+   keep their exact previous behaviour (session still splits + fades, 'all' stays
+   one cumulative line), and the TradingView-style end projection stays only for
+   those modes. AI Smart, Auto Experiment and the Live Data Pool VWAP conditions
+   all read the trend anchor now, and because trend mode returns a single series
+   the engine's v0 read is always the current line (no stale oldest-session read).
 
-7) Rate-limit + persistence (data_fetcher.py/app.py/static): per-surface quote
-   cooldown (empty-bodied/429 responses no longer arm the global 30s gate),
-   early return during quote cooldown, AST poll cadence 1000ms to cut Dhan load,
-   reload-survival snapshots of resolved chains + picked strikes, and no strike
-   dropping during Dhan rate-limit cooldown in strict runs.
+7) app.py daily-fill CPU-spin fix: the daily-candle backfill loop's 'skip' path
+   (live symbol already has close, or the entry was just refreshed) previously
+   used a bare `continue` which skipped the _DAILY_FILL_IDX increment + sleep at
+   the bottom of the loop - the thread re-processed the SAME symbol forever and
+   spun one core at ~88-100%. The skip now advances _DAILY_FILL_IDX under
+   _DAILY_FILL_LOCK and sleeps before continuing.
 
-8) Live UI/quote-loop fixes: AST closed-trades table repaints immediately on the
-   ~250ms quote loop; PaperRun running-strategy strike rows stop blinking out on
-   async re-resolve; AST open-chart draws ENTRY/SL/TP/TRAIL/live-PnL lines on the
-   strike chart; FastLive ultrafast in-browser WS live candles added; NIFTY
-   trend-following picks the CURRENT EMA9/21 momentum direction on a reversal and
-   no longer force-exits qualifying positions that dip below the daily change%
-   threshold (they stop getting new entries only).
-
-9) One-trade-per-signal latch (AST): a strategy+instrument condition may open
-   EXACTLY one trade per meeting. When the trade closes (SL/TP) while the same
-   condition is still true, re-entry is blocked until the signal is observed
-   FALSE and then meets again fresh. Kills the repeated same-leg re-buy churn
-   (APLAPOLLO 2140 PE was bought 24x / MCX 3250 PE 8x in one losing session).
-   Enforced in the normal poll and the HFT scanner (armed on placement, kept
-   armed while the trade is open, released only on a false signal after the
-   close, cleared each new session day).
-
-10) Chart grid + live-UI fixes: new static/chart_grid.js (Smart Chart List +
-    Open Chart inside Paper Trade) mirrors the running AST engine's resolved
-    instrument rows (open/close as symbols join/leave the universe), and the
-    chart layer purges stale spot-scaled overlays + auto-retries single-flight
-    503s so a transient Dhan failure never strands the chart feed.
-
-11) Trade Stats tab + TrendConfirm layer (repo 41 milestone): static/tradestats.js
-    aggregates every closed paper trade from ALL paper engines (AI Smart base,
-    Pooled Runner, Smart NTrader, each duplicated Paper tab, plus AI Smart mirror
-    ledgers) into a strategy-wise executed-trades report with IST timestamps,
-    de-duplicated; static/trendconfirm.js adds a shared NIFTY trend
-    CONFIRMATION + HYSTERESIS layer (15-min regime, EMA9/21 momentum + RSI/Boll
-    %B reversals are only trusted after confirmation) used across Smart NTrader /
-    AST aismart / Auto Experiment so fast NIFTY signals no longer flip
-    BULL/BEAR on momentary noise; static/aipt.js + static/niftybbp_alert.js and
-    the related aismart/autoexperiment changes ride along.
-
-12) Algos AI Brain (repo 42 milestone - new static/algosbrain.js): an in-tab
-    chat "brain" that can be used OFFLINE (keyword/intent engine) or connected
-    to an OpenAI-compatible LLM (server-side key only, configurable through the
-    tab's gear UI - never shipped in code; .env.example added as a template).
-    The LLM mode is prompted with a live system snapshot every round that lists
-    every engine + saved strategy + per-engine Bull/Bear filter counts, so it
-    answers as a human would. It can read any tab, switch timeframes, run/toggle
-    Auto-Experiment (incl. new duplicated AE clones ae1..aeN), run saved AST
-    strategy templates on paper engines, build + save real bearish/bullish
-    strategies programmatically (algodhan_strategies_v1, same shape as the
-    Strategies tab) and run one-shot Auto-Experiment side experiments
-    (ae_experiment) that auto-create the missing-side strategy, enable
-    "run on manually saved strategies", lock the CE/PE direction and fire the
-    experiment - no more "saved strategies khali hai, go create them yourself"
-    punts. Trading side-effects always ask for confirmation unless the user says
-    "auto". New AE engine API: setRunManual(on) / setOptionType('CE'|'PE'|'both')
-    (autoexperiment.v13.js). Indicators/get-directives, read_tab/open_tab UI
-    ops and action chaining (multi-step flows in one reply) included.
-    app.py: _BRAIN_SYS/_BRAIN_ACTIONS/_BRAIN_UIOPS allow-lists + /api/brain/*
-    proxy that keeps the API key on the server.
+8) indicators.js cache-bust v=58 -> v=59 in index.html so the new vwap/pc code is
+   served to browsers.
