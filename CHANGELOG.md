@@ -1,9 +1,34 @@
 # AlgoDhan Trading System — Change Log & Continuation Guide
 
-Backup target: `himanijoshitiwari1988-lgtm/43_Added_vLindicatorFilter`
-Source history: `42_Added_AiBrainAlgo` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`)
+Backup target: `himanijoshitiwari1988-lgtm/44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`
+Source history: `43_Added_vLindicatorFilter` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`, `43_Added_vLindicatorFilter`)
 
-## Latest backup (2026-09-05) — Volume Line (vl) indicator level filter + green/red candle entry gates + per-engine margin wallet (PaperMarginModal + Running-Trade margin bars) + BB/PC middle (level) gates reworked + NIFTY index includeIndices + chain pre-warm + VWAP trend-leg anchored + daily-fill CPU fix
+## Latest backup (2026-09-06) — 14 new indicators (Aroon/BBW/CCI/Chandelier/CMF/Donchian/Force Index/Fisher/HMA/Ichimoku/Keltner/Squeeze Momentum/Stoch RSI/TSI) + new behaviour-based indicator filter rows across AI Smart & Auto Experiment + new Trend Core (vlcore) overlay engine with rising/falling + level filter rows
+
+Full diff: `b61f17e..current` (6 files, +1655/-43), regenerated
+`CHANGES_COMPLETE.patch` / `CHANGES_SUMMARY.txt` / `BACKUP_README.md` /
+`CHANGELOG.md` for the full window. Complete code state is pushed to
+`44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour` `main`.
+
+- **14 new indicator definitions** — Aroon, Bollinger Band Width, CCI,
+  Chandelier Exit, Chaikin Money Flow, Donchian Channel, Elder Force Index,
+  Fisher Transform, Hull Moving Average, Ichimoku Cloud, Keltner Channels,
+  Squeeze Momentum (TTM), Stoch RSI and True Strength Index added to
+  `static/indicators.js` with full compute engines (overlay / pane / line /
+  band / cloud) so they deploy on the chart AND feed the filter rows.
+- **Behaviour-based indicator filter rows (AI Smart + Auto Experiment)** — the
+  bullish/bearish filter panels now generate per-indicator behaviour rows
+  (Pane direction-mirror + strength/participation groups, Overlay "... line
+  increasing upward/downward", Meet Condition "(level) close above/below ...")
+  wired into both engines' filter key sets + summaries, incl. clone tabs.
+- **Trend Core (vlcore) overlay engine** — new `static/vlcore.js` engine
+  (Trend length 31, ATR length 38, Line gap 1.85x ATR, Confirmation bars 1,
+  Pivot window 1, Straight line on, Volume confirmation on); "Trend Core line
+  increasing upward/downward" + "Close above/below Trend Core (level)" filter
+  rows added to AI Smart AND Auto Experiment bullish/bearish sections.
+- **strategies.js** — `renderMonitorList` / `monitorTick` exports added.
+
+## Backup (2026-09-05) — Volume Line (vl) indicator level filter + green/red candle entry gates + per-engine margin wallet (PaperMarginModal + Running-Trade margin bars) + BB/PC middle (level) gates reworked + NIFTY index includeIndices + chain pre-warm + VWAP trend-leg anchored + daily-fill CPU fix
 
 Full diff: `ac432ec..current` (9 files, +921/-189), regenerated
 `CHANGES_COMPLETE.patch` / `CHANGES_SUMMARY.txt` / `BACKUP_README.md` /

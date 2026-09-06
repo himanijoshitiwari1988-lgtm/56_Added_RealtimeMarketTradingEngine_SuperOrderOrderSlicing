@@ -540,7 +540,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
       <h3>Instrument</h3>
       <input type="text" id="symbolSearch" placeholder="Search symbol..." oninput="filterSymbols()" style="margin-bottom:4px;width:100%;box-sizing:border-box">
       <select id="symbolSelect" onchange="onSymbolChange()" size="10"></select>
-      <h3 style="border-top:1px solid #1e1e40;padding-top:10px">Commodities (MCX)</h3>
+      <h3 style="border-top:1px solid #1e1e40;padding-top:10px;display:flex;justify-content:space-between;align-items:center">Commodities (MCX) <button onclick="KickRefresh.marketWatch()" title="Unstick commodity LTP / rows - no settings are changed" style="background:#1a1a35;color:#ffd700;border:1px solid #6b5b2a;border-radius:3px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer">Refresh</button></h3>
       <div id="commodityWatch" style="max-height:180px;overflow-y:auto;margin-bottom:6px">
         <div class="mw-row" style="opacity:0.55;cursor:default"><span class="mw-name">Loading commodities...</span><span class="mw-ltp">--</span><span class="mw-chg">--</span></div>
       </div>
@@ -575,7 +575,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
       </div>
       <h3>Active Strategies</h3>
       <div id="strategyList"></div>
-      <h3 style="border-top:1px solid #1e1e40;padding-top:10px;display:flex;justify-content:space-between;align-items:center">Market Watch <button id="mwToggleBtn" onclick="toggleAllWatchlist()" style="background:#1a1a35;color:#00d4aa;border:1px solid #2d2d50;border-radius:3px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer">Expand All</button></h3>
+      <h3 style="border-top:1px solid #1e1e40;padding-top:10px;display:flex;justify-content:space-between;align-items:center">Market Watch <span style="display:flex;gap:4px"><button id="mwToggleBtn" onclick="toggleAllWatchlist()" style="background:#1a1a35;color:#00d4aa;border:1px solid #2d2d50;border-radius:3px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer">Expand All</button><button onclick="KickRefresh.marketWatch()" title="Unstick data - reconnect quote feed and refresh live LTP of the whole sidebar (watchlist + commodity rows). No settings are changed." style="background:#1a1a35;color:#ffd700;border:1px solid #6b5b2a;border-radius:3px;padding:2px 8px;font-size:9px;font-weight:700;cursor:pointer">Refresh</button></span></h3>
       <div id="marketWatch"></div>
     </div>
     <div id="content">
@@ -936,6 +936,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
         </div>
       </div>
       <div class="tab-content" id="tab-account">
+        <div style="display:flex;justify-content:flex-end;padding:4px 8px 0"><button class="btn-action" onclick="KickRefresh.account()" style="width:auto;padding:3px 12px;font-size:10px;margin:0" title="Refetch broker balance / open positions / holdings now. No settings are changed.">Refresh</button></div>
         <div class="account-cards" id="accountCards">
           <div class="acard"><div class="label">Available Balance</div><div class="value white">--</div></div>
           <div class="acard"><div class="label">Used Margin</div><div class="value white">--</div></div>
@@ -1042,7 +1043,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <span id="astFastDataInfo" style="font-size:9px;color:#666">OFF - Data Pool path active</span>
           </div>
           <div id="astDataPoolBody" style="display:none;margin-top:6px;max-height:240px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a"></div>
-          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px;display:flex;align-items:center;gap:6px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span><button class="btn-action" onclick="KickRefresh.astTrades()" style="width:auto;padding:2px 10px;margin:0 0 0 auto;font-size:9px" title="Unstick data - re-render the running + closed trade tables of this engine now. No settings are changed.">Refresh</button></h3>
           <div id="astMarginBar" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;font-size:9px;padding:3px 7px;margin:2px 0 4px;border:1px solid #3d3d7e;border-radius:3px;background:#12122a"></div>
           <div style="max-height:220px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="astRunningTable">
@@ -1050,7 +1051,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               <tbody id="astRunningBody"></tbody>
             </table>
           </div>
-          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px">Closed Trades</h3>
+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:6px 0 4px;display:flex;align-items:center;gap:6px">Closed Trades <button class="btn-action" onclick="KickRefresh.astTrades()" style="width:auto;padding:2px 10px;margin:0 0 0 auto;font-size:9px" title="Unstick data - re-render the closed trade tables of this engine now. No settings are changed.">Refresh</button></h3>
           <div style="max-height:220px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="astClosedTable">
               <thead><tr><th>Option</th><th>Qty</th><th>Entry → Exit</th><th>P&amp;L (net)</th><th>Charges (deducted)</th><th>Reason</th><th>Entry → Exit time</th></tr></thead>
@@ -1386,6 +1387,26 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt1CloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed below close (close crossed above ST)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVwapCloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above VWAP</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 1 (direction mirror - line behaviour)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrMacd" onchange="AISmartTrading.onFiltersInput()"> MACD line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrPpo" onchange="AISmartTrading.onFiltersInput()"> PPO line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAo" onchange="AISmartTrading.onFiltersInput()"> AO line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrSmiio" onchange="AISmartTrading.onFiltersInput()"> SMI line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrDpo" onchange="AISmartTrading.onFiltersInput()"> DPO line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrRsi" onchange="AISmartTrading.onFiltersInput()"> RSI line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrMfi" onchange="AISmartTrading.onFiltersInput()"> MFI line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrUo" onchange="AISmartTrading.onFiltersInput()"> UO line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrWilliamsR" onchange="AISmartTrading.onFiltersInput()"> Williams %R line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrBbpct" onchange="AISmartTrading.onFiltersInput()"> BB%b line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrObv" onchange="AISmartTrading.onFiltersInput()"> OBV line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrPvt" onchange="AISmartTrading.onFiltersInput()"> PVT line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAd" onchange="AISmartTrading.onFiltersInput()"> A/D line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrSmf" onchange="AISmartTrading.onFiltersInput()"> SMF line increasing upward</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAdxUp" onchange="AISmartTrading.onFiltersInput()"> ADX line increasing (strong trend)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line increasing (bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAtrUp" onchange="AISmartTrading.onFiltersInput()"> ATR line increasing (wide candles)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrVoloscUp" onchange="AISmartTrading.onFiltersInput()"> VolOsc line increasing (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 above EMA 21 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 above EMA 35 (level)</label>
@@ -1445,6 +1466,26 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt1CloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed above close (close crossed below ST)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVwapCloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below VWAP</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 1 (direction mirror - line behaviour)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrMacd" onchange="AISmartTrading.onFiltersInput()"> MACD line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrPpo" onchange="AISmartTrading.onFiltersInput()"> PPO line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAo" onchange="AISmartTrading.onFiltersInput()"> AO line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrSmiio" onchange="AISmartTrading.onFiltersInput()"> SMI line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrDpo" onchange="AISmartTrading.onFiltersInput()"> DPO line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrRsi" onchange="AISmartTrading.onFiltersInput()"> RSI line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrMfi" onchange="AISmartTrading.onFiltersInput()"> MFI line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrUo" onchange="AISmartTrading.onFiltersInput()"> UO line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrWilliamsR" onchange="AISmartTrading.onFiltersInput()"> Williams %R line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrBbpct" onchange="AISmartTrading.onFiltersInput()"> BB%b line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrObv" onchange="AISmartTrading.onFiltersInput()"> OBV line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrPvt" onchange="AISmartTrading.onFiltersInput()"> PVT line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAd" onchange="AISmartTrading.onFiltersInput()"> A/D line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrSmf" onchange="AISmartTrading.onFiltersInput()"> SMF line increasing downward</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAdxUp" onchange="AISmartTrading.onFiltersInput()"> ADX line increasing (strong trend)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line increasing (bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAtrUp" onchange="AISmartTrading.onFiltersInput()"> ATR line increasing (wide candles)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrVoloscUp" onchange="AISmartTrading.onFiltersInput()"> VolOsc line increasing (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 below EMA 21 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 below EMA 35 (level)</label>
@@ -2122,6 +2163,26 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt1CloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed below close (close crossed above ST)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullVwapCloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above VWAP</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 1 (direction mirror - line behaviour)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrMacd" onchange="AutoExperiment.onFiltersInput()"> MACD line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrPpo" onchange="AutoExperiment.onFiltersInput()"> PPO line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAo" onchange="AutoExperiment.onFiltersInput()"> AO line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrSmiio" onchange="AutoExperiment.onFiltersInput()"> SMI line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrDpo" onchange="AutoExperiment.onFiltersInput()"> DPO line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrRsi" onchange="AutoExperiment.onFiltersInput()"> RSI line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrMfi" onchange="AutoExperiment.onFiltersInput()"> MFI line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrUo" onchange="AutoExperiment.onFiltersInput()"> UO line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrWilliamsR" onchange="AutoExperiment.onFiltersInput()"> Williams %R line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrBbpct" onchange="AutoExperiment.onFiltersInput()"> BB%b line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrObv" onchange="AutoExperiment.onFiltersInput()"> OBV line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrPvt" onchange="AutoExperiment.onFiltersInput()"> PVT line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAd" onchange="AutoExperiment.onFiltersInput()"> A/D line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrSmf" onchange="AutoExperiment.onFiltersInput()"> SMF line increasing upward</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAdxUp" onchange="AutoExperiment.onFiltersInput()"> ADX line increasing (strong trend)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrBbwUp" onchange="AutoExperiment.onFiltersInput()"> BBW line increasing (bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAtrUp" onchange="AutoExperiment.onFiltersInput()"> ATR line increasing (wide candles)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrVoloscUp" onchange="AutoExperiment.onFiltersInput()"> VolOsc line increasing (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 above EMA 21 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 above EMA 35 (level)</label>
@@ -2181,6 +2242,26 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt1CloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed above close (close crossed below ST)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearVwapCloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below VWAP</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 1 (direction mirror - line behaviour)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrMacd" onchange="AutoExperiment.onFiltersInput()"> MACD line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrPpo" onchange="AutoExperiment.onFiltersInput()"> PPO line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAo" onchange="AutoExperiment.onFiltersInput()"> AO line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrSmiio" onchange="AutoExperiment.onFiltersInput()"> SMI line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrDpo" onchange="AutoExperiment.onFiltersInput()"> DPO line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrRsi" onchange="AutoExperiment.onFiltersInput()"> RSI line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrMfi" onchange="AutoExperiment.onFiltersInput()"> MFI line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrUo" onchange="AutoExperiment.onFiltersInput()"> UO line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrWilliamsR" onchange="AutoExperiment.onFiltersInput()"> Williams %R line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrBbpct" onchange="AutoExperiment.onFiltersInput()"> BB%b line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrObv" onchange="AutoExperiment.onFiltersInput()"> OBV line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrPvt" onchange="AutoExperiment.onFiltersInput()"> PVT line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAd" onchange="AutoExperiment.onFiltersInput()"> A/D line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrSmf" onchange="AutoExperiment.onFiltersInput()"> SMF line increasing downward</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAdxUp" onchange="AutoExperiment.onFiltersInput()"> ADX line increasing (strong trend)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrBbwUp" onchange="AutoExperiment.onFiltersInput()"> BBW line increasing (bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAtrUp" onchange="AutoExperiment.onFiltersInput()"> ATR line increasing (wide candles)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrVoloscUp" onchange="AutoExperiment.onFiltersInput()"> VolOsc line increasing (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 below EMA 21 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 below EMA 35 (level)</label>
@@ -2211,6 +2292,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <label style="font-size:9px;color:#ffd700;display:flex;align-items:center;gap:3px;padding-top:4px;margin-left:10px"><input type="checkbox" id="aeTrendConfirm" onchange="AutoExperiment.onFiltersInput()" style="accent-color:#ffd700"> Trend confirmation <span style="font-weight:400;color:#aa9a50;font-size:8px">(skip symbols whose own trend is opposite to the selected Bullish / Bearish filter. OFF = run every symbol on its bullish/bearish signal)</span></label>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px">
+            <button class="btn-action" onclick="KickRefresh.ae()" style="width:auto;padding:6px 12px;margin:0" title="Unstick data - re-render experiment results, reload research and resume the live poll. No settings are changed.">Refresh</button>
             <button class="btn-action" id="aeRunBtn" style="width:auto;padding:6px 14px;margin:0" onclick="AutoExperiment.run()">Run Experiment</button>
             <button class="btn-action warn" style="width:auto;padding:6px 14px;margin:0 0 0 8px" onclick="AutoExperiment.removeAll()">Remove All</button>
             <button class="btn-action" id="aeSelectAll" style="width:auto;padding:6px 12px;margin:0 0 0 8px" onclick="AutoExperiment.selectAll()">Select All</button>
@@ -2240,6 +2322,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <div class="monitor-toolbar-row">
             <select id="monitorStratSelect"></select>
             <button class="btn-action" onclick="StratUI.addToMonitor()" style="width:auto;margin:0;padding:5px 12px;font-size:10px">+ Add to Monitor</button>
+            <button class="btn-action" onclick="KickRefresh.monitor()" style="width:auto;margin:0 0 0 8px;padding:5px 12px;font-size:10px" title="Unstick data - re-run the live monitor scan now. No settings are changed.">Refresh</button>
           </div>
           <div class="monitor-hint">Select a saved strategy and add it to the monitor. You can add multiple strategies. Press <b>Details</b> on any card to see live realtime readings of every indicator (overlay + pane), candlestick patterns and chart patterns defined in that strategy.</div>
         </div>
@@ -2262,6 +2345,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <span style="flex:1"></span>
           <span id="ntrTrendRefresh" style="font-size:9px;color:#66ccff">60s refresh --</span>
           <span id="ntrTick" style="font-size:9px;color:#666">tick --ms</span>
+          <button class="btn-action" onclick="KickRefresh.ntrader()" style="width:auto;padding:4px 10px;margin:0;font-size:10px" title="Unstick data - kick the quote feed and re-render the Smart NTrader panel now. No settings are changed.">Refresh</button>
         </div>
         <div style="display:flex;align-items:center;gap:10px;padding:5px 8px;border-bottom:1px solid #1e1e40;flex-wrap:wrap">
           <label style="font-size:10px;color:#00d4aa;display:flex;align-items:center;gap:4px">Bull cap <input type="number" id="ntrBullCount" min="0" max="50" style="width:42px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:2px 4px;font-size:10px" title="Maximum number of enabled BULLISH rows that may be active (by score)"></label>
@@ -2425,7 +2509,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
           <div id="ntrFetched" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Stocks the engine currently fetches: when NIFTY Trend Following is ON these are the F&O stocks whose live daily change% is at/above the set threshold on the NIFTY trend side; when OFF it is the manually enabled rows. Green border = active (tradable), dim = fetched but not enabled."></div>
           <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Picked Stocks &amp; Strikes <span style="text-transform:none;color:#666;font-weight:normal">(manual selection)</span></h3>
           <div id="ntrPicked" style="display:flex;flex-wrap:wrap;gap:4px;min-height:22px;padding:4px 0" title="Every manually enabled F&O stock and its picked strike. Blue = open position, amber = strike resolved, gray = still resolving."></div>
-          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span></h3>
+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px;display:flex;align-items:center;gap:6px">Running Trades <span style="text-transform:none;color:#666;font-weight:normal">(open positions)</span><button class="btn-action" onclick="KickRefresh.ntrader()" style="width:auto;padding:2px 10px;margin:0 0 0 auto;font-size:9px" title="Unstick data - refresh live trades of this engine. No settings are changed.">Refresh</button></h3>
           <div id="ntrMarginBar" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;font-size:9px;padding:3px 7px;margin:2px 0 4px;border:1px solid #3d3d7e;border-radius:3px;background:#12122a"></div>
           <div style="max-height:180px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="ntrRun">
@@ -2433,7 +2517,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               <tbody id="ntrRunBody"></tbody>
             </table>
           </div>
-          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px">Closed Trades</h3>
+          <h3 style="font-size:11px;color:#888;text-transform:uppercase;margin:8px 0 4px;display:flex;align-items:center;gap:6px">Closed Trades <button class="btn-action" onclick="KickRefresh.ntrader()" style="width:auto;padding:2px 10px;margin:0 0 0 auto;font-size:9px" title="Unstick data - refresh closed trades of this engine. No settings are changed.">Refresh</button></h3>
           <div style="max-height:180px;min-height:60px;overflow-y:scroll;border:1px solid #1e1e40;border-radius:3px;scrollbar-width:thin;scrollbar-color:#4a4a80 #12122a">
             <table class="account-table" id="ntrClosed">
               <thead><tr><th>Option</th><th>Qty</th><th>Entry → Exit</th><th>P&L (net)</th><th>Charges (deducted)</th><th>Reason</th></tr></thead>
@@ -2449,6 +2533,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
     <button class="btn-action" id="simStartBtn" style="width:auto;padding:4px 14px;margin:0;font-size:10px">Start</button>
     <span style="font-size:9px;color:#e67e22;font-weight:700" id="simStatus">STOPPED</span>
     <span style="flex:1"></span>
+    <button class="btn-action" onclick="KickRefresh.simulator()" style="width:auto;padding:4px 10px;margin:0;font-size:10px" title="Unstick data - re-poll the simulated candles and redraw the simulator chart. No settings are changed.">Refresh</button>
     <label style="font-size:9px;color:#888;display:flex;align-items:center;gap:4px">Direction
       <select id="simTrend" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
         <option value="bullish" selected>Bullish (up)</option>
@@ -2488,6 +2573,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
     <h3 style="font-size:12px;color:#00d4aa;text-transform:uppercase;margin:0 0 4px;display:flex;align-items:center;gap:8px">
       Backup &amp; Restore
       <span id="backupAutoDot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#666" title="Auto backup: green = enabled"></span>
+      <button class="btn-action" onclick="KickRefresh.backup()" style="width:auto;padding:3px 12px;font-size:10px;margin:0 0 0 auto" title="Unstick data - reload the backup server status & history now. No settings are changed.">Refresh</button>
     </h3>
     <div style="font-size:10px;color:#888;margin-bottom:12px">Complete algo system backup — all tabs, all engine settings, saved templates, saved strategies, P&L records, monitor lists. Everything is captured, so a crash or accident can always be rolled back.</div>
     <div id="backupStatus" style="font-size:11px;color:#00d4aa;margin-bottom:10px">Loading backup server…</div>
@@ -2679,7 +2765,8 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   </div>
 </div>
 
-<script src="/static/indicators.js?v=59"></script>
+<script src="/static/vlcore.js?v=8"></script>
+<script src="/static/indicators.js?v=63"></script>
 <script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
@@ -6236,10 +6323,10 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/trendconfirm.js?v=1"></script>
 <script src="/static/papertrade.js?v=66"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=144"></script>
+<script src="/static/autoexperiment.v13.js?v=146"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=156"></script>
+<script src="/static/aismart.js?v=158"></script>
 <script src="/static/paperrun.js?v=25"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6252,13 +6339,92 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/tradestats.js?v=1"></script>
 <script src="/static/backup.js?v=2"></script>
 <script>
-/* Engine instantiation for the base tabs and every duplicated tab. The cloned
-   tab DOM is already built by PaperTabs.restore()/AeTabs.restore() above, but
-   those run before the engine scripts load so the factory functions don't exist
-   yet. This runs after all engine scripts and wires each clone to its own
-   engine instance (idempotent: an existing instance is never re-created).
-   Base tabs boot on DOMContentLoaded (suffix ""); cloned-tab engines boot now
-   and then stop polling until their tab is shown. */
+/* Indicator filter rows injected by runtime for the 14 new indicators added in
+   indicators.js (CMF/TSI/CCI/Fisher/Stoch RSI/Squeeze Momentum/Aroon/Vortex/
+   Force Index pane lines + HMA/Ichimoku/Keltner/Donchian overlays). Both the
+   AST (AISmartTrading) and AE (AutoExperiment) filter cards get:
+     - new Group-1 "Pane Indicator Behaviour" rows (direction mirror)
+     - new "Overlay Indicator Behaviour" section rows (direction mirror)
+     - new "Close above/below <overlay line> (level)" Meet Condition rows
+   Static markup cannot be used because cloned paper/AE tabs re-suffix every
+   element id (_paperN / _aeN); the script is idempotent and also runs on
+   DOMContentLoaded / load / MutationObserver so clones get the same rows. */
+window.__addNewIndicatorFilterRows = function () {
+  function byText(divs, p) {
+    for (var i = 0; i < divs.length; i++) {
+      var d = divs[i];
+      if (d.children.length) continue;
+      if ((d.textContent || '').trim().indexOf(p) === 0) return d;
+    }
+    return null;
+  }
+  function makeRow(id, handler, label) {
+    var l = document.createElement('label');
+    l.style.cssText = 'font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px';
+    var inp = document.createElement('input');
+    inp.type = 'checkbox';
+    inp.id = id;
+    inp.setAttribute('onchange', handler + '()');
+    l.appendChild(inp);
+    l.appendChild(document.createTextNode(' ' + label));
+    return l;
+  }
+  function makeHead(label) {
+    var d = document.createElement('div');
+    d.style.cssText = 'border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700';
+    d.textContent = label;
+    return d;
+  }
+  function rowsFor(sec, prefix, handler, side) {
+    var content = sec.querySelector('div[style*="flex-direction:column"]') || sec.children[1];
+    if (!content) return;
+    if (content.getAttribute('data-aiRows')) return;
+    var cap = side === 'Bullish' ? 'Bull' : 'Bear';
+    var upWord = side === 'Bullish' ? 'increasing upward' : 'increasing downward';
+    var meetWord = side === 'Bullish' ? 'above' : 'below';
+    var divs = content.querySelectorAll('div');
+    var g2 = byText(divs, 'Pane Indicator Behaviour - Group 2');
+    var research = byText(divs, 'Research stream');
+    var pane = [['Cmf', 'CMF'], ['Tsi', 'TSI'], ['Cci', 'CCI'], ['Fisher', 'Fisher'], ['Stochrsi', 'Stoch RSI'], ['Sqzmom', 'Squeeze Mom.'], ['Aroon', 'Aroon'], ['Vortex', 'Vortex'], ['Elderforce', 'Force Index']];
+    var obr = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['SenkouA', 'Ichimoku Senkou A'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
+    var meet = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
+    if (g2) {
+      var frag = document.createDocumentFragment();
+      pane.forEach(function (p) { frag.appendChild(makeRow(prefix + 'Filter' + cap + 'Pbr' + p[0], handler, p[1] + ' line ' + upWord)); });
+      g2.parentNode.insertBefore(frag, g2);
+    }
+    if (research) {
+      var frag2 = document.createDocumentFragment();
+      meet.forEach(function (p) { frag2.appendChild(makeRow(prefix + 'Filter' + cap + 'MeetOvl' + p[0], handler, 'Close ' + meetWord + ' ' + p[1] + ' (level)')); });
+      frag2.appendChild(makeHead('Overlay Indicator Behaviour (direction mirror - overlay line behaviour)'));
+      obr.forEach(function (p) { frag2.appendChild(makeRow(prefix + 'Filter' + cap + 'Obr' + p[0], handler, p[1] + ' line ' + upWord)); });
+      research.parentNode.insertBefore(frag2, research);
+    }
+    content.setAttribute('data-aiRows', '1');
+  }
+  document.querySelectorAll('div[id^="astFilterSection"], div[id^="aeFilterSection"]').forEach(function (sec) {
+    var id = sec.id;
+    var side = /SectionBullish/.test(id) ? 'Bullish' : 'Bearish';
+    var prefix, handler;
+    if (/^astFilterSection/.test(id)) { prefix = 'ast'; handler = 'AISmartTrading.onFiltersInput'; }
+    else { prefix = 'ae'; handler = 'AutoExperiment.onFiltersInput'; }
+    rowsFor(sec, prefix, handler, side);
+  });
+};
+window.__addNewIndicatorFilterRows();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', window.__addNewIndicatorFilterRows);
+window.addEventListener('load', window.__addNewIndicatorFilterRows);
+if (window.MutationObserver) {
+  var __aiBusy = false;
+  new MutationObserver(function () {
+    if (__aiBusy) return;
+    __aiBusy = true;
+    try { window.__addNewIndicatorFilterRows(); } catch (e) { if (window.console) console.warn('[indicator-rows]', e); }
+    finally { __aiBusy = false; }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+}
+</script>
+<script>
 function TabEnginesInit(){
   if(!window.TabEngines) window.TabEngines = {};
   const reg = key => {
@@ -6308,6 +6474,33 @@ function TabEnginesInit(){
   }
 }
 TabEnginesInit();
+</script>
+<script>
+window.KickRefresh = {
+  _safe: function (fn){ try { fn(); } catch (e) { if (window.console) console.warn('[Refresh]', e); } },
+  _feed: function (){
+    this._safe(function(){ if (typeof ensureWsConnected === 'function') ensureWsConnected(); });
+    this._safe(function(){ if (typeof fullResync === 'function') fullResync(true); });
+  },
+  marketWatch: function (){
+    this._feed();
+    this._safe(function(){ if (typeof renderQuotes === 'function') renderQuotes(); });
+    this._safe(function(){ if (typeof loadCommodities === 'function') loadCommodities(); });
+  },
+  account: function (){ this._safe(function(){ if (typeof loadAccount === 'function') loadAccount(); }); },
+  monitor: function (){
+    this._safe(function(){ if (window.StratUI && typeof StratUI.monitorTick === 'function') StratUI.monitorTick(); });
+    this._safe(function(){ if (window.StratUI && typeof StratUI.renderMonitorList === 'function') StratUI.renderMonitorList(); });
+  },
+  astTrades: function (){ this._safe(function(){ if (typeof AISmartTrading !== 'undefined' && AISmartTrading.refreshLiveRunning) AISmartTrading.refreshLiveRunning(); }); },
+  ntrader: function (){
+    this._feed();
+    this._safe(function(){ if (typeof SmartNTrader !== 'undefined' && SmartNTrader.onShow) SmartNTrader.onShow(); });
+  },
+  simulator: function (){ this._safe(function(){ if (typeof Simulator !== 'undefined' && Simulator.poll) Simulator.poll(); }); },
+  backup: function (){ this._safe(function(){ if (typeof BackupSys !== 'undefined' && BackupSys.render) BackupSys.render(); }); },
+  ae: function (){ this._safe(function(){ if (typeof AutoExperiment !== 'undefined' && AutoExperiment.onTabShow) AutoExperiment.onTabShow(); }); }
+};
 </script>
 <script src="/static/algosbrain.js?v=11"></script>
 </body>

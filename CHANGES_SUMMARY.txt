@@ -1,119 +1,61 @@
-CHANGES_SUMMARY for backup (Volume Line (vl) indicator level filter + green/red candle entry gates + per-engine margin wallet (PaperMarginModal / Running-Trade margin bars) + BB/PC middle (level) gates reworked + NIFTY index includeIndices + chain pre-warm + VWAP trend-leg anchored + daily-fill CPU spin fix)
-Generated: 2026-09-05 UTC
-Diff of committed work between ac432ec and the current working tree (HEAD ac432ec + the Volume Line indicator filter milestone)
+CHANGES_SUMMARY for backup (14 new indicators + behaviour-based indicator filter rows across AI Smart & Auto Experiment + new Trend Core (vlcore) overlay engine with filter rows)
+Generated: 2026-09-06 UTC
+Diff of committed work between b61f17e and the current working tree (HEAD b61f17e + the 14-new-indicators / behaviour-filter / Trend Core milestone)
 
- app.py                       |  23 ++--
- static/aismart.js            | 239 ++++++++++++++++++++++++++++++-----
- static/autoexperiment.v13.js |  99 ++++++++++++---
- static/indicators.js         | 162 +++++++++++++++++-------
- static/paperrun.js           |  76 ++++++++++-
- static/paperstrategies.js    |   6 +-
- static/papertrade.js         | 170 +++++++++++++++++++++++--
- static/smart_ntrader.js      | 294 ++++++++++++++++++++++++++++++++++---------
- templates/index.html         |  41 +++---
- 9 files changed, 921 insertions(+), 189 deletions(-)
+ static/aismart.js            | 152 ++++++++++++++++--
+ static/autoexperiment.v13.js | 149 ++++++++++++++++--
+ static/indicators.js         | 554 +++++++++++++++++++++++++++++++++++++++++-
+ static/strategies.js         |   2 +
+ static/vlcore.js             | 616 +++++++++++++++++++++++++++++++++++++++++++
+ templates/index.html         | 225 ++++++++++++++++++----
+ 6 files changed, 1655 insertions(+), 43 deletions(-)
 
 --- name-status ---
-M	app.py
 M	static/aismart.js
 M	static/autoexperiment.v13.js
 M	static/indicators.js
-M	static/paperrun.js
-M	static/paperstrategies.js
-M	static/papertrade.js
-M	static/smart_ntrader.js
+M	static/strategies.js
+A	static/vlcore.js
 M	templates/index.html
 
 --- change description ---
-1) Volume Line (vl) indicator level filter (AI Smart + Auto Experiment): the new
-   "Volume Line above/below Signal (level)" Meet filters (bullMeetVl/bearMeetVl)
-   hold vl v0 above/below its own vl v1 Signal as a LEVEL - logic crossAbove /
-   crossBelow with cmpType 'smoothed', mirroring the SMF (level) gate rather than
-   the rising/falling bullVl/bearVl trend gate. The chart overlay deployment now
-   also triggers on MeetVl (has(d+'MeetVl')), so the Volume Line + Signal are
-   painted when this filter runs. Kept the exact user-facing label "Volume Line
-   above/below Signal (level)" in the AI Smart and Auto Experiment filter UIs.
+1) 14 new indicator definitions (static/indicators.js): Aroon, Bollinger Band
+   Width, CCI, Chandelier Exit, CMF (Chaikin Money Flow), Donchian Channel,
+   Elder Force Index, Fisher Transform, HMA (Hull Moving Average), Ichimoku
+   Cloud, Keltner Channels, Squeeze Momentum (TTM), Stoch RSI and TSI registered
+   with IndChart.IND / the chart-deploy / filter system. Each carries its own
+   id/name/fullName/category/type (overlay vs pane), period inputs and compute
+   engine (line/cloud/band series) so it can be deployed onto the chart AND
+   referenced from the indicator-filter rows.
 
-2) Candle-colour entry gates (AI Smart + Auto Experiment): new "Strategy entry on
-   green candle" (bullish) and "red candle" (bearish) indicator-filter toggles.
-   The entry may fire only while the candle at the decision bar is green
-   (close > open) / red (close < open), so a strategy cannot open a trade into a
-   candle that is currently falling against the signal. evalCondAt / buildSignal
-   handle logic 'greenCandle' / 'redCandle' as a straight candle-shape check with
-   no indicator required; the toggles join the filter key sets (FILTER_EXTRA_KEYS,
-   BULL/BEAR_FILTER_KEYS, filter active/enabled gating and the human-readable
-   summaries) in both engines.
+2) New Trend Core overlay engine (static/vlcore.js, NEW FILE): a separate
+   window.VLCore trend-core engine (Trend length 31, ATR length 38, Line gap
+   1.85x ATR, Confirmation bars 1, Pivot window 1, Straight line on, Volume
+   confirmation on) that draws one confirmed swing-based trend line / level. It
+   is loaded by index.html alongside the other static engines and feeds both the
+   chart "Trend Core" overlay and the new AST/AE Trend Core filter rows.
 
-3) BB & Price-Channel middle (level) gates reworked: the MeetCloseBb / MeetClosePc
-   (level) gates no longer require band EXPANSION (expand:true). A (level) gate is
-   now two conditions ANDed together: the close on the correct side of the middle
-   band (closeCrossAbove / closeCrossBelow) PLUS the middle band itself rising
-   (incUp) for bullish / falling (incDown) for bearish. Both middles are analysed
-   on a 10-period mid band (midLength 20 -> 10) and the deployed chart overlays
-   for these filters use the same 10-period middle. The separate cross gates
-   (bullBbCrossAbove etc.) keep their original band-expansion meaning. Price
-   Channel indicator's midpoint middle now follows its own Mid Band Period
-   (midLength) window - decoupled from the outer length window - so the Mid Band
-   Period setting actually moves the middle line (midLength == length reduces to
-   the classic (upper+lower)/2 channel centre). UI labels updated to "(level,
-   middle rising/falling)" / "(upper+lower expanding)".
+3) Behaviour-based indicator filter rows (templates/index.html + AST aismart.js
+   + AE autoexperiment.v13.js): the bullish and bearish filter panels in BOTH
+   engines now generate per-indicator behaviour rows from each indicator's
+   behaviour profile - Pane Indicator Behaviour groups (direction-mirror +
+   strength/participation), Overlay Indicator Behaviour ("... line increasing
+   upward/downward") and Meet Condition (level - "... close above/below <ind>
+   (level)") rows - so a new indicator's filters appear in the UI and are wired
+   into the engines' filter key sets (BULL/BEAR filter active/enabled keys,
+   FILTER_EXTRA_KEYS, filter summaries and enable/disable/clear-all) without
+   hand-writing each condition. Clone/copied engine tabs get the same new rows.
 
-4) Per-engine margin wallet: every paper-engine instance reads its budget ONLY
-   from its own Margin input. marginFieldRootFor() maps the engine key to its
-   input root (ntrader -> ntrMargin; papertrade / paper<N> clones -> astMargin);
-   when that bound input exists it is the SOLE budget - the engine never falls
-   back to a broker balance or an internal default in any mode. A shared global
-   PaperMarginModal ("MARGIN KAM PAD GAYA") shows once per block (8s throttle,
-   non-stacking, Close button + overlay click) whenever an engine refuses a next
-   auto entry because required margin > available. Margin bars are rendered above
-   the Running Trades tables: Paper Trade tab (ptRunTradeCapitalBar), AI Smart
-   (astMarginBar - AE-imported strategy trades are excluded from the AST wallet
-   because they run on their own AE margin, and reported separately as an AE
-   readout) and Smart NTrader (ntrMarginBar, including a 'last trade BLOCKED:
-   needs X > available Y' note). Every engine enforces the cap before autoEntry
-   and surfaces a clear 'entry: margin insufficient' status. AE-created
-   strategies now carry marginCap (the Auto Experiment margin they were created
-   under): paperstrategies import keeps it, strategyMarginCap() reads it back,
-   and every autoEntry call passes margin = (sCap > 0 ? sCap : u.margin) plus
-   marginCap, so AE experiments never spend the AI Smart / manual wallet and their
-   margin bars show the right locked/available numbers.
+4) Trend Core (vlcore) filter rows in BOTH engines: the "Trend Core line
+   increasing upward" / "Trend Core line increasing downward" overlay behaviour
+   rows and the "Close above/below Trend Core (level)" Meet rows are injected
+   into the AI Smart AND Auto Experiment bullish/bearish filter sections (exact
+   labels kept). The engines compute the Trend Core level through the vlcore
+   series read and hold it as a level / direction while it holds, mirroring the
+   existing overlay filter rows.
 
-5) NIFTY trend-following indices fix: +Add-ing an index (Top Gainers/Losers or
-   NIFTY trend-following) now automatically turns on 'Include indices for
-   trading', applies it to the UI immediately, and pre-warms the index option
-   chain (prewarmChain at add time, throttled 15s + single-flight). Explicitly
-   added indices keep trading even when NIFTY has no confirmed directional bias
-   or the overall/current layers disagree - only the auto directional F&O
-   picking pauses (status messages now say 'no directional F&O stocks picked' but
-   list the added indices that still trade). resolveInstruments() re-arms the
-   warm-up for any index that resolved no strikes on a pass (cold chain / one-off
-   empty /api/auto_strikes response), so an index is never silently dropped for
-   the whole session just because its chain was still building.
+5) strategies.js monitor exports: renderMonitorList + monitorTick added to the
+   module exports so the monitor UI can render/tick the running-strategy list.
 
-6) VWAP trend-leg anchored line (indicators.js vwap + engine reads): the vwap
-   indicator's default anchor is now 'trend' instead of 'session'. Trend mode
-   returns ONE continuous line (no per-session split, no fadeColor/noRead prior
-   sessions, no session boundary gaps) that re-anchors on every confirmed swing
-   leg: a strict fractal pivot over pivotLen bars on each side is adopted only
-   once pivotLen bars AFTER it exist (causal, no repaint, no future leak), the
-   zig-zag chain alternates high/low and only accepts an opposite pivot after the
-   price actually broke the previous extreme, and each confirmed pivot restarts a
-   fresh cumulative volume-weighted typical-price VWAP. This makes close-vs-VWAP
-   crosses fire near the START of a fresh leg instead of half-way through the
-   move (the trend-leg anchored option chosen for the VWAP fix). A new pivotLen
-   input (default 5, 1-200) tunes the pivot strength; 'session' and 'all' anchors
-   keep their exact previous behaviour (session still splits + fades, 'all' stays
-   one cumulative line), and the TradingView-style end projection stays only for
-   those modes. AI Smart, Auto Experiment and the Live Data Pool VWAP conditions
-   all read the trend anchor now, and because trend mode returns a single series
-   the engine's v0 read is always the current line (no stale oldest-session read).
-
-7) app.py daily-fill CPU-spin fix: the daily-candle backfill loop's 'skip' path
-   (live symbol already has close, or the entry was just refreshed) previously
-   used a bare `continue` which skipped the _DAILY_FILL_IDX increment + sleep at
-   the bottom of the loop - the thread re-processed the SAME symbol forever and
-   spun one core at ~88-100%. The skip now advances _DAILY_FILL_IDX under
-   _DAILY_FILL_LOCK and sleeps before continuing.
-
-8) indicators.js cache-bust v=58 -> v=59 in index.html so the new vwap/pc code is
-   served to browsers.
+6) index.html cache-bust bumped (v=...) so the new indicators.js / vlcore.js
+   code is served fresh to browsers.

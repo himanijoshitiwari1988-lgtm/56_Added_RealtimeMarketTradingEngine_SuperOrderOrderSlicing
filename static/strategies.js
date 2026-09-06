@@ -4261,6 +4261,8 @@
     loadStrikeInfo,
     openStrikeChart,
     renderMonitorDropdown,
+    renderMonitorList,
+    monitorTick,
     openSelected,
     renderSavedDropdown,
     syncFields() { syncBuilderFields(); },

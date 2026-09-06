@@ -94,6 +94,28 @@
     return c.map(x => x[key]);
   }
 
+  /* EMA that tolerates warmup gaps: only the p-th valid reading (and later)
+     produces output, so a nested EMA over an array that itself starts late
+     (e.g. TSI/Fisher second-stage smoothing) never sees NaN in its seed. */
+  function emaSkip(src, p) {
+    const out = new Array(src.length).fill(null);
+    if (p <= 0) return out;
+    const k = 2 / (p + 1);
+    let cnt = 0, prev = null, seed = 0;
+    for (let i = 0; i < src.length; i++) {
+      const v = src[i];
+      if (v == null || isNaN(v)) continue;
+      if (prev == null) {
+        seed += v; cnt++;
+        if (cnt === p) { prev = seed / p; out[i] = prev; }
+      } else {
+        prev = v * k + prev * (1 - k);
+        out[i] = prev;
+      }
+    }
+    return out;
+  }
+
   function buildSeries(c, arr, color, type, lineWidth) {
     const data = [];
     for (let i = 0; i < arr.length; i++) {
@@ -603,32 +625,36 @@
     },
 
     bbw: {
-      id: 'bbw', name: 'BBW', fullName: 'Bollinger Band Width', cat: 'Volume', type: 'pane', format: 'percent',
+      id: 'bbw', name: 'BBW', fullName: 'Bollinger Band Width', cat: 'Volume', type: 'pane', format: 'decimal',
       inputs: [
         { key: 'length', label: 'Length', def: 20, min: 1, max: 200, step: 1 },
         { key: 'mult', label: 'Mult', def: 2.0, min: 0.1, max: 10, step: 0.1 },
-        { key: 'source', label: 'Source', def: 'close', options: [['close', 'Close'], ['open', 'Open'], ['high', 'High'], ['low', 'Low'], ['hl2', 'HL2'], ['hlc3', 'HLC3'], ['hlcc4', 'HLCC4']] },
-        { key: 'midType', label: 'Middle Band', def: 'sma', options: [['sma', 'SMA'], ['ema', 'EMA']] },
-        { key: 'midLength', label: 'Mid Band Period', def: 20, min: 1, max: 500, step: 1 }
+        { key: 'source', label: 'Source', def: 'close', options: [['close', 'Close'], ['open', 'Open'], ['high', 'High'], ['low', 'Low'], ['hl2', 'HL2'], ['hlc3', 'HLC3'], ['hlcc4', 'HLCC4']] }
       ],
       style: [
         { key: 'color', label: 'Line color', def: '#26a69a' },
         { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
       ],
       compute(c, o) {
+        /* Pure band-EXPANSION width: Upper band minus Lower band
+           (= 2 * mult * StdDev of the source). The line only answers "how much are
+           the two bands stretched apart right now":
+             - bands expanding together  -> width grows  -> line rises,
+             - bands contracting         -> width shrinks -> line falls to a low,
+               flat (neutral) zone.
+           There is deliberately NO division by the middle band and no use of
+           candle direction, so a bull or bear trend by itself moves nothing —
+           only the expansion amount matters. */
         const cl = srcArr(c, o.source || 'close');
-        const midLen = o.midLength || o.length || 20;
-        const mid = o.midType === 'ema' ? emaArr(cl, midLen) : smaArr(cl, midLen);
-        const sd = stdevArr(cl, o.length);
+        const sd = stdevArr(cl, o.length || 20);
         const data = [];
-        for (let i = o.length - 1; i < c.length; i++) {
-          const m = mid[i];
-          if (m == null || !m) continue;
-          data.push({ time: c[i].time, value: (o.mult * sd[i] * 2) / m * 100 });
+        for (let i = (o.length || 20) - 1; i < c.length; i++) {
+          const v = 2 * (o.mult || 2) * sd[i];
+          if (v == null || !isFinite(v)) continue;
+          data.push({ time: c[i].time, value: v });
         }
         return [{
-          type: 'line', color: o.color, lineWidth: o.lineWidth, data,
-          priceLine: { price: 0, color: o.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: 'Zero' }
+          type: 'line', color: o.color, lineWidth: o.lineWidth, data
         }];
       }
     },
@@ -1176,6 +1202,508 @@
           { type: 'line', color: o.upperColor, lineWidth: o.lineWidth, data: up },
           { type: 'line', color: o.midColor, lineWidth: o.lineWidth, data: mid },
           { type: 'line', color: o.lowerColor, lineWidth: o.lineWidth, data: dn }
+        ];
+      }
+    },
+
+    vlcore: {
+      id: 'vlcore', name: 'Trend Core', fullName: 'Trend Core (liquidity-grab / fake-breakout filtered, non-lagging)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'length', label: 'Trend length', def: 21, min: 5, max: 200, step: 1 },
+        { key: 'atrLength', label: 'ATR length', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'gap', label: 'Line gap (x ATR)', def: 1.0, min: 0, max: 5, step: 0.05 },
+        { key: 'confirm', label: 'Confirmation bars', def: 2, min: 1, max: 6, step: 1 },
+        { key: 'wickLen', label: 'Pivot window', def: 3, min: 1, max: 6, step: 1 },
+        { key: 'straightLine', label: 'Straight line (angled segments)', type: 'checkbox', def: true },
+        { key: 'useVolume', label: 'Volume confirmation', type: 'checkbox', def: true }
+      ],
+      style: [
+        { key: 'upColor', label: 'Up color', def: '#00e676' },
+        { key: 'downColor', label: 'Down color', def: '#ff5252' },
+        { key: 'flatColor', label: 'Flat color', def: '#6b6b88' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        if (!window.VLCore || !window.VLCore.series) return [];
+        try { return window.VLCore.series(c, o).out; }
+        catch (e) { return []; }
+      }
+    },
+
+    hma: {
+      id: 'hma', name: 'HMA', fullName: 'Hull Moving Average', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'length', label: 'Length', def: 9, min: 1, max: 200, step: 1 },
+        { key: 'source', label: 'Source', def: 'close', options: [['close', 'Close'], ['high', 'High'], ['low', 'Low'], ['hl2', 'HL2'], ['hlc3', 'HLC3'], ['hlcc4', 'HLCC4']] }
+      ],
+      style: [
+        { key: 'color', label: 'Color', def: '#29b6f6' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const src = srcArr(c, o.source);
+        const n = Math.max(2, Math.round(o.length));
+        const half = Math.max(1, Math.floor(n / 2));
+        const sq = Math.max(1, Math.round(Math.sqrt(n)));
+        const wma = (a, p) => {
+          const out = new Array(a.length).fill(null);
+          if (a.length < p) return out;
+          const den = p * (p + 1) / 2;
+          for (let i = p - 1; i < a.length; i++) {
+            let w = 0;
+            for (let j = 0; j < p; j++) w += (j + 1) * a[i - p + 1 + j];
+            out[i] = w / den;
+          }
+          return out;
+        };
+        const w1 = wma(src, half);
+        const w2 = wma(src, n);
+        const s0 = Math.max(half - 1, n - 1);
+        const out = new Array(c.length).fill(null);
+        if (s0 < c.length && c.length - s0 >= sq) {
+          const df = new Array(c.length - s0);
+          for (let i = s0; i < c.length; i++) df[i - s0] = 2 * w1[i] - w2[i];
+          const hh = wma(df, sq);
+          for (let i = 0; i < hh.length; i++) if (hh[i] != null) out[s0 + i] = hh[i];
+        }
+        return [buildSeries(c, out, o.color, 'line', o.lineWidth)];
+      }
+    },
+
+    ichimoku: {
+      id: 'ichimoku', name: 'Ichimoku', fullName: 'Ichimoku Cloud', cat: 'Trend', type: 'overlay',
+      inputs: [
+        { key: 'tenkan', label: 'Tenkan (conversion)', def: 9, min: 1, max: 120, step: 1 },
+        { key: 'kijun', label: 'Kijun (base)', def: 26, min: 1, max: 200, step: 1 },
+        { key: 'senkou', label: 'Senkou (span B)', def: 52, min: 1, max: 300, step: 1 }
+      ],
+      style: [
+        { key: 'tenkanColor', label: 'Tenkan color', def: '#26a69a' },
+        { key: 'kijunColor', label: 'Kijun color', def: '#ef5350' },
+        { key: 'cloudUpColor', label: 'Senkou A color', def: '#4fc3f7' },
+        { key: 'cloudDownColor', label: 'Senkou B color', def: '#ffca28' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const hi = srcArr(c, 'high'), lo = srcArr(c, 'low');
+        const T = Math.max(1, Math.round(o.tenkan)), K = Math.max(1, Math.round(o.kijun)), S = Math.max(1, Math.round(o.senkou));
+        const hT = highestArr(hi, T), lT = lowestArr(lo, T);
+        const hK = highestArr(hi, K), lK = lowestArr(lo, K);
+        const hS = highestArr(hi, S), lS = lowestArr(lo, S);
+        const tenkan = new Array(c.length).fill(null), kijun = new Array(c.length).fill(null);
+        const sA = new Array(c.length).fill(null), sB = new Array(c.length).fill(null);
+        for (let i = 0; i < c.length; i++) {
+          if (hT[i] != null && lT[i] != null) tenkan[i] = (hT[i] + lT[i]) / 2;
+          if (hK[i] != null && lK[i] != null) kijun[i] = (hK[i] + lK[i]) / 2;
+          if (tenkan[i] != null && kijun[i] != null) sA[i] = (tenkan[i] + kijun[i]) / 2;
+          if (hS[i] != null && lS[i] != null) sB[i] = (hS[i] + lS[i]) / 2;
+        }
+        const lw = o.lineWidth || 1;
+        return [
+          buildSeries(c, tenkan, o.tenkanColor, 'line', lw),
+          buildSeries(c, kijun, o.kijunColor, 'line', lw),
+          buildSeries(c, sA, o.cloudUpColor, 'line', lw),
+          buildSeries(c, sB, o.cloudDownColor, 'line', lw)
+        ];
+      }
+    },
+
+    cmf: {
+      id: 'cmf', name: 'CMF', fullName: 'Chaikin Money Flow', cat: 'Volume', type: 'pane',
+      inputs: [{ key: 'length', label: 'Length', def: 20, min: 1, max: 200, step: 1 }],
+      style: [
+        { key: 'color', label: 'Color', def: '#00bcd4' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const n = c.length, L = Math.max(1, Math.round(o.length));
+        const pm = new Array(n + 1).fill(0), pv = new Array(n + 1).fill(0);
+        for (let i = 0; i < n; i++) {
+          const bar = c[i], vol = Number(bar.volume) || 0;
+          const hl = bar.high - bar.low;
+          const mf = hl > 0 ? ((bar.close - bar.low) - (bar.high - bar.close)) / hl * vol : 0;
+          pm[i + 1] = pm[i] + mf;
+          pv[i + 1] = pv[i] + vol;
+        }
+        const out = new Array(n).fill(null);
+        for (let i = L - 1; i < n; i++) {
+          const dv = pv[i + 1] - pv[i + 1 - L];
+          out[i] = dv ? (pm[i + 1] - pm[i + 1 - L]) / dv : 0;
+        }
+        return [buildSeries(c, out, o.color, 'line', o.lineWidth)];
+      }
+    },
+
+    sqzmom: {
+      id: 'sqzmom', name: 'Squeeze Momentum', fullName: 'TTM Squeeze Momentum', cat: 'Volatility', type: 'pane',
+      inputs: [
+        { key: 'bbLen', label: 'Bollinger length', def: 20, min: 2, max: 200, step: 1 },
+        { key: 'bbMult', label: 'Bollinger mult', def: 2, min: 0.1, max: 10, step: 0.1 },
+        { key: 'kcLen', label: 'Keltner length', def: 20, min: 2, max: 200, step: 1 },
+        { key: 'kcMult', label: 'Keltner mult', def: 1.5, min: 0.1, max: 10, step: 0.1 }
+      ],
+      style: [
+        { key: 'upColor', label: 'Up color', def: '#26a69a' },
+        { key: 'downColor', label: 'Down color', def: '#ef5350' }
+      ],
+      compute(c, o) {
+        const close = srcArr(c, 'close');
+        const bl = Math.max(2, Math.round(o.bbLen)), kl = Math.max(2, Math.round(o.kcLen));
+        const bm = Number(o.bbMult) > 0 ? Number(o.bbMult) : 2, km = Number(o.kcMult) > 0 ? Number(o.kcMult) : 1.5;
+        const basis = smaArr(close, bl), sd = stdevArr(close, bl);
+        const ma = smaArr(close, kl), atr = wilderArr(trArr(c), kl);
+        const start = Math.max(bl - 1, kl - 1);
+        const rocStart = 2 * bl - 1;
+        const data = [];
+        for (let i = start; i < c.length; i++) {
+          if (basis[i] == null || sd[i] == null || ma[i] == null || atr[i] == null) continue;
+          const bbTop = basis[i] + bm * sd[i], bbBot = basis[i] - bm * sd[i];
+          const kcTop = ma[i] + km * atr[i], kcBot = ma[i] - km * atr[i];
+          const squeeze = bbBot > kcBot && bbTop < kcTop;
+          let val = 0;
+          if (!squeeze && i >= rocStart && basis[i - bl] != null) val = basis[i] - basis[i - bl];
+          data.push({ time: c[i].time, value: val, color: val >= 0 ? o.upColor : o.downColor });
+        }
+        return [{ type: 'histogram', color: o.upColor, data }];
+      }
+    },
+
+    fisher: {
+      id: 'fisher', name: 'Fisher Transform', fullName: 'Fisher Transform (MESA)', cat: 'Momentum', type: 'pane',
+      inputs: [{ key: 'length', label: 'Length', def: 9, min: 1, max: 100, step: 1 }],
+      style: [
+        { key: 'fisherColor', label: 'Fisher color', def: '#ab47bc' },
+        { key: 'signalColor', label: 'Signal color', def: '#26a69a' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const n = Math.max(1, Math.round(o.length));
+        const src = srcArr(c, 'hl2');
+        const hi = highestArr(src, n), lo = lowestArr(src, n);
+        const fish = new Array(c.length).fill(null);
+        let pv = 0, pf = 0;
+        for (let i = n - 1; i < c.length; i++) {
+          const rng = hi[i] - lo[i];
+          if (!(rng > 0)) { fish[i] = pf; continue; }
+          let v = 0.33 * 2 * ((src[i] - lo[i]) / rng - 0.5) + 0.67 * pv;
+          v = Math.max(-0.999, Math.min(0.999, v));
+          pv = v;
+          pf = 0.5 * Math.log((1 + v) / (1 - v)) + 0.5 * pf;
+          fish[i] = pf;
+        }
+        const sig = emaSkip(fish, 3);
+        return [
+          buildSeries(c, fish, o.fisherColor, 'line', o.lineWidth),
+          buildSeries(c, sig, o.signalColor, 'line', o.lineWidth)
+        ];
+      }
+    },
+
+    keltner: {
+      id: 'keltner', name: 'Keltner Channels', fullName: 'Keltner Channels (EMA + ATR)', cat: 'Volatility', type: 'overlay',
+      inputs: [
+        { key: 'length', label: 'Length', def: 20, min: 1, max: 200, step: 1 },
+        { key: 'mult', label: 'Mult', def: 2.0, min: 0.1, max: 10, step: 0.1 }
+      ],
+      style: [
+        { key: 'upperColor', label: 'Upper color', def: '#ffa726' },
+        { key: 'midColor', label: 'Middle color', def: '#b0bec5' },
+        { key: 'lowerColor', label: 'Lower color', def: '#ffa726' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const n = Math.max(1, Math.round(o.length));
+        const mult = Number(o.mult) > 0 ? Number(o.mult) : 2;
+        const tp = c.map(x => (x.high + x.low + x.close) / 3);
+        const mid = emaArr(tp, n), atr = wilderArr(trArr(c), n);
+        const up = new Array(c.length).fill(null), dn = new Array(c.length).fill(null);
+        const lw = o.lineWidth || 1;
+        for (let i = n - 1; i < c.length; i++) {
+          if (mid[i] == null || atr[i] == null) continue;
+          up[i] = mid[i] + mult * atr[i];
+          dn[i] = mid[i] - mult * atr[i];
+        }
+        return [
+          buildSeries(c, up, o.upperColor, 'line', lw),
+          buildSeries(c, mid, o.midColor, 'line', lw),
+          buildSeries(c, dn, o.lowerColor, 'line', lw)
+        ];
+      }
+    },
+
+    cci: {
+      id: 'cci', name: 'CCI', fullName: 'Commodity Channel Index', cat: 'Momentum', type: 'pane',
+      inputs: [{ key: 'length', label: 'Length', def: 20, min: 2, max: 200, step: 1 }],
+      style: [
+        { key: 'color', label: 'Color', def: '#ffd740' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const n = Math.max(2, Math.round(o.length));
+        const tp = c.map(x => (x.high + x.low + x.close) / 3);
+        const sma = smaArr(tp, n);
+        const out = new Array(c.length).fill(null);
+        for (let i = n - 1; i < c.length; i++) {
+          let md = 0;
+          for (let j = i - n + 1; j <= i; j++) md += Math.abs(tp[j] - sma[i]);
+          md /= n;
+          out[i] = md > 0 ? (tp[i] - sma[i]) / (0.015 * md) : 0;
+        }
+        return [buildSeries(c, out, o.color, 'line', o.lineWidth)];
+      }
+    },
+
+    chandelier: {
+      id: 'chandelier', name: 'Chandelier Exit', fullName: 'Chandelier Exit (ATR trailing)', cat: 'Volatility', type: 'overlay',
+      inputs: [
+        { key: 'length', label: 'Length', def: 22, min: 1, max: 200, step: 1 },
+        { key: 'mult', label: 'Mult', def: 3.0, min: 0.1, max: 10, step: 0.1 }
+      ],
+      style: [
+        { key: 'longColor', label: 'Long exit color', def: '#26a69a' },
+        { key: 'shortColor', label: 'Short exit color', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const n = Math.max(1, Math.round(o.length));
+        const mult = Number(o.mult) > 0 ? Number(o.mult) : 3;
+        const hi = srcArr(c, 'high'), lo = srcArr(c, 'low');
+        const hh = highestArr(hi, n), ll = lowestArr(lo, n);
+        const atr = wilderArr(trArr(c), n);
+        const lg = new Array(c.length).fill(null), sh = new Array(c.length).fill(null);
+        const lw = o.lineWidth || 1;
+        for (let i = n - 1; i < c.length; i++) {
+          if (hh[i] == null || ll[i] == null || atr[i] == null) continue;
+          lg[i] = hh[i] - mult * atr[i];
+          sh[i] = ll[i] + mult * atr[i];
+        }
+        return [
+          buildSeries(c, lg, o.longColor, 'line', lw),
+          buildSeries(c, sh, o.shortColor, 'line', lw)
+        ];
+      }
+    },
+
+    aroon: {
+      id: 'aroon', name: 'Aroon', fullName: 'Aroon Up/Down', cat: 'Trend', type: 'pane', format: 'percent',
+      inputs: [{ key: 'length', label: 'Length', def: 25, min: 1, max: 200, step: 1 }],
+      style: [
+        { key: 'upColor', label: 'Aroon Up color', def: '#26a69a' },
+        { key: 'downColor', label: 'Aroon Down color', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const n = Math.max(1, Math.round(o.length));
+        const hi = srcArr(c, 'high'), lo = srcArr(c, 'low');
+        const up = new Array(c.length).fill(null), dn = new Array(c.length).fill(null);
+        for (let i = n - 1; i < c.length; i++) {
+          let ih = i, il = i;
+          for (let j = i - n + 1; j <= i; j++) {
+            if (hi[j] > hi[ih]) ih = j;
+            if (lo[j] < lo[il]) il = j;
+          }
+          up[i] = 100 * (n - (i - ih)) / n;
+          dn[i] = 100 * (n - (i - il)) / n;
+        }
+        const lw = o.lineWidth || 1;
+        return [
+          buildSeries(c, up, o.upColor, 'line', lw),
+          buildSeries(c, dn, o.downColor, 'line', lw)
+        ];
+      }
+    },
+
+    vortex: {
+      id: 'vortex', name: 'Vortex', fullName: 'Vortex Indicator (VI+ / VI-)', cat: 'Trend', type: 'pane',
+      inputs: [{ key: 'length', label: 'Length', def: 14, min: 2, max: 200, step: 1 }],
+      style: [
+        { key: 'viPlusColor', label: 'VI+ color', def: '#26a69a' },
+        { key: 'viMinusColor', label: 'VI- color', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const n = Math.max(2, Math.round(o.length));
+        const len = c.length;
+        const tr = trArr(c);
+        const vp = new Array(len).fill(0), vm = new Array(len).fill(0);
+        for (let i = 1; i < len; i++) {
+          vp[i] = Math.abs(c[i].high - c[i - 1].low);
+          vm[i] = Math.abs(c[i].low - c[i - 1].high);
+        }
+        const pTr = new Array(len + 1).fill(0), pVp = new Array(len + 1).fill(0), pVm = new Array(len + 1).fill(0);
+        for (let i = 0; i < len; i++) {
+          pTr[i + 1] = pTr[i] + tr[i];
+          pVp[i + 1] = pVp[i] + vp[i];
+          pVm[i + 1] = pVm[i] + vm[i];
+        }
+        const vip = new Array(len).fill(null), vim = new Array(len).fill(null);
+        const lw = o.lineWidth || 1;
+        for (let i = n - 1; i < len; i++) {
+          const sTr = pTr[i + 1] - pTr[i + 1 - n];
+          if (!sTr) continue;
+          vip[i] = (pVp[i + 1] - pVp[i + 1 - n]) / sTr;
+          vim[i] = (pVm[i + 1] - pVm[i + 1 - n]) / sTr;
+        }
+        return [
+          buildSeries(c, vip, o.viPlusColor, 'line', lw),
+          buildSeries(c, vim, o.viMinusColor, 'line', lw)
+        ];
+      }
+    },
+
+    tsi: {
+      id: 'tsi', name: 'TSI', fullName: 'True Strength Index', cat: 'Momentum', type: 'pane', format: 'percent',
+      inputs: [
+        { key: 'long', label: 'Long length', def: 25, min: 2, max: 300, step: 1 },
+        { key: 'short', label: 'Short length', def: 13, min: 1, max: 100, step: 1 },
+        { key: 'signal', label: 'Signal length', def: 13, min: 1, max: 100, step: 1 }
+      ],
+      style: [
+        { key: 'tsiColor', label: 'TSI color', def: '#42a5f5' },
+        { key: 'signalColor', label: 'Signal color', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const len = c.length, L = Math.max(2, Math.round(o.long)), S = Math.max(1, Math.round(o.short)), Sig = Math.max(1, Math.round(o.signal));
+        const close = srcArr(c, 'close');
+        const chg = new Array(len).fill(null), ab = new Array(len).fill(null);
+        for (let i = 1; i < len; i++) { chg[i] = close[i] - close[i - 1]; ab[i] = Math.abs(chg[i]); }
+        const e1 = emaSkip(chg, L), a1 = emaSkip(ab, L);
+        const e2 = emaSkip(e1, S), a2 = emaSkip(a1, S);
+        const t = new Array(len).fill(null);
+        for (let i = 0; i < len; i++) {
+          if (e2[i] == null || a2[i] == null || a2[i] === 0) continue;
+          t[i] = 100 * e2[i] / a2[i];
+        }
+        const sig = emaSkip(t, Sig);
+        const lw = o.lineWidth || 1;
+        return [
+          buildSeries(c, t, o.tsiColor, 'line', lw),
+          buildSeries(c, sig, o.signalColor, 'line', lw)
+        ];
+      }
+    },
+
+    donchian: {
+      id: 'donchian', name: 'Donchian Channel', fullName: 'Donchian Channel', cat: 'Trend', type: 'overlay',
+      inputs: [{ key: 'length', label: 'Length', def: 20, min: 2, max: 300, step: 1 }],
+      style: [
+        { key: 'upperColor', label: 'Upper color', def: '#26a69a' },
+        { key: 'midColor', label: 'Middle color', def: '#78909c' },
+        { key: 'lowerColor', label: 'Lower color', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const n = Math.max(2, Math.round(o.length));
+        const hi = srcArr(c, 'high'), lo = srcArr(c, 'low');
+        const hh = highestArr(hi, n), ll = lowestArr(lo, n);
+        const up = new Array(c.length).fill(null), dn = new Array(c.length).fill(null), md = new Array(c.length).fill(null);
+        const lw = o.lineWidth || 1;
+        for (let i = n - 1; i < c.length; i++) {
+          if (hh[i] == null || ll[i] == null) continue;
+          up[i] = hh[i]; dn[i] = ll[i]; md[i] = (hh[i] + ll[i]) / 2;
+        }
+        return [
+          buildSeries(c, up, o.upperColor, 'line', lw),
+          buildSeries(c, md, o.midColor, 'line', lw),
+          buildSeries(c, dn, o.lowerColor, 'line', lw)
+        ];
+      }
+    },
+
+    stochrsi: {
+      id: 'stochrsi', name: 'Stoch RSI', fullName: 'Stochastic RSI (K/D)', cat: 'Momentum', type: 'pane', format: 'percent',
+      inputs: [
+        { key: 'rsiLen', label: 'RSI length', def: 14, min: 1, max: 100, step: 1 },
+        { key: 'stochLen', label: 'Stoch length', def: 14, min: 1, max: 100, step: 1 },
+        { key: 'k', label: '%K smooth', def: 3, min: 1, max: 20, step: 1 },
+        { key: 'd', label: '%D smooth', def: 3, min: 1, max: 20, step: 1 }
+      ],
+      style: [
+        { key: 'kColor', label: '%K color', def: '#26a69a' },
+        { key: 'dColor', label: '%D color', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const len = c.length, RL = Math.max(1, Math.round(o.rsiLen));
+        const SL = Math.max(1, Math.round(o.stochLen));
+        const K = Math.max(1, Math.round(o.k)), D = Math.max(1, Math.round(o.d));
+        const close = srcArr(c, 'close');
+        const g = new Array(len).fill(0), l = new Array(len).fill(0);
+        for (let i = 1; i < len; i++) {
+          const d = close[i] - close[i - 1];
+          if (d > 0) g[i] = d; else if (d < 0) l[i] = -d;
+        }
+        const ag = wilderArr(g, RL), al = wilderArr(l, RL);
+        const rsi = new Array(len).fill(null);
+        for (let i = RL - 1; i < len; i++) {
+          const s = ag[i] + al[i];
+          rsi[i] = s > 0 ? 100 * ag[i] / s : 50;
+        }
+        const start = RL + SL - 2;
+        const raw = new Array(len).fill(null), kS = new Array(len).fill(null), dS = new Array(len).fill(null);
+        for (let i = start; i < len; i++) {
+          let hi = -Infinity, lo = Infinity;
+          for (let j = i - SL + 1; j <= i; j++) {
+            if (rsi[j] == null) continue;
+            if (rsi[j] > hi) hi = rsi[j];
+            if (rsi[j] < lo) lo = rsi[j];
+          }
+          const rng = hi - lo;
+          if (!(rng > 0)) continue;
+          raw[i] = (rsi[i] - lo) / rng * 100;
+        }
+        for (let i = start; i < len; i++) {
+          if (raw[i] == null) continue;
+          let s = 0, cnt = 0;
+          for (let j = Math.max(start, i - K + 1); j <= i; j++) {
+            if (raw[j] == null) { s = 0; cnt = 0; break; }
+            s += raw[j]; cnt++;
+          }
+          if (cnt === K) kS[i] = s / K;
+        }
+        for (let i = start; i < len; i++) {
+          if (kS[i] == null) continue;
+          let s = 0, cnt = 0;
+          for (let j = Math.max(start, i - D + 1); j <= i; j++) {
+            if (kS[j] == null) { s = 0; cnt = 0; break; }
+            s += kS[j]; cnt++;
+          }
+          if (cnt === D) dS[i] = s / D;
+        }
+        const lw = o.lineWidth || 1;
+        return [
+          buildSeries(c, kS, o.kColor, 'line', lw),
+          buildSeries(c, dS, o.dColor, 'line', lw)
+        ];
+      }
+    },
+
+    elderforce: {
+      id: 'elderforce', name: 'Force Index', fullName: 'Elder Force Index', cat: 'Momentum', type: 'pane',
+      inputs: [{ key: 'smooth', label: 'Smooth (EMA)', def: 13, min: 1, max: 200, step: 1 }],
+      style: [
+        { key: 'upColor', label: 'Up color', def: '#26a69a' },
+        { key: 'downColor', label: 'Down color', def: '#ef5350' },
+        { key: 'lineColor', label: 'Smooth line color', def: '#42a5f5' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const len = c.length, S = Math.max(1, Math.round(o.smooth));
+        const raw = new Array(len).fill(null);
+        for (let i = 1; i < len; i++) raw[i] = (Number(c[i].volume) || 0) * (c[i].close - c[i - 1].close);
+        raw[0] = null;
+        const hist = [];
+        for (let i = 1; i < len; i++) {
+          if (raw[i] == null) continue;
+          hist.push({ time: c[i].time, value: raw[i], color: raw[i] >= 0 ? o.upColor : o.downColor });
+        }
+        const sm = emaArr(raw.map(v => (v == null ? 0 : v)), S);
+        const line = new Array(len).fill(null);
+        for (let i = Math.max(1, S - 1); i < len; i++) if (raw[i] != null) line[i] = sm[i];
+        return [
+          { type: 'histogram', color: o.upColor, data: hist },
+          buildSeries(c, line, o.lineColor, 'line', o.lineWidth)
         ];
       }
     }

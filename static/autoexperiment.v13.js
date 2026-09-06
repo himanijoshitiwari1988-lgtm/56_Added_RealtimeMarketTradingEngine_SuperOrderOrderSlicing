@@ -503,7 +503,108 @@ window.createAutoExperiment = function (suffix) {
      volume trend, fake breakout / fake breakdown, reversal bars, and the
      pane-indicator gates (main line vs signal line crossover, and every line
      of every pane indicator trending the same way). */
-  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'];
+  /* Pane Indicator Behaviour filter section. Every gate evaluates the pane
+     indicator's MAIN line (v0) on the strategy's candle chart with the
+     indicator's DEFAULT settings (the same cached alignedSeries path as the
+     OI Trend / BBW gates - O(n), no per-bar scan) and only asks how the line
+     BEHAVES: increasing upward or increasing downward. No fixed thresholds.
+       Group 1 (direction mirror): MACD, PPO, AO, SMI, DPO, RSI, MFI, UO,
+         Williams %R, BB%b, OBV, PVT, A/D, SMF. Bullish list = main line
+         increasing upward; Bearish list = main line increasing downward.
+         Flag key = bullPbr<Ind> / bearPbr<Ind>.
+        Group 2 (trend strength): ADX, BBW, ATR. The line answers STRENGTH, not
+          direction (rising = strong trend / expanding bands / wide candles), so
+          BOTH the Bullish and Bearish list carry the SAME single toggle
+          (<side>Pbr<Ind>Up = line increasing). No decreasing variant.
+        Group 3 (participation): VolOsc. Volume participation only (rising =
+          volume picking up). Same single rising toggle in both lists like
+          Group 2. */
+  const PB_G1 = ['macd', 'ppo', 'ao', 'smiio', 'dpo', 'rsi', 'mfi', 'uo', 'williamsR', 'bbpct', 'obv', 'pvt', 'ad', 'smf', 'cmf', 'tsi', 'cci', 'fisher', 'stochrsi', 'sqzmom', 'aroon', 'vortex', 'elderforce'];
+  const PB_G2 = ['adx', 'bbw', 'atr', 'volosc'];
+  const PB_LABEL = {
+    macd: 'MACD', ppo: 'PPO', ao: 'AO', smiio: 'SMI', dpo: 'DPO', rsi: 'RSI', mfi: 'MFI', uo: 'UO',
+    williamsR: 'Williams %R', bbpct: 'BB%b', obv: 'OBV', pvt: 'PVT', ad: 'A/D', smf: 'SMF',
+    adx: 'ADX', bbw: 'BBW', atr: 'ATR', volosc: 'VolOsc',
+    cmf: 'CMF', tsi: 'TSI', cci: 'CCI', fisher: 'Fisher', stochrsi: 'Stoch RSI',
+    sqzmom: 'Squeeze Mom.', aroon: 'Aroon', vortex: 'Vortex', elderforce: 'Force Index'
+  };
+  const PB_DEF_SETTINGS = {
+    macd: { fast: 12, slow: 26, signal: 9 }, ppo: { fast: 12, slow: 26, signal: 9 },
+    ao: { fast: 5, slow: 34 }, smiio: { shortlen: 13, longlen: 25, siglen: 9 }, dpo: { length: 20 },
+    rsi: { length: 14, smoothLength: 0 }, mfi: { length: 14 }, uo: { fast: 7, medium: 14, slow: 28 },
+    williamsR: { length: 14 }, bbpct: { length: 20, mult: 2 }, obv: { maLength: 30 }, pvt: {}, ad: {},
+    smf: { length: 14, signalLen: 9, volLen: 20, pulseCap: 3 },
+    adx: { length: 14 }, bbw: { length: 20, mult: 2, source: 'close' }, atr: { length: 14 },
+    volosc: { fast: 5, slow: 14, center: 0 },
+    cmf: { length: 20 }, tsi: { long: 25, short: 13, signal: 13 }, cci: { length: 20 },
+    fisher: { length: 9 }, stochrsi: { rsiLen: 14, stochLen: 14, k: 3, d: 3 },
+    sqzmom: { bbLen: 20, bbMult: 2, kcLen: 20, kcMult: 1.5 }, aroon: { length: 25 },
+    vortex: { length: 14 }, elderforce: { smooth: 13 }
+  };
+  function pbCap(id) { return id.charAt(0).toUpperCase() + id.slice(1); }
+  const PB_BULL_KEYS = PB_G1.map(id => 'bullPbr' + pbCap(id)).concat(PB_G2.map(id => 'bullPbr' + pbCap(id) + 'Up'));
+  const PB_BEAR_KEYS = PB_G1.map(id => 'bearPbr' + pbCap(id)).concat(PB_G2.map(id => 'bearPbr' + pbCap(id) + 'Up'));
+  /* Overlay Indicator Behaviour (OBR). These are OVERLAY lines - indicator
+     series drawn on the candle pane, so unlike the pane PB_* values they sit at
+     real price levels. Each row is a direction-mirror toggle just like PB
+     Group-1: Bullish list = the overlay line must be increasing upward,
+     Bearish list = the overlay line must be increasing downward. */
+  const OBR_LIST = [
+    { tok: 'Hma', id: 'hma', valueKey: 'v0', settings: { length: 9, source: 'close' }, name: 'HMA' },
+    { tok: 'Tenkan', id: 'ichimoku', valueKey: 'v0', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Tenkan-sen' },
+    { tok: 'Kijun', id: 'ichimoku', valueKey: 'v1', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Kijun-sen' },
+    { tok: 'SenkouA', id: 'ichimoku', valueKey: 'v2', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Senkou A' },
+    { tok: 'Keltner', id: 'keltner', valueKey: 'v1', settings: { length: 20, mult: 2 }, name: 'Keltner middle' },
+    { tok: 'Donchian', id: 'donchian', valueKey: 'v1', settings: { length: 20 }, name: 'Donchian middle' },
+    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' }
+  ];
+  const OB_BULL_KEYS = OBR_LIST.map(d => 'bullObr' + d.tok);
+  const OB_BEAR_KEYS = OBR_LIST.map(d => 'bearObr' + d.tok);
+  /* Overlay Meet Condition (level) rows: the candle close must be above the
+     overlay line (Bullish list) / below it (Bearish list). Unlike the OBR
+     direction toggles these are level-holds - active while the relationship
+     holds, a cross is not required. */
+  const MEET_OVL_LIST = [
+    { tok: 'Hma', id: 'hma', valueKey: 'v0', settings: { length: 9, source: 'close' }, name: 'HMA' },
+    { tok: 'Tenkan', id: 'ichimoku', valueKey: 'v0', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Tenkan-sen' },
+    { tok: 'Kijun', id: 'ichimoku', valueKey: 'v1', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Kijun-sen' },
+    { tok: 'Keltner', id: 'keltner', valueKey: 'v1', settings: { length: 20, mult: 2 }, name: 'Keltner middle' },
+    { tok: 'Donchian', id: 'donchian', valueKey: 'v1', settings: { length: 20 }, name: 'Donchian middle' },
+    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' }
+  ];
+  const MEET_BULL_KEYS = MEET_OVL_LIST.map(d => 'bullMeetOvl' + d.tok);
+  const MEET_BEAR_KEYS = MEET_OVL_LIST.map(d => 'bearMeetOvl' + d.tok);
+  /* Is any Pane Indicator Behaviour sub-filter of one section ticked? */
+  function pbrOn(f, side) {
+    const pb = side === 'bull' ? PB_BULL_KEYS : PB_BEAR_KEYS;
+    const ob = side === 'bull' ? OB_BULL_KEYS : OB_BEAR_KEYS;
+    const mt = side === 'bull' ? MEET_BULL_KEYS : MEET_BEAR_KEYS;
+    return !!f && (pb.concat(ob, mt)).some(k => !!f[k]);
+  }
+  /* Readable name of an Overlay Indicator Behaviour flag for filter logs. */
+  function obrName(k) {
+    const tok = k.replace(/^(bull|bear)Obr/, '');
+    const d = OBR_LIST.filter(x => x.tok === tok)[0];
+    const nm = d ? d.name : tok;
+    return nm + ' line ' + (/^bull/.test(k) ? 'increasing upward' : 'increasing downward');
+  }
+  /* Readable name of an Overlay Meet Condition (level) flag for filter logs. */
+  function ovlMeetName(k) {
+    const tok = k.replace(/^(bull|bear)MeetOvl/, '');
+    const d = MEET_OVL_LIST.filter(x => x.tok === tok)[0];
+    const nm = d ? d.name : tok;
+    return 'Close ' + (/^bull/.test(k) ? 'above' : 'below') + ' ' + nm + ' (level)';
+  }
+  /* Readable name of a Pane Indicator Behaviour flag for filter logs. */
+  function pbrName(k) {
+    const raw = k.replace(/^(bull|bear)Pbr/, '');
+    const lc = raw.charAt(0).toLowerCase() + raw.slice(1);
+    const g2 = /^(adx|bbw|atr|volosc)Up$/.exec(lc);
+    const nm = PB_LABEL[g2 ? g2[1] : lc] || raw;
+    const rising = g2 ? true : /^bull/.test(k);
+    return nm + ' line ' + (rising ? 'increasing upward' : 'increasing downward');
+  }
+  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'].concat(PB_BULL_KEYS, PB_BEAR_KEYS, OB_BULL_KEYS, OB_BEAR_KEYS, MEET_BULL_KEYS, MEET_BEAR_KEYS);
 
   /* HTML element ids for the filter checkboxes are PascalCase
      ('aeFilterPaneCrossUp'), while the state keys are camelCase
@@ -1208,7 +1309,7 @@ window.createAutoExperiment = function (suffix) {
        - crossed above / crossed below the same indicator with different values */
   function buildFilterConditions(tpl, fOverride) {
     const f = fOverride || state.filters || {};
-    const enabled = (f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle)) || (f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle));
+    const enabled = (f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || pbrOn(f, 'bull'))) || (f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || pbrOn(f, 'bear')));
     if (!enabled) return [];
     const out = [];
     /* Candle-level gates (volume trend, fake breakout, reversal) apply to the
@@ -1360,6 +1461,35 @@ window.createAutoExperiment = function (suffix) {
     if (f.bearMeetCloseSt) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'gt', cmpType: 'candle', candleKey: 'close' }));
     if (f.bullMeetCloseVwap) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'lt', cmpType: 'candle', candleKey: 'close' }));
     if (f.bearMeetCloseVwap) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'gt', cmpType: 'candle', candleKey: 'close' }));
+    /* Pane Indicator Behaviour gates - see the PB_* tables at the top of the
+       engine. Each gate evaluates the pane indicator's MAIN line (v0) with the
+       indicator's DEFAULT settings on the strategy's candle chart and only asks
+       how the line is behaving right now (cached alignedSeries + trendAt, the
+       same cheap O(n) path as the OI Trend / BBW gates - no extra scans):
+         Group-1 mirror toggles (bullPbr<Ind> / bearPbr<Ind>): the main line
+           must be increasing upward (Bullish list) / downward (Bearish list).
+         Group-2 (strength) & Group-3 (participation) toggles (<side>Pbr<Ind>Up
+           only, identical set carried in BOTH sections): line rising = strong
+           trend / expanding bands / wide candles / volume picking up. The
+           decreasing (contracting / weak / narrow) variants are not offered;
+           when the same condition is requested from both sections it is simply
+           pushed once per side (identical boolean). */
+    if (f.bullish) {
+      PB_G1.forEach(id => { const k = 'bullPbr' + pbCap(id); if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incUp', cmpType: 'number' })); });
+      PB_G2.forEach(id => { const k = 'bullPbr' + pbCap(id) + 'Up'; if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incUp', cmpType: 'number' })); });
+    }
+    if (f.bearish) {
+      PB_G1.forEach(id => { const k = 'bearPbr' + pbCap(id); if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incDown', cmpType: 'number' })); });
+      PB_G2.forEach(id => { const k = 'bearPbr' + pbCap(id) + 'Up'; if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incUp', cmpType: 'number' })); });
+    }
+    OBR_LIST.forEach(d => {
+      if (f.bullish && f['bullObr' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incUp', cmpType: 'number' }));
+      if (f.bearish && f['bearObr' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incDown', cmpType: 'number' }));
+    });
+    MEET_OVL_LIST.forEach(d => {
+      if (f['bullMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'lt', cmpType: 'candle', candleKey: 'close' }));
+      if (f['bearMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'gt', cmpType: 'candle', candleKey: 'close' }));
+    });
     const entry = Array.isArray(tpl.entry) ? tpl.entry[0] : tpl.entry;
     if (!entry || !entry.indId) return out;
     const prim = { indId: entry.indId, indSettings: entry.indSettings || {}, valueKey: entry.valueKey || 'v0' };
@@ -1416,8 +1546,8 @@ window.createAutoExperiment = function (suffix) {
 
   function activeFilterDirection() {
     const f = state.filters || {};
-    const bull = f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || hasStreamFlags(f, 'bull'));
-    const bear = f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || hasStreamFlags(f, 'bear'));
+    const bull = f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || hasStreamFlags(f, 'bull') || pbrOn(f, 'bull'));
+    const bear = f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || hasStreamFlags(f, 'bear') || pbrOn(f, 'bear'));
     if (bull && !bear) return 'bullish';
     if (bear && !bull) return 'bearish';
     return null;
@@ -6439,8 +6569,8 @@ window.createAutoExperiment = function (suffix) {
     });
     syncFilterSections({ bullish: prevMaster.bullish && !state.filters.bullish, bearish: prevMaster.bearish && !state.filters.bearish });
     save();
-    const any = (state.filters.bullish && (state.filters.incUp || state.filters.crossUp || state.filters.gapUp || state.filters.incUpAll || state.filters.gtUp || state.filters.ltUp || state.filters.bullVolUp || state.filters.bullVolDown || state.filters.bullFakeBreakout || state.filters.bullReversal || state.filters.paneCrossUp || state.filters.paneIncUpAll || state.filters.bullBbwInc || state.filters.bullBbCrossBelow || state.filters.bullBbCrossAbove || state.filters.bullPcCrossBelow || state.filters.bullPcCrossAbove || state.filters.bullSmf || state.filters.bullVl || state.filters.bullAsr || state.filters.bullOit || state.filters.bullEma9_21 || state.filters.bullEma21_35 || state.filters.bullEma35_50 || state.filters.bullEma50_100 || state.filters.bullEma100_200 || state.filters.bullEma200_300 || state.filters.bullSt10_1_2 || state.filters.bullSt10_2_3 || state.filters.bullSt1CloseCrossAbove || state.filters.bullVwapCloseCrossAbove || state.filters.bullMeetEma9_21 || state.filters.bullMeetEma21_35 || state.filters.bullMeetEma35_50 || state.filters.bullMeetEma50_100 || state.filters.bullMeetEma100_200 || state.filters.bullMeetEma200_300 || state.filters.bullMeetSt10_1_2 || state.filters.bullMeetSt10_2_3 || state.filters.bullMeetCloseSt || state.filters.bullMeetCloseVwap || state.filters.bullMeetPaneCross || state.filters.bullMeetCross || state.filters.bullMeetCloseBb || state.filters.bullMeetClosePc || state.filters.bullMeetVl || state.filters.bullGreenCandle || hasStreamFlags(state.filters, 'bull'))) ||
-                (state.filters.bearish && (state.filters.incDown || state.filters.crossDown || state.filters.gapDown || state.filters.incDownAll || state.filters.gtDown || state.filters.ltDown || state.filters.bearVolUp || state.filters.bearVolDown || state.filters.bearFakeBreakout || state.filters.bearReversal || state.filters.paneCrossDown || state.filters.paneIncDownAll || state.filters.bearBbwInc || state.filters.bearBbCrossBelow || state.filters.bearBbCrossAbove || state.filters.bearPcCrossBelow || state.filters.bearPcCrossAbove || state.filters.bearSmf || state.filters.bearVl || state.filters.bearAsr || state.filters.bearOit || state.filters.bearEma9_21 || state.filters.bearEma21_35 || state.filters.bearEma35_50 || state.filters.bearEma50_100 || state.filters.bearEma100_200 || state.filters.bearEma200_300 || state.filters.bearSt10_1_2 || state.filters.bearSt10_2_3 || state.filters.bearSt1CloseCrossBelow || state.filters.bearVwapCloseCrossBelow || state.filters.bearMeetEma9_21 || state.filters.bearMeetEma21_35 || state.filters.bearMeetEma35_50 || state.filters.bearMeetEma50_100 || state.filters.bearMeetEma100_200 || state.filters.bearMeetEma200_300 || state.filters.bearMeetSt10_1_2 || state.filters.bearMeetSt10_2_3 || state.filters.bearMeetCloseSt || state.filters.bearMeetCloseVwap || state.filters.bearMeetPaneCross || state.filters.bearMeetCross || state.filters.bearMeetCloseBb || state.filters.bearMeetClosePc || state.filters.bearMeetVl || state.filters.bearRedCandle || hasStreamFlags(state.filters, 'bear')));
+    const any = (state.filters.bullish && (state.filters.incUp || state.filters.crossUp || state.filters.gapUp || state.filters.incUpAll || state.filters.gtUp || state.filters.ltUp || state.filters.bullVolUp || state.filters.bullVolDown || state.filters.bullFakeBreakout || state.filters.bullReversal || state.filters.paneCrossUp || state.filters.paneIncUpAll || state.filters.bullBbwInc || state.filters.bullBbCrossBelow || state.filters.bullBbCrossAbove || state.filters.bullPcCrossBelow || state.filters.bullPcCrossAbove || state.filters.bullSmf || state.filters.bullVl || state.filters.bullAsr || state.filters.bullOit || state.filters.bullEma9_21 || state.filters.bullEma21_35 || state.filters.bullEma35_50 || state.filters.bullEma50_100 || state.filters.bullEma100_200 || state.filters.bullEma200_300 || state.filters.bullSt10_1_2 || state.filters.bullSt10_2_3 || state.filters.bullSt1CloseCrossAbove || state.filters.bullVwapCloseCrossAbove || state.filters.bullMeetEma9_21 || state.filters.bullMeetEma21_35 || state.filters.bullMeetEma35_50 || state.filters.bullMeetEma50_100 || state.filters.bullMeetEma100_200 || state.filters.bullMeetEma200_300 || state.filters.bullMeetSt10_1_2 || state.filters.bullMeetSt10_2_3 || state.filters.bullMeetCloseSt || state.filters.bullMeetCloseVwap || state.filters.bullMeetPaneCross || state.filters.bullMeetCross || state.filters.bullMeetCloseBb || state.filters.bullMeetClosePc || state.filters.bullMeetVl || state.filters.bullGreenCandle || hasStreamFlags(state.filters, 'bull') || pbrOn(state.filters, 'bull'))) ||
+                (state.filters.bearish && (state.filters.incDown || state.filters.crossDown || state.filters.gapDown || state.filters.incDownAll || state.filters.gtDown || state.filters.ltDown || state.filters.bearVolUp || state.filters.bearVolDown || state.filters.bearFakeBreakout || state.filters.bearReversal || state.filters.paneCrossDown || state.filters.paneIncDownAll || state.filters.bearBbwInc || state.filters.bearBbCrossBelow || state.filters.bearBbCrossAbove || state.filters.bearPcCrossBelow || state.filters.bearPcCrossAbove || state.filters.bearSmf || state.filters.bearVl || state.filters.bearAsr || state.filters.bearOit || state.filters.bearEma9_21 || state.filters.bearEma21_35 || state.filters.bearEma35_50 || state.filters.bearEma50_100 || state.filters.bearEma100_200 || state.filters.bearEma200_300 || state.filters.bearSt10_1_2 || state.filters.bearSt10_2_3 || state.filters.bearSt1CloseCrossBelow || state.filters.bearVwapCloseCrossBelow || state.filters.bearMeetEma9_21 || state.filters.bearMeetEma21_35 || state.filters.bearMeetEma35_50 || state.filters.bearMeetEma50_100 || state.filters.bearMeetEma100_200 || state.filters.bearMeetEma200_300 || state.filters.bearMeetSt10_1_2 || state.filters.bearMeetSt10_2_3 || state.filters.bearMeetCloseSt || state.filters.bearMeetCloseVwap || state.filters.bearMeetPaneCross || state.filters.bearMeetCross || state.filters.bearMeetCloseBb || state.filters.bearMeetClosePc || state.filters.bearMeetVl || state.filters.bearRedCandle || hasStreamFlags(state.filters, 'bear') || pbrOn(state.filters, 'bear')));
     log('Entry filters ' + (any ? 'enabled: ' + filterSummary() : 'disabled'), any ? 'ok' : 'warn');
   }
 
@@ -6473,6 +6603,13 @@ window.createAutoExperiment = function (suffix) {
     const parts = [];
     const add = (sec, items) => {
       if (!f[sec]) return;
+      const sideKeys = sec === 'bullish'
+        ? { pb: PB_BULL_KEYS, ob: OB_BULL_KEYS, mt: MEET_BULL_KEYS }
+        : { pb: PB_BEAR_KEYS, ob: OB_BEAR_KEYS, mt: MEET_BEAR_KEYS };
+      let pbs = sideKeys.pb.filter(k => f[k]).map(k => pbrName(k));
+      pbs = pbs.concat(sideKeys.ob.filter(k => f[k]).map(k => obrName(k)));
+      pbs = pbs.concat(sideKeys.mt.filter(k => f[k]).map(k => ovlMeetName(k)));
+      if (pbs.length) items = items.concat(pbs);
       if (items.length) parts.push((sec === 'bullish' ? 'Bullish' : 'Bearish') + ': ' + items.join(', '));
     };
     add('bullish', [f.incUp ? 'Increasing upward' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Increasing upward (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Pane all lines increasing upward' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close crossed above BB middle band (upper+lower expanding)' : null, f.bullPcCrossAbove ? 'Close crossed above price channel middle line' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising + volume increasing' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullOit ? 'OI Trend increasing upward' : null, f.bullEma9_21 ? 'EMA 9 crossed above EMA 21' : null, f.bullEma21_35 ? 'EMA 21 crossed above EMA 35' : null, f.bullEma35_50 ? 'EMA 35 crossed above EMA 50' : null, f.bullEma50_100 ? 'EMA 50 crossed above EMA 100' : null, f.bullEma100_200 ? 'EMA 100 crossed above EMA 200' : null, f.bullEma200_300 ? 'EMA 200 crossed above EMA 300' : null, f.bullSt10_1_2 ? 'Supertrend(10,1) crossed above Supertrend(10,2)' : null, f.bullSt10_2_3 ? 'Supertrend(10,2) crossed above Supertrend(10,3)' : null, f.bullSt1CloseCrossAbove ? 'Close crossed above Supertrend(10,1) (ST crossed below close)' : null, f.bullVwapCloseCrossAbove ? 'Close crossed above VWAP' : null, f.bullMeetEma9_21 ? 'EMA 9 above EMA 21' : null, f.bullMeetEma21_35 ? 'EMA 21 above EMA 35' : null, f.bullMeetEma35_50 ? 'EMA 35 above EMA 50' : null, f.bullMeetEma50_100 ? 'EMA 50 above EMA 100' : null, f.bullMeetEma100_200 ? 'EMA 100 above EMA 200' : null, f.bullMeetEma200_300 ? 'EMA 200 above EMA 300' : null, f.bullMeetSt10_1_2 ? 'Supertrend(10,1) above Supertrend(10,2)' : null, f.bullMeetSt10_2_3 ? 'Supertrend(10,2) above Supertrend(10,3)' : null, f.bullMeetCloseSt ? 'Close above Supertrend(10,1) (ST below close)' : null, f.bullMeetCloseVwap ? 'Close above VWAP' : null, f.bullMeetPaneCross ? 'Pane main line above signal' : null, f.bullMeetCross ? 'Primary above twin line' : null, f.bullMeetCloseBb ? 'Close above BB middle band (middle rising)' : null, f.bullMeetClosePc ? 'Close above price channel middle line (middle rising)' : null, f.bullMeetVl ? 'Volume Line above Signal' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null, f.bullGreenCandle ? 'Green candle entry (entry only while forming candle is green)' : null, f.bullCandle ? 'Candlestick patterns' : null, f.bullElliott ? 'Elliott Wave' : null, f.bullIndicator ? 'Indicators' : null, f.bullPane ? 'Pane indicators' : null, f.bullSymmetry ? 'Symmetry' : null, f.bullStructure ? 'Chart structure' : null, f.bullAtr ? 'ATR / Volatility' : null].filter(Boolean));
