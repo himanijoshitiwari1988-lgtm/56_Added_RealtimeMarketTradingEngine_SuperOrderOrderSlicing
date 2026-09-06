@@ -3,7 +3,31 @@
 Backup target: `himanijoshitiwari1988-lgtm/44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`
 Source history: `43_Added_vLindicatorFilter` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`, `43_Added_vLindicatorFilter`)
 
-## Latest backup (2026-09-06) — 14 new indicators (Aroon/BBW/CCI/Chandelier/CMF/Donchian/Force Index/Fisher/HMA/Ichimoku/Keltner/Squeeze Momentum/Stoch RSI/TSI) + new behaviour-based indicator filter rows across AI Smart & Auto Experiment + new Trend Core (vlcore) overlay engine with rising/falling + level filter rows
+## Latest backup (2026-09-06) — SMI Ergodic Oscillator (smiio) TradingView-formula fix
+
+Incremental layer on top of commit `3df65e4`. Full diff:
+`3df65e4..current` (2 files, +7/-3), regenerated `CHANGES_COMPLETE.patch` /
+`CHANGES_SUMMARY.txt` / `BACKUP_README.md` / `CHANGELOG.md` for this window.
+Complete code state is pushed to
+`44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour` `main`.
+
+- **SMI Ergodic Oscillator (`static/indicators.js` `smiio`)** — compute
+  corrected to the official TradingView SMI Ergodic formula. The change series
+  was previously taken from the current candle's midpoint
+  (`close - (high+low)/2`), which made the SMI/Signal crossovers and the
+  histogram's sign vs the zero line diverge from TradingView. It now uses
+  TradingView's close-to-close momentum change source:
+  `change = price - price[prev]`, `absChange = |close - close[prev]|`, followed
+  by the unchanged double-EMA chain (`EMA13` then `EMA25` on both change and
+  absChange), `SMI = 100 * change/absChange`, `Signal = EMA9(SMI)`,
+  `Histogram = SMI - Signal`. AST (aismart.js) and AE (autoexperiment.v13.js)
+  both read indicators through `IndChart.IND[id].compute()`, so the SMI
+  behaviour filter rows pick up the fixed series automatically — no engine-side
+  change needed.
+- **`templates/index.html`** — cache-bust bumped to `indicators.js?v=64` so the
+  corrected code is served fresh.
+
+## Previous backup (2026-09-06) — 14 new indicators (Aroon/BBW/CCI/Chandelier/CMF/Donchian/Force Index/Fisher/HMA/Ichimoku/Keltner/Squeeze Momentum/Stoch RSI/TSI) + new behaviour-based indicator filter rows across AI Smart & Auto Experiment + new Trend Core (vlcore) overlay engine with rising/falling + level filter rows
 
 Full diff: `b61f17e..current` (6 files, +1655/-43), regenerated
 `CHANGES_COMPLETE.patch` / `CHANGES_SUMMARY.txt` / `BACKUP_README.md` /

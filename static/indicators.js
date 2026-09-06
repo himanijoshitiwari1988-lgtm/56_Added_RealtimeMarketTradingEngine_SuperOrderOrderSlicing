@@ -475,8 +475,12 @@
         const shortlen = Math.max(1, Math.round(o.shortlen != null ? o.shortlen : (o.smooth || 13)));
         const longlen = Math.max(2, Math.round(o.longlen != null ? o.longlen : (o.smooth || 25)));
         const siglen = Math.max(1, Math.round(o.siglen != null ? o.siglen : (o.signalLength || 9)));
-        const pc = c.map(x => x.close - (x.high + x.low) / 2);
-        const ap = c.map(x => Math.abs(x.close - (x.high + x.low) / 2));
+        const pc = new Array(c.length).fill(0);
+        const ap = new Array(c.length).fill(0);
+        for (let i = 1; i < c.length; i++) {
+          pc[i] = c[i].close - c[i - 1].close;
+          ap[i] = Math.abs(pc[i]);
+        }
         const p1 = emaArr(pc, shortlen), p2 = emaArr(p1, longlen);
         const a1 = emaArr(ap, shortlen), a2 = emaArr(a1, longlen);
         const smi = new Array(c.length).fill(null);

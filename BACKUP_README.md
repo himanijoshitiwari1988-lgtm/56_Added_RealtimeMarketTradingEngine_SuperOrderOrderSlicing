@@ -6,11 +6,30 @@ backup commit `b61f17e`) pushed to
 `himanijoshitiwari1988-lgtm/44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`
 (branch `main`).
 
+## Latest layer (2026-09-06) — SMI Ergodic Oscillator (smiio) fix
+
+Incremental fix on top of commit `3df65e4` (2 files, +7/-3):
+
+- `static/indicators.js` `smiio.compute` now uses the official TradingView
+  SMI Ergodic change source — close-to-close momentum
+  `change = price - price[prev]`, `absChange = |close - close[prev]|` (was
+  `close - (high+low)/2`, the current candle's midpoint) — before the same
+  double-EMA chain (`EMA13` then `EMA25` on both change and absChange,
+  `SMI = 100 * change/absChange`, `Signal = EMA9(SMI)`,
+  `Histogram = SMI - Signal`). SMI/Signal crossovers and the histogram's sign
+  vs the zero line now match TradingView on the same scrip/timeframe/settings.
+- `templates/index.html` cache-bust bumped to `indicators.js?v=64`.
+
+Patch diff for this layer: `CHANGES_COMPLETE.patch` /
+`CHANGES_SUMMARY.txt` below cover `3df65e4..HEAD` (this fix window); the
+full-project description that follows summarises the underlying `b61f17e..`
+milestone snapshot the fix was layered onto.
+
 ## Contents
 
 - **Complete project files** — the full committed working tree as of the
-  14-new-indicators + behaviour-based indicator filter milestone commit (HEAD),
-  including:
+  14-new-indicators + behaviour-based indicator filter milestone + the SMI
+  Ergodic (smiio) TradingView-formula fix (HEAD), including:
   - `app.py`, `main.py`, `broker.py`, `charts.py`, `data_fetcher.py`, `requirements.txt`
   - `.env.example` (config template - the real `.env` with any key is never
     tracked or shipped)
@@ -20,27 +39,23 @@ backup commit `b61f17e`) pushed to
     vlcore.js, papertrade.js, paperrun.js, paperstrategies.js, strategies.js, ...)
   - `templates/index.html`
   - `CHANGELOG.md`, `HANDOFF.md`, `SESSION.md`
-- **CHANGES_COMPLETE.patch** — the complete unified diff of every change between
-  the previous backup commit `b61f17e` and the current working tree (HEAD
-  `b61f17e` + the 14-new-indicators + behaviour-based filter milestone),
-  generated with `git diff b61f17e`, excluding the regenerated doc files
-  themselves.
+- **CHANGES_COMPLETE.patch** — the complete unified diff of the latest
+  incremental layer between the previous backup commit `3df65e4` and the
+  current working tree (HEAD) — the SMI Ergodic `smiio` TradingView-formula fix
+  (`static/indicators.js` + the `index.html` cache-bust bump), generated with
+  `git diff 3df65e4`, excluding the regenerated doc files themselves.
 - **CHANGES_SUMMARY.txt** — `git diff --stat` plus `--name-status` of the same,
   with a plain-language change description.
 
-## Modified files (in CHANGES_COMPLETE.patch)
+## Modified files (latest layer `3df65e4..HEAD`, in CHANGES_COMPLETE.patch)
 
 ```
- static/aismart.js            | 152 ++++++++++++++++--
- static/autoexperiment.v13.js | 149 ++++++++++++++++--
- static/indicators.js         | 554 +++++++++++++++++++++++++++++++++++++++++-
- static/strategies.js         |   2 +
- static/vlcore.js             | 616 +++++++++++++++++++++++++++++++++++++++++++
- templates/index.html         | 225 ++++++++++++++++++----
- 6 files changed, 1655 insertions(+), 43 deletions(-)
+ static/indicators.js | 8 ++++++--
+ templates/index.html | 2 +-
+ 2 files changed, 7 insertions(+), 3 deletions(-)
 ```
 
-This backup includes (highlights of `b61f17e..HEAD`):
+## Underlying snapshot (highlights of `b61f17e..3df65e4`)
 
 - **14 new indicator definitions added to `static/indicators.js`** — Aroon,
   Bollinger Band Width, CCI, Chandelier Exit, CMF, Donchian Channel, Elder
