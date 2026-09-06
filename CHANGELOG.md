@@ -1,13 +1,44 @@
 # AlgoDhan Trading System — Change Log & Continuation Guide
 
-Backup target: `himanijoshitiwari1988-lgtm/45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp`
-Source history: `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`, `43_Added_vLindicatorFilter`, `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`)
+Backup target: `himanijoshitiwari1988-lgtm/46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision`
+Source history: `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`, `43_Added_vLindicatorFilter`, `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`, `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp`)
 
-## Latest backup (2026-09-06) — Pane Indicator rising-upward filters + Multi-Line Momentum Gap level gates + Rising Strike LTP pick-up
+## Latest backup (2026-09-06) — Supply Demand overlay filter rows + chart-direct paper entry decision (no chain fetch / no REST quote before the signal)
+
+Incremental layer on top of commit `872b61b`. Full diff:
+`872b61b..current` (3 files, +35/-19), regenerated `CHANGES_COMPLETE.patch` /
+`CHANGES_SUMMARY.txt` / `BACKUP_README.md` / `CHANGELOG.md` for this window.
+Complete code state is pushed to
+`46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision` `main`.
+
+- **Supply Demand overlay filter rows** wired into AI Smart + Auto Experiment:
+  `OBR_LIST` (and its autoexperiment mirror) gains
+  `{tok:'SupplyDemand', id:'supplydemand', valueKey:'v0',
+  settings:{atrPeriod:14, atrMult:2, minPct:0.15, eqTol:25},
+  name:'Supply Demand'}`, and the `obr` row array in `templates/index.html`
+  injects the new row ("Supply Demand line increasing upward/downward").
+  `OBR_BULL_KEYS` / `OBR_BEAR_KEYS` pick it up in both engines automatically.
+  Cache-bump: `autoexperiment.v13.js?v=152 -> v=153`, `aismart.js?v=164 -> v=166`.
+- **Chart-direct AST paper entry decision** — the `tickBody()` per-instrument
+  loop now decides entries purely from the real-time chart candles: the
+  option-chain execution-target resolution (`executionSymbolsFor`) and the REST
+  quote/candle subscription (`ensureOptionQuotes`) were removed from before the
+  entry-signal check and are deferred to just after a fresh signal fires
+  (immediately before order placement). The decision path and the "waiting for
+  signal" state do zero chain / REST-quote work per poll, so a condition that
+  meets on the live chart is entered on the next poll without waiting on chain
+  resolution / quote subscription. Open-position management for a
+  strategy+instrument reads the paper engine's own `autoPositions`
+  (`autoKey === key`) instead of iterating chain-derived trade targets, so a
+  held trade no longer triggers a chain fetch per poll either. The
+  one-trade-per-signal latch and the exit/trail management behaviour are
+  unchanged.
+
+## Previous backup — Pane Indicator rising-upward filters + Multi-Line Momentum Gap level gates + Rising Strike LTP pick-up
 
 Incremental layer on top of commit `a152c03`. Full diff:
-`a152c03..current` (5 files, +860/-59), regenerated `CHANGES_COMPLETE.patch` /
-`CHANGES_SUMMARY.txt` / `BACKUP_README.md` / `CHANGELOG.md` for this window.
+`a152c03..872b61b` (5 files, +860/-59), regenerated `CHANGES_COMPLETE.patch` /
+`CHANGES_SUMMARY.txt` / `BACKUP_README.md` / `CHANGELOG.md` for that window.
 Complete code state is pushed to
 `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp` `main`.
 

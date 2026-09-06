@@ -169,7 +169,8 @@ window.createAISmartTrading = function (suffix) {
     { tok: 'SenkouA', id: 'ichimoku', valueKey: 'v2', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Senkou A' },
     { tok: 'Keltner', id: 'keltner', valueKey: 'v1', settings: { length: 20, mult: 2 }, name: 'Keltner middle' },
     { tok: 'Donchian', id: 'donchian', valueKey: 'v1', settings: { length: 20 }, name: 'Donchian middle' },
-    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' }
+    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' },
+    { tok: 'SupplyDemand', id: 'supplydemand', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15, eqTol: 25 }, name: 'Supply Demand' }
   ];
   const OB_BULL_KEYS = OBR_LIST.map(d => 'bullObr' + d.tok);
   const OB_BEAR_KEYS = OBR_LIST.map(d => 'bearObr' + d.tok);
@@ -5029,28 +5030,29 @@ window.createAISmartTrading = function (suffix) {
           if (!candles || candles.length < 10) { prog(s.id, 5, 'Waiting candles'); bump(instr, 'candles'); continue; }
           const trendCandles = trendTf ? await candlesForInstrument(instr, trendTf) : null;
 
-          const tradeTargets = await executionSymbolsFor(instr, s);
-          if (!tradeTargets.length) {
-            if (chainRateLimited(instr.symbol)) prog(s.id, 15, 'Option chain rate-limited - retrying in ~' + _CHAIN_RL_SEC + 's');
-            else prog(s.id, 15, 'No execution target (option chain unavailable)');
-            bump(instr, 'targets'); continue;
-          }
-          await ensureOptionQuotes(tradeTargets, entryTf);
-          prog(s.id, 30, 'Execution target ready');
-
+          /* The entry DECISION runs on the real-time chart candles only: the
+             option chain is not fetched and no REST quote/candle subscription
+             happens while the engine is waiting for / analysing a signal. Those
+             two steps are deferred until a fresh signal actually fires, just
+             before the order is placed (below). A condition that meets on the
+             chart therefore gets placed on the next poll without waiting on
+             chain resolution. */
           // Immediate chart-based execution: a strategy signal on the run chart
           // fires the entry directly - the companion-chart confirmation wait is
           // removed. The fill happens at the live chart price.
 
-          // Manage any open legs on the execution targets before considering a
-          // new entry. When a dual (both) leg is held, exits are managed here.
+          // Manage any open legs of this strategy+instrument (autoKey === key)
+          // before considering a new entry - decided purely from the paper
+          // engine's own positions, never from a chain fetch. While a position
+          // of ours is open its signal episode stays latched, so an SL/TP exit
+          // cannot be followed by an instant re-buy on the same still-true
+          // condition.
           let anyOpen = false;
-          for (const tSym of tradeTargets) {
-            const pkey = posKeyOf(tSym);
+          for (const pkey of Object.keys(autoPositions)) {
             const open = autoPositions[pkey];
             if (!open) continue;
-            anyOpen = true;
             if (String(open.autoKey || '') !== key) continue; /* owned by another engine / manual trade */
+            anyOpen = true;
             /* An open position on this instrument means this signal episode has
                already been used - keep the one-trade-per-signal latch armed so a
                stop/TP exit cannot be followed by an instant re-buy while the
@@ -5113,6 +5115,19 @@ window.createAISmartTrading = function (suffix) {
           /* One-trade-per-signal: this still-true condition already fired its
              trade - no re-entry until the signal resets and meets again. */
           if (firedSignal(key)) { prog(s.id, 72, 'One trade per signal - same condition still active, waiting for a fresh signal'); bump(instr, 'signal'); continue; }
+          /* A fresh signal wants to trade - NOW resolve the execution leg(s).
+             The option chain is consulted only here, to place the order; it is
+             never needed to analyse. The quote/candle subscription runs at the
+             same point so a wait on it can never delay a signal that is still
+             building on the chart. */
+          const tradeTargets = await executionSymbolsFor(instr, s);
+          if (!tradeTargets.length) {
+            if (chainRateLimited(instr.symbol)) prog(s.id, 15, 'Option chain rate-limited - retrying in ~' + _CHAIN_RL_SEC + 's');
+            else prog(s.id, 15, 'No execution target (option chain unavailable)');
+            bump(instr, 'targets'); continue;
+          }
+          await ensureOptionQuotes(tradeTargets, entryTf);
+          prog(s.id, 30, 'Execution target ready');
           const bbpBlock = bbpGateBlock(instr, tradeTargets);
           if (bbpBlock) { prog(s.id, 77, bbpBlock); bump(instr, 'bbp'); continue; }
           gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });

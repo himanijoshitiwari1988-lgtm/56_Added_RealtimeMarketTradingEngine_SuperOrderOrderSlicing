@@ -557,7 +557,8 @@ window.createAutoExperiment = function (suffix) {
     { tok: 'SenkouA', id: 'ichimoku', valueKey: 'v2', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Senkou A' },
     { tok: 'Keltner', id: 'keltner', valueKey: 'v1', settings: { length: 20, mult: 2 }, name: 'Keltner middle' },
     { tok: 'Donchian', id: 'donchian', valueKey: 'v1', settings: { length: 20 }, name: 'Donchian middle' },
-    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' }
+    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' },
+    { tok: 'SupplyDemand', id: 'supplydemand', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15, eqTol: 25 }, name: 'Supply Demand' }
   ];
   const OB_BULL_KEYS = OBR_LIST.map(d => 'bullObr' + d.tok);
   const OB_BEAR_KEYS = OBR_LIST.map(d => 'bearObr' + d.tok);

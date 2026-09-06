@@ -1,47 +1,56 @@
-# Backup: 45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp
+# Backup: 46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision
 
 Complete snapshot backup of the project (working directory
-`repo_preview`, full history continuing from the `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`
-backup commit `a152c03`) pushed to
-`himanijoshitiwari1988-lgtm/45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp`
+`repo_preview`, full history continuing from the `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp`
+backup commit `872b61b`) pushed to
+`himanijoshitiwari1988-lgtm/46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision`
 (branch `main`).
 
-## Latest layer (2026-09-06) — rising-upward pane-indicator filters + Multi-Line Momentum Gap level gates + Rising Strike LTP pick-up
+## Latest layer (2026-09-06) — Supply Demand overlay filter rows + chart-direct entry decision
 
-Incremental layer on top of commit `a152c03` (5 files, +860/-59):
+Incremental layer on top of commit `872b61b` (3 files, +35/-19):
 
-- **Pane Indicator Behaviour rising-upward / rising-downward rows** wired into
-  AI Smart + Auto Experiment bullish/bearish filter panels and both engines'
-  filter key sets/summaries.
-- **Multi-Line Momentum Gap (PBG) level gates** — 12 pane indicators (MACD,
-  PPO, SMI, TSI, Stoch RSI, SMF, RSI, OBV, Fisher, Aroon, Vortex,
-  ADX +DI/-DI pair) evaluated as a main-line vs signal-line level-hold gate
-  (`cmpType:'self'`), plus the SMI (smiio) special case where the filter is the
-  OR of two bullish variants the user specified, expressed against the
-  Histogram series (`cond.pair='v2'`): base = SMI & Signal both above the
-  Histogram line, variant-1 = both rising and pulling away from the histogram,
-  variant-2 = both rising and the histogram rising (bearish = exact mirror).
-- **Fastest positive rising strike LTP pick-up** — `astFastestRising` /
-  `aeFastestRising` toggles + `astFastestCount` / `aeFastestCount` (default 3)
-  in both panels; AE persistence lists updated in `static/aecontrols.js`.
-- **`static/indicators.js`** — new connected Supply/Demand structure overlay
-  (continuous dense polyline + live edge + equal-length forecast), RSI Signal
-  EMA (default len 9, fixed 2-slot output), chart renderer hardening
-  (error-surfacing badge, guarded per-series creation, dashed lineStyle
-  passthrough).
-- **`templates/index.html`** — cache-bust bumps `indicators.js?v=64 -> v=70`,
-  `autoexperiment.v13.js?v=146 -> v=152`, `aismart.js?v=158 -> v=164`.
+- **Supply Demand overlay filter rows** wired into AI Smart + Auto Experiment:
+  `OBR_LIST` (and its autoexperiment mirror) gains
+  `{ tok:'SupplyDemand', id:'supplydemand', valueKey:'v0',
+  settings:{atrPeriod:14, atrMult:2, minPct:0.15, eqTol:25}, name:'Supply Demand' }`,
+  and the `obr` row array in `templates/index.html` injects the new row
+  ("Supply Demand line increasing upward/downward"). `OBR_BULL_KEYS` /
+  `OBR_BEAR_KEYS` pick the entry up automatically in both engines; the
+  Supply/Demand structure series already ships from `static/indicators.js`
+  (added in the previous layer). Cache-bump:
+  `autoexperiment.v13.js?v=152 -> v=153`, `aismart.js?v=164 -> v=166`.
+- **AST paper-poll entry decision now runs directly on the real-time chart
+  candles only.** In the normal poll (`tickBody`) the option-chain
+  execution-target resolution (`executionSymbolsFor` / `contractsFor`) and the
+  REST quote/candle subscription (`ensureOptionQuotes`) no longer run before
+  every per-instrument condition check. Both are deferred to just after a fresh
+  signal fires (immediately before the order is placed), so a condition that
+  meets on the live chart places the paper entry on the next poll without
+  waiting on chain resolution / quote subscription. Open-position management
+  for a strategy+instrument now reads the paper engine's own positions
+  (`autoKey === key`) instead of iterating chain-derived trade targets, so even
+  held trades no longer trigger a chain fetch per poll. The decision path for
+  entries and the "waiting for signal" state perform zero chain / REST-quote
+  work.
+
+## Modified files (latest layer `872b61b..current`, in CHANGES_COMPLETE.patch)
+
+```
+ static/aismart.js            | 45 +++++++++++++++++++++++++++++---------------
+ static/autoexperiment.v13.js |  3 ++-
+ templates/index.html         |  6 +++---
+ 3 files changed, 35 insertions(+), 19 deletions(-)
+```
 
 Patch diff for this layer: `CHANGES_COMPLETE.patch` /
-`CHANGES_SUMMARY.txt` below cover `a152c03..current` (this window); the
-full-project description that follows summarises the underlying milestone
-snapshot the layer was added onto.
+`CHANGES_SUMMARY.txt` below cover `872b61b..current` (this window).
 
 ## Contents
 
 - **Complete project files** — the full committed working tree as of the
-  Pane-Indicator rising-upward + Multi-Line Momentum Gap level gates + Rising
-  Strike LTP pick-up milestone (HEAD), including:
+  Supply Demand overlay filter rows + chart-direct entry decision milestone
+  (HEAD), including:
   - `app.py`, `main.py`, `broker.py`, `charts.py`, `data_fetcher.py`, `requirements.txt`
   - `.env.example` (config template - the real `.env` with any key is never
     tracked or shipped)
@@ -52,38 +61,27 @@ snapshot the layer was added onto.
   - `templates/index.html`
   - `CHANGELOG.md`, `HANDOFF.md`, `SESSION.md`
 - **CHANGES_COMPLETE.patch** — the complete unified diff of the latest
-  incremental layer between the previous backup commit `a152c03` and the
-  current working tree (HEAD) — pane-indicator rising filters, the PBG
-  multi-line momentum-gap level gates (incl. the SMI OR-of-two histogram
-  variant), the fastest-rising strike LTP pick-up, the indicators.js
-  Supply/Demand overlay + RSI signal EMA + chart hardening, and the
-  index.html cache-bust bumps — generated with `git diff a152c03`, excluding
-  the regenerated doc files themselves.
+  incremental layer between the previous backup commit `872b61b` and the
+  current working tree (HEAD) — the Supply Demand overlay filter rows in both
+  engines + index.html, and the chart-direct entry decision reorder in
+  `static/aismart.js` (no chain fetch / no REST quote subscription before the
+  entry signal) — generated with `git diff 872b61b`, excluding the regenerated
+  doc files themselves.
 - **CHANGES_SUMMARY.txt** — `git diff --stat` plus `--name-status` of the same,
   with a plain-language change description.
 
-## Modified files (latest layer `a152c03..current`, in CHANGES_COMPLETE.patch)
+## Underlying snapshot (highlights of `a152c03..872b61b`)
 
-```
- static/aecontrols.js         |   4 +-
- static/aismart.js            | 320 +++++++++++++++++++++++++++++++++++++++---
- static/autoexperiment.v13.js | 321 ++++++++++++++++++++++++++++++++++++++++---
- static/indicators.js         | 246 ++++++++++++++++++++++++++++++---
- templates/index.html         |  28 +++-
- 5 files changed, 860 insertions(+), 59 deletions(-)
-```
-
-## Underlying snapshot (highlights of `b61f17e..a152c03`)
-
-- **44_Added_14NewIndicater...** milestone — 14 new indicator definitions
-  (Aroon, BBW, CCI, Chandelier Exit, CMF, Donchian, Elder Force Index, Fisher
-  Transform, HMA, Ichimoku, Keltner, Squeeze Momentum, Stoch RSI, TSI) plus
-  the Trend Core (vlcore) overlay engine and behaviour-based indicator filter
-  rows in both engines, then the SMI Ergodic (smiio) TradingView-formula fix
-  (close-to-close momentum change source).
+- **45_Added_PaneIndicaterRisingUpward...** milestone — Pane Indicator
+  Behaviour rising-upward / rising-downward filter rows, the Multi-Line
+  Momentum Gap (PBG) level gates for 12 pane indicators (incl. the SMI
+  OR-of-two histogram variant), the fastest positive rising strike LTP pick-up
+  toggles/count, plus the connected Supply/Demand structure overlay + RSI true
+  Signal EMA + chart hardening in `static/indicators.js`.
 
 ## Previous backups
 
+- `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp` (commit `872b61b`)
 - `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour` (commit `a152c03`)
 - `43_Added_vLindicatorFilter` (commit `b61f17e`)
 - `42_Added_AiBrainAlgo` (commit `ac432ec`)
