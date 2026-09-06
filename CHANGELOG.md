@@ -1,9 +1,50 @@
 # AlgoDhan Trading System — Change Log & Continuation Guide
 
-Backup target: `himanijoshitiwari1988-lgtm/44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`
-Source history: `43_Added_vLindicatorFilter` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`, `43_Added_vLindicatorFilter`)
+Backup target: `himanijoshitiwari1988-lgtm/45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp`
+Source history: `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`, `43_Added_vLindicatorFilter`, `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`)
 
-## Latest backup (2026-09-06) — SMI Ergodic Oscillator (smiio) TradingView-formula fix
+## Latest backup (2026-09-06) — Pane Indicator rising-upward filters + Multi-Line Momentum Gap level gates + Rising Strike LTP pick-up
+
+Incremental layer on top of commit `a152c03`. Full diff:
+`a152c03..current` (5 files, +860/-59), regenerated `CHANGES_COMPLETE.patch` /
+`CHANGES_SUMMARY.txt` / `BACKUP_README.md` / `CHANGELOG.md` for this window.
+Complete code state is pushed to
+`45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp` `main`.
+
+- **Pane Indicator Behaviour rising-upward / rising-downward rows** wired into
+  AI Smart + Auto Experiment bullish/bearish filter panels (both engines'
+  filter key sets/summaries updated).
+- **Multi-Line Momentum Gap (PBG) level gates** — 12 pane indicators (MACD,
+  PPO, SMI, TSI, Stoch RSI, SMF, RSI, OBV, Fisher, Aroon, Vortex,
+  ADX +DI/-DI pair) in `PBG_LIST`, each evaluated as a main-line vs signal-line
+  level-hold gate (`cmpType:'self'`, no fresh cross required) via the new
+  `evalCondAt` `pbgBull`/`pbgBear` branch and the matching autoexperiment
+  backtest vector precompute — main above signal and NOT falling and signed gap
+  NOT shrinking (bearish = exact mirror), O(1) per bar on cached aligned
+  series.
+- **SMI (smiio) OR-of-two-variants filter** — special-cased with
+  `cond.pair='v2'` (Histogram series): base = SMI & Signal both above the
+  Histogram line, variant-1 = both rising and pulling further away from the
+  histogram, variant-2 = both rising and the histogram rising; a bar passes
+  when either variant holds. Bearish = exact mirror. New rows injected into
+  both panels with the OR semantics label.
+- **Rising Strike LTP pick-up** — `astFastestRising` / `aeFastestRising`
+  toggles + `astFastestCount` / `aeFastestCount` count inputs (default 3)
+  in both strategy panels; AE persistence lists (`aecontrols.js`) gain
+  `aeFastestCount` (VALUE) + `aeFastestRising` (CHECK); both engines wire
+  `onFastestRisingInput` and the fastest-count selection logic.
+- **`static/indicators.js`** — new connected Supply/Demand structure overlay
+  (`supplydemand`, continuous dense interpolated structure path + live forming
+  leg + dashed equal-length forecast, input candle sanitisation, paneLineKeys
+  v0 'Structure'); RSI pane emits a true Signal EMA (default len 9, fixed
+  2-slot output, 0 = off); chart renderer hardening (on-page error-surfacing
+  badge, guarded per-series creation so one bad series can never blank the
+  chart, try/catch setData/applyPriceLine, dashed lineStyle passthrough in
+  applySeries).
+- **`templates/index.html`** — cache-bust bumped `indicators.js?v=64 -> v=70`,
+  `autoexperiment.v13.js?v=146 -> v=152`, `aismart.js?v=158 -> v=164`.
+
+## Previous backup (2026-09-06) — SMI Ergodic Oscillator (smiio) TradingView-formula fix
 
 Incremental layer on top of commit `3df65e4`. Full diff:
 `3df65e4..current` (2 files, +7/-3), regenerated `CHANGES_COMPLETE.patch` /

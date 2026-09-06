@@ -126,6 +126,37 @@ window.createAISmartTrading = function (suffix) {
   function pbCap(id) { return id.charAt(0).toUpperCase() + id.slice(1); }
   const PB_BULL_KEYS = PB_G1.map(id => 'bullPbr' + pbCap(id)).concat(PB_G2.map(id => 'bullPbr' + pbCap(id) + 'Up'));
   const PB_BEAR_KEYS = PB_G1.map(id => 'bearPbr' + pbCap(id)).concat(PB_G2.map(id => 'bearPbr' + pbCap(id) + 'Up'));
+  /* Multi-Line Momentum Gap (PBG) Meet (level) gates. Every pane indicator that
+     draws TWO lines (main + its signal / the competing direction line) exposes
+     a bullish and a bearish level-hold toggle that reads the researched
+     STRONG-TREND behaviour of the pair:
+       - bull: main line sits ABOVE its signal (gap positive), the main line is
+         NOT falling and the signed gap (main - signal) is NOT shrinking — i.e.
+         momentum is up and the gap is holding or widening. Active WHILE the
+         relationship holds (a "level"/Meet condition - a fresh cross event is
+         NOT required, and a pinned steady gap stays active, e.g. Aroon Up
+         holding above Aroon Down for the whole trend).
+       - bear: mirror - main below signal, main not rising, gap not rising.
+     `v`/`s` pick the two series of the indicator (default main v0 + signal v1;
+     ADX is special-cased to the +DI/-DI pair because its v0 is the strength
+     gauge, not a direction line). Evaluated through the cached alignedSeries
+     path like every other PB gate - O(1) per bar, no extra scans. */
+  const PBG_LIST = [
+    { id: 'macd', name: 'MACD', s: { fast: 12, slow: 26, signal: 9 } },
+    { id: 'ppo', name: 'PPO', s: { fast: 12, slow: 26, signal: 9 } },
+    { id: 'smiio', name: 'SMI', s: { shortlen: 13, longlen: 25, siglen: 9 }, pair: 'v2' },
+    { id: 'tsi', name: 'TSI', s: { long: 25, short: 13, signal: 13 } },
+    { id: 'stochrsi', name: 'Stoch RSI', s: { rsiLen: 14, stochLen: 14, k: 3, d: 3 } },
+    { id: 'smf', name: 'SMF', s: { length: 14, signalLen: 9, volLen: 20, pulseCap: 3 } },
+    { id: 'rsi', name: 'RSI', s: { length: 14, smoothLength: 9 } },
+    { id: 'obv', name: 'OBV', s: { maLength: 30 } },
+    { id: 'fisher', name: 'Fisher', s: { length: 9 } },
+    { id: 'aroon', name: 'Aroon', s: { length: 25 } },
+    { id: 'vortex', name: 'Vortex', s: { length: 14 } },
+    { id: 'adx', name: 'ADX (+DI/-DI)', s: { length: 14 }, v: 'v1', c: 'v2' }
+  ];
+  const PBG_BULL_KEYS = PBG_LIST.map(d => 'bullPbg' + pbCap(d.id));
+  const PBG_BEAR_KEYS = PBG_LIST.map(d => 'bearPbg' + pbCap(d.id));
   /* Overlay Indicator Behaviour (OBR). These are OVERLAY lines - indicator
      series drawn on the candle pane, so unlike the pane PB_* values they sit at
      real price levels. Each row is a direction-mirror toggle just like PB
@@ -161,7 +192,8 @@ window.createAISmartTrading = function (suffix) {
     const pb = side === 'bull' ? PB_BULL_KEYS : PB_BEAR_KEYS;
     const ob = side === 'bull' ? OB_BULL_KEYS : OB_BEAR_KEYS;
     const mt = side === 'bull' ? MEET_BULL_KEYS : MEET_BEAR_KEYS;
-    return !!f && (pb.concat(ob, mt)).some(k => !!f[k]);
+    const pg = side === 'bull' ? PBG_BULL_KEYS : PBG_BEAR_KEYS;
+    return !!f && (pb.concat(ob, mt, pg)).some(k => !!f[k]);
   }
   /* Readable name of an Overlay Indicator Behaviour flag for filter logs. */
   function obrName(k) {
@@ -186,13 +218,20 @@ window.createAISmartTrading = function (suffix) {
     const rising = g2 ? true : /^bull/.test(k);
     return nm + ' line ' + (rising ? 'increasing upward' : 'increasing downward');
   }
-  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'].concat(PB_BULL_KEYS, PB_BEAR_KEYS, OB_BULL_KEYS, OB_BEAR_KEYS, MEET_BULL_KEYS, MEET_BEAR_KEYS);
+  /* Readable name of a Multi-Line Momentum Gap (level) flag for filter logs. */
+  function pbgName(k) {
+    const raw = k.replace(/^(bull|bear)Pbg/, '');
+    const d = PBG_LIST.filter(x => x.id.toLowerCase() === raw.toLowerCase())[0];
+    const nm = d ? d.name : raw;
+    return nm + ' main-vs-signal gap ' + (/^bull/.test(k) ? 'holding/widening upward (level)' : 'holding/widening downward (level)');
+  }
+  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'].concat(PB_BULL_KEYS, PB_BEAR_KEYS, OB_BULL_KEYS, OB_BEAR_KEYS, MEET_BULL_KEYS, MEET_BEAR_KEYS, PBG_BULL_KEYS, PBG_BEAR_KEYS);
   /* Directional filter keys: the Bullish / Bearish indicator-filter section
      sub-options. Used to strip the opposite-direction filters before they are
      appended to a running strategy (a bullish strategy never receives bearish
      filter gates and vice versa). */
-  const BULL_FILTER_KEYS = ['incUp', 'crossUp', 'gapUp', 'incUpAll', 'gtUp', 'ltUp', 'bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bullGreenCandle', 'paneCrossUp', 'paneIncUpAll', 'bullBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bullSmf', 'bullVl', 'bullAsr', 'bullOit', 'bullEma9_21', 'bullEma21_35', 'bullEma35_50', 'bullEma50_100', 'bullEma100_200', 'bullEma200_300', 'bullSt10_1_2', 'bullSt10_2_3', 'bullSt1CloseCrossAbove', 'bullVwapCloseCrossAbove', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bullMeetCloseSt', 'bullMeetCloseVwap', 'bullMeetPaneCross', 'bullMeetCross', 'bullMeetCloseBb', 'bullMeetClosePc', 'bullMeetVl'].concat(PB_BULL_KEYS, OB_BULL_KEYS, MEET_BULL_KEYS);
-  const BEAR_FILTER_KEYS = ['incDown', 'crossDown', 'gapDown', 'incDownAll', 'gtDown', 'ltDown', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bearRedCandle', 'paneCrossDown', 'paneIncDownAll', 'bearBbwInc', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bearSmf', 'bearVl', 'bearAsr', 'bearOit', 'bearEma9_21', 'bearEma21_35', 'bearEma35_50', 'bearEma50_100', 'bearEma100_200', 'bearEma200_300', 'bearSt10_1_2', 'bearSt10_2_3', 'bearSt1CloseCrossBelow', 'bearVwapCloseCrossBelow', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bearMeetCloseSt', 'bearMeetCloseVwap', 'bearMeetPaneCross', 'bearMeetCross', 'bearMeetCloseBb', 'bearMeetClosePc', 'bearMeetVl'].concat(PB_BEAR_KEYS, OB_BEAR_KEYS, MEET_BEAR_KEYS);
+  const BULL_FILTER_KEYS = ['incUp', 'crossUp', 'gapUp', 'incUpAll', 'gtUp', 'ltUp', 'bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bullGreenCandle', 'paneCrossUp', 'paneIncUpAll', 'bullBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bullSmf', 'bullVl', 'bullAsr', 'bullOit', 'bullEma9_21', 'bullEma21_35', 'bullEma35_50', 'bullEma50_100', 'bullEma100_200', 'bullEma200_300', 'bullSt10_1_2', 'bullSt10_2_3', 'bullSt1CloseCrossAbove', 'bullVwapCloseCrossAbove', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bullMeetCloseSt', 'bullMeetCloseVwap', 'bullMeetPaneCross', 'bullMeetCross', 'bullMeetCloseBb', 'bullMeetClosePc', 'bullMeetVl'].concat(PB_BULL_KEYS, OB_BULL_KEYS, MEET_BULL_KEYS, PBG_BULL_KEYS);
+  const BEAR_FILTER_KEYS = ['incDown', 'crossDown', 'gapDown', 'incDownAll', 'gtDown', 'ltDown', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bearRedCandle', 'paneCrossDown', 'paneIncDownAll', 'bearBbwInc', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bearSmf', 'bearVl', 'bearAsr', 'bearOit', 'bearEma9_21', 'bearEma21_35', 'bearEma35_50', 'bearEma50_100', 'bearEma100_200', 'bearEma200_300', 'bearSt10_1_2', 'bearSt10_2_3', 'bearSt1CloseCrossBelow', 'bearVwapCloseCrossBelow', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bearMeetCloseSt', 'bearMeetCloseVwap', 'bearMeetPaneCross', 'bearMeetCross', 'bearMeetCloseBb', 'bearMeetClosePc', 'bearMeetVl'].concat(PB_BEAR_KEYS, OB_BEAR_KEYS, MEET_BEAR_KEYS, PBG_BEAR_KEYS);
   const VALID_MODES = ['above', 'below', 'both_atm', 'above_atm', 'below_atm', 'both_atm_inc', 'atm'];
   const VALID_TYPES = ['both', 'CE', 'PE'];
   const ALL_TIMEFRAMES = ['1min', '5min'];
@@ -374,7 +413,8 @@ window.createAISmartTrading = function (suffix) {
       candleKey: o.candleKey || 'close',
       number: o.number != null ? o.number : 0,
       candlePatterns: o.candlePatterns || [],
-      dir: o.dir != null ? o.dir : 0
+      dir: o.dir != null ? o.dir : 0,
+      pair: o.pair || ''
     };
   }
 
@@ -896,6 +936,23 @@ window.createAISmartTrading = function (suffix) {
       if (f['bullMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'lt', cmpType: 'candle', candleKey: 'close' }));
       if (f['bearMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'gt', cmpType: 'candle', candleKey: 'close' }));
     });
+    /* Multi-Line Momentum Gap (PBG) level gates - see PBG_LIST at the top of
+       the engine. Each gate evaluates the pane indicator's MAIN series vs its
+       SIGNAL series (level-hold: no fresh cross required). Bullish fires while
+       main sits above the signal and both the main series and the signed gap
+       (main - signal) are holding or widening; bearish is the exact mirror.
+       ADX special-case: its v0 is the strength gauge, not a direction line, so
+       the +DI/-DI pair (v1/v2) is used instead. All evaluated with the
+       STRONG-TREND default settings of each pane on the strategy's candle
+       chart through the cached alignedSeries path - O(1) at the decision bar. */
+    if (f.bullish || f.bearish) {
+      PBG_LIST.forEach(d => {
+        const vk = d.v || 'v0', ck = d.c || 'v1';
+        const pair = d.pair || '';
+        if (f.bullish && f['bullPbg' + pbCap(d.id)]) out.push(cond({ indId: d.id, indSettings: d.s, valueKey: vk, logic: 'pbgBull', cmpType: 'self', cmpValueKey: ck, pair: pair }));
+        if (f.bearish && f['bearPbg' + pbCap(d.id)]) out.push(cond({ indId: d.id, indSettings: d.s, valueKey: vk, logic: 'pbgBear', cmpType: 'self', cmpValueKey: ck, pair: pair }));
+      });
+    }
     const entry = Array.isArray(tpl.entry) ? tpl.entry[0] : tpl.entry;
     if (!entry || !entry.indId) return out;
     const prim = { indId: entry.indId, indSettings: entry.indSettings || {}, valueKey: entry.valueKey || 'v0' };
@@ -1271,6 +1328,58 @@ window.createAISmartTrading = function (suffix) {
       const arr = alignedSeries(cond.indId, cond.indSettings, cond.valueKey, candles);
       return trendAt(arr, i, cond.logic === 'incUp' ? 'up' : 'down');
     }
+    /* Multi-Line Momentum Gap (PBG) meet-level gates. Bull fires while the main
+       series sits ABOVE the signal and is NOT falling and the signed gap
+       (main - signal) is NOT shrinking; bear is the exact mirror. Pure level-
+       hold semantics: a fresh cross event is NOT required and a pinned steady
+       gap stays active for the whole trend (e.g. Aroon Up holding above Aroon
+       Down with both lines pinned flat). O(1): only the two last cached bars of
+       each series are read. */
+    if (cond.logic === 'pbgBull' || cond.logic === 'pbgBear') {
+      const wantBull = cond.logic === 'pbgBull';
+      const m = alignedSeries(cond.indId, cond.indSettings, cond.valueKey, candles);
+      const s = alignedSeries(cond.indId, cond.indSettings, cond.cmpValueKey, candles);
+      if (!m || !s) return false;
+      const v = m[i], s0 = s[i], vp = m[i - 1], s1 = s[i - 1];
+      if (v == null || s0 == null || vp == null || s1 == null) return false;
+      if (cond.pair) {
+        /* SMI special "pair vs Histogram" mode: the SMI filter was redesigned
+           as an OR of the two bullish variants the user described (bearish is
+           the exact mirror). base = SMI & Signal both on the bullish side of
+           the Histogram line (hist = SMI - Signal, so this pins the oscillator
+           pair in its positive zone); variant-1 = base + both lines rising and
+           pulling further away from the histogram; variant-2 = base + both
+           lines rising and the histogram itself rising (acceleration). A bar
+           passes when either variant holds. */
+        const h = alignedSeries(cond.indId, cond.indSettings, cond.pair, candles);
+        if (!h) return false;
+        const hh = h[i], hp = h[i - 1];
+        if (hh == null || hp == null) return false;
+        if (wantBull) {
+          if (v <= hh || s0 <= hh) return false;
+          if (v < vp || s0 < s1) return false;
+          const widen = (v - hh) >= (vp - hp) && (s0 - hh) >= (s1 - hp);
+          if (!widen && !(hh >= hp)) return false;
+        } else {
+          if (v >= hh || s0 >= hh) return false;
+          if (v > vp || s0 > s1) return false;
+          const widen = (hh - v) >= (hp - vp) && (hh - s0) >= (hp - s1);
+          if (!widen && !(hh <= hp)) return false;
+        }
+        return true;
+      }
+      const gap = v - s0, pg = vp - s1;
+      if (wantBull) {
+        if (gap <= 0) return false;
+        if (v < vp) return false;
+        if (gap < pg) return false;
+      } else {
+        if (gap >= 0) return false;
+        if (v > vp) return false;
+        if (gap > pg) return false;
+      }
+      return true;
+    }
     const prim = readTwo(cond.indId, cond.indSettings, cond.valueKey, i, candles);
     const cmp = cmpReadAt(cond, i, candles);
     if (cond.logic === 'gapUp' || cond.logic === 'gapDown') {
@@ -1354,7 +1463,7 @@ window.createAISmartTrading = function (suffix) {
       enabled: false,
       universal: { lotSize: null, lots: 1, margin: 100000, tpPct: 1, manualTrail: true, aiSl: true, aiTp: true, manualSL: false, manualSLPct: 1, manualTrailTP: false, manualTrailTPPct: 20, manualTP: false, manualTPPct: 5, aiTP: false, rrEnabled: false, rrValue: 2, mtfConfirm: false, fnoLimit: true, tfs: { '1min': true, '5min': true }, tradeLimitEnabled: false, tradeLimitCount: 5, aiTrades: false, hft: false, hftOps: 6, hftExecEnabled: true, hftExecOn: 'close', startTradeAfterEnabled: false, startTradeAfter: '09:15', noTradeAfterEnabled: false, noTradeAfter: '15:30', autoSquareOffEnabled: false, autoSquareOffTime: '15:20', astUseOwnSettings: false },
       runProgress: {},     // strategyId -> { pct, status, updated } live per-tick pipeline progress
-      strike: { mode: 'both_atm', count: 3, optionType: 'both', positiveOnly: true },
+      strike: { mode: 'both_atm', count: 3, optionType: 'both', positiveOnly: true, fastestRising: false, fastestCount: 3 },
       runIn: { index: 'both', fno: 'spot', comm: 'spot', default: false }, // chart the strategy run + trade execution runs on: 'spot', 'premium' or 'both'
       tradeIn: { index: 'premium', fno: 'premium', comm: 'spot', default: false }, // chart the trade execution is done on: 'spot' or 'premium'
       premiumOnly: false, // when ON the strategy run AND trade execution both lock to the option premium chart for every instrument type
@@ -1438,6 +1547,8 @@ window.createAISmartTrading = function (suffix) {
       if (VALID_MODES.indexOf(s.strike.mode) < 0) s.strike.mode = 'both_atm';
       if (VALID_TYPES.indexOf(s.strike.optionType) < 0) s.strike.optionType = 'both';
       if (typeof s.strike.positiveOnly !== 'boolean') s.strike.positiveOnly = true;
+      if (typeof s.strike.fastestRising !== 'boolean') s.strike.fastestRising = false;
+      if (!Number.isFinite(s.strike.fastestCount) || s.strike.fastestCount < 1) s.strike.fastestCount = 3;
     }
     if (s && s.runIn) {
       // Both dropdowns accept 'spot' (underlying chart), 'premium' (option
@@ -3214,6 +3325,38 @@ window.createAISmartTrading = function (suffix) {
     const st = (so && typeof so === 'object') ? Object.assign({}, state.strike, so) : state.strike;
     let ot = st.optionType || 'both';
     const onlyPos = st.positiveOnly !== false;
+    /* "Pick fastest positive rising LTP / LTP change strike": rank the resolved
+       strikes per option side so the strike whose LTP (and LTP change) is
+       rising the FASTEST sits first, using ONLY the LTP + LTP change values the
+       option chain already carries (no bid/ask or other data). Strikes with a
+       minus/zero LTP change sink to the end, so every consumer that picks the
+       first contract of a side (firstPerSide / contracts[0]) gets the fastest
+       positive riser instead of the nearest-ATM row. */
+    const fastestRising = st.fastestRising === true;
+    const fastestCount = fastestRising ? Math.max(1, Math.floor(Number(st.fastestCount) || 3)) : 0;
+    const _riseScore = (c) => {
+      if (!c || !(c.premium > 0) || !(c.chg > 0)) return -Infinity;
+      let pct = c.chgPct;
+      if (pct == null || !isFinite(pct) || pct <= 0) pct = (c.premium > 0) ? (c.chg / c.premium) * 100 : 0;
+      return pct <= 0 ? -Infinity : pct;
+    };
+    /* Rank the resolved strikes per option side (fastest positive riser first),
+       then TRUNCATE each side to the top-N fastest rising strikes (N =
+       fastestCount). Using ONLY the LTP + LTP change the chain already carries
+       (no bid/ask). Minus/zero LTP-change strikes sink to the end and drop off
+       when there are enough positive risers, so every consumer that picks the
+       first contract of a side (firstPerSide / contracts[0]) still gets the
+       single fastest riser, while the truncated list lets the run fan out over
+       the top-N fastest rising strikes per side. */
+    const _rankFastestRising = (list) => {
+      if (!list || !list.length) return list;
+      const grp = {};
+      list.forEach(c => { const t = (c.optionType === 'PE') ? 'PE' : 'CE'; (grp[t] = grp[t] || []).push(c); });
+      const k = Math.max(1, fastestCount);
+      const ranked = ['CE', 'PE'].map(t => (grp[t] || []).slice().sort((a, b) => _riseScore(b) - _riseScore(a)).slice(0, k));
+      const out = ranked[0].concat(ranked[1]);
+      return out.length ? out : list;
+    };
     /* NIFTY trend-following direction: when the NIFTY trend engine is enabled
        the CE/PE side is pinned to the LIVE NIFTY direction for every symbol it
        picked - bearish -> PE puts only, bullish -> CE calls only (matches the
@@ -3253,8 +3396,14 @@ window.createAISmartTrading = function (suffix) {
       else if (dir === 'bearish') ot = 'PE';
     }
     const mode = st.mode || 'both_atm';
-    const count = mode === 'atm' ? 1 : (st.count || 3);
-    const cacheKey = 'ast:' + String(symbol.id) + ':' + (symbol.ocExch || '') + ':' + mode + ':' + count + ':' + ot + ':' + (onlyPos ? 'pos' : 'all');
+    /* Fastest-rising run: fetch a pool at least as wide as the number of
+       fastest risers to run on (fastestCount) so the top-N truncation actually
+       has N+ candidates per side to choose from; the old "Number of Strikes"
+       input only sizes the normal nearest-ATM pool and is disabled while the
+       fastest-rising checkbox is on. */
+    const baseCount = mode === 'atm' ? 1 : (st.count || 3);
+    const count = fastestRising ? Math.max(baseCount, fastestCount) : baseCount;
+    const cacheKey = 'ast:' + String(symbol.id) + ':' + (symbol.ocExch || '') + ':' + mode + ':' + count + ':' + ot + ':' + (onlyPos ? 'pos' : 'all') + ':' + (fastestRising ? 'fast:' + fastestCount : 'near');
     const hit = _contractsCache.get(cacheKey);
     if (hit && (Date.now() - hit.at) < _CONTRACTS_CACHE_MS && hit.contracts) {
       _pickedStrikes.set(_pickedKey(symbol), { symbol: symbol, contracts: hit.contracts, at: Date.now() });
@@ -3352,6 +3501,7 @@ window.createAISmartTrading = function (suffix) {
       if (onlyPos && !filtered.length) {
         log('No +green premium strikes matched the "Only +green" filter for ' + displayName(symbol) + ' - no strikes picked (minus/zero LTP or LTP change strikes are always skipped)', 'warn');
       }
+      if (fastestRising && filtered && filtered.length) filtered = _rankFastestRising(filtered);
       _cacheSet(_contractsCache, cacheKey, { at: Date.now(), contracts: filtered });
       _pickedStrikes.set(_pickedKey(symbol), { symbol: symbol, contracts: filtered, at: Date.now() });
       _schedulePickedPersist();
@@ -3463,6 +3613,15 @@ window.createAISmartTrading = function (suffix) {
   async function resolveInstruments(side) {
     const syms = experimentSymbols();
     if (!syms.length) return [];
+    /* "Pick fastest rising..." ON: the resolved chain is already truncated to the
+       top-N fastest rising strikes of the decided side (bullish -> CE, bearish ->
+       PE) by contractsFor(). Every one of those strikes becomes its own option
+       instrument so the strategy / indicator filters analyse each fastest rising
+       premium chart independently and a trade executes on EVERY strike whose
+       chart fires - several simultaneous legs across the top-N strikes is the
+       intended behaviour (Option A). Off: the historical one-trade-per-symbol
+       collapse (firstPerSide) stays untouched. */
+    const fastestOn = !!(state.strike && state.strike.fastestRising === true);
     const out = [];
     for (const sym of syms) {
       const spot = spotLtpFor(sym);
@@ -3478,7 +3637,11 @@ window.createAISmartTrading = function (suffix) {
         let contracts = null;
         try { contracts = await contractsFor(sym, spot, { optionType: side }); } catch (e) { contracts = null; }
         if (contracts && contracts.length) {
-          for (const c of firstPerSide(contracts)) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
+          /* Fastest-rising run: every top-N strike of this single decided side
+             becomes its own instrument so each is analysed + traded. Off: only
+             the first (ATM/fastest) strike of the side is traded. */
+          const picks = fastestOn ? contracts : firstPerSide(contracts);
+          for (const c of picks) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
         } else {
           log('No ' + side + ' option contracts for ' + displayName(sym) + ' - skipping (Run Strategy In ' + side + ')', 'warn');
         }
@@ -3499,14 +3662,25 @@ window.createAISmartTrading = function (suffix) {
       // decision needs confirmation from both charts.
       if (runInMode(sym) === 'both') {
         if (contracts && contracts.length) {
-          out.push({ kind: 'both', symbol: sym, contracts });
+          /* Fastest-rising run: the whole top-N per-side strike set is what must
+             be analysed and traded together (Option A), so every strike becomes
+             its own option instrument carrying its own premium chart - the
+             combined single-instrument 'both' shape (one strike per symbol) can
+             not represent several simultaneous fastest-rising legs. Off: the
+             historical single combined spot+premium instrument stays. */
+          if (fastestOn) {
+            for (const c of contracts) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
+          } else {
+            out.push({ kind: 'both', symbol: sym, contracts });
+          }
         } else {
           log('No option contracts for ' + displayName(sym) + ' - skipping (both run needs spot + premium)', 'warn');
         }
         continue;
       }
       if (contracts && contracts.length) {
-        for (const c of firstPerSide(contracts)) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
+        const picks = fastestOn ? contracts : firstPerSide(contracts);
+        for (const c of picks) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
       } else {
         // No option contracts resolved (chain unavailable/rate-limited, or the
         // "Only +green premium strikes" filter removed every strike in a red
@@ -4124,7 +4298,17 @@ window.createAISmartTrading = function (suffix) {
         contracts = contracts.filter(c => c.optionType === side);
       }
       if (runInMode(sym) === 'both') {
-        if (contracts && contracts.length) out.push({ kind: 'both', symbol: sym, contracts });
+        if (contracts && contracts.length) {
+          /* Fastest-rising run: every top-N fastest-rising strike (of the live
+             side) must be scanned + traded as its own instrument, matching the
+             normal poll's fan-out. Off: the historical single combined
+             spot+premium instrument is scanned. */
+          if (state.strike && state.strike.fastestRising === true) {
+            for (const c of contracts) out.push({ kind: 'option', symbol: sym, strike: c.strike, optionType: c.optionType, sid: c.sid, premium: c.premium });
+          } else {
+            out.push({ kind: 'both', symbol: sym, contracts });
+          }
+        }
         continue;
       }
       if (contracts && contracts.length) {
@@ -5474,13 +5658,60 @@ window.createAISmartTrading = function (suffix) {
     readUniversal();
   }
 
+  let _fastestRisingPrevMode = null;
+  let _fastestRisingPrevPos = null;
+  /* When "Pick fastest positive rising LTP and LTP change strike" is switched
+     ON, the strike pool must cover both sides of the ATM so the fastest positive
+     riser (CE or PE, wherever it sits) can actually be inside the pool. If the
+     user has a one-sided / ATM-only "Execute Trade In" mode selected we switch
+     the dropdown to the widest near-ATM pool (above + below + ATM). The mode is
+     only auto-selected at the moment the checkbox is toggled ON; afterwards the
+     user is free to change the dropdown manually and the engine simply ranks
+     inside whatever pool they pick. When the checkbox is switched back OFF the
+     previously selected mode is restored. Fastest-rising selection only ever
+     considers positive (+green) LTP / LTP-change strikes, so while it is ON the
+     "Only +green premium strikes" checkbox is forced checked + inactive too
+     (the fastest ranking already implies it) and the user's own checkbox state
+     is restored when fastest mode is switched OFF. */
+  function onFastestRisingInput() {
+    const fastEl = $id('astFastestRising'), modeEl = $id('astStrikeMode'), posEl = $id('astOnlyPositive');
+    if (fastEl && modeEl) {
+      if (fastEl.checked) {
+        const m = modeEl.value;
+        if (m !== 'both_atm' && m !== 'both_atm_inc') {
+          _fastestRisingPrevMode = m;
+          modeEl.value = 'both_atm_inc';
+          log('Pick fastest rising strike ON: "Execute Trade In" auto-set to Above and below including ATM so the fastest positive riser (CE or PE side) is inside the pool. You can still change the mode after this.', 'ok');
+        }
+        if (posEl && !posEl.checked) {
+          _fastestRisingPrevPos = false;
+          posEl.checked = true;
+        }
+      } else {
+        if (_fastestRisingPrevMode) {
+          modeEl.value = _fastestRisingPrevMode;
+          _fastestRisingPrevMode = null;
+        }
+        if (_fastestRisingPrevPos != null && posEl) {
+          posEl.checked = _fastestRisingPrevPos;
+          _fastestRisingPrevPos = null;
+        }
+      }
+    }
+    syncStrikeUI();
+    readStrikeUI();
+  }
+
   function readStrikeUI() {
-    const modeEl = $id('astStrikeMode'), cntEl = $id('astStrikeCount'), otEl = $id('astOptionType'), posEl = $id('astOnlyPositive');
+    const modeEl = $id('astStrikeMode'), cntEl = $id('astStrikeCount'), otEl = $id('astOptionType'), posEl = $id('astOnlyPositive'), fastEl = $id('astFastestRising'), fastCntEl = $id('astFastestCount');
     const mode = modeEl ? (modeEl.value || 'both_atm') : 'both_atm';
     state.strike.mode = mode;
     state.strike.count = mode === 'atm' ? 1 : (cntEl ? (Number(cntEl.value) || 3) : 3);
     state.strike.optionType = otEl ? (otEl.value || 'both') : 'both';
     state.strike.positiveOnly = posEl ? posEl.checked : true;
+    state.strike.fastestRising = fastEl ? fastEl.checked : false;
+    const fc = fastCntEl ? Number(fastCntEl.value) : NaN;
+    state.strike.fastestCount = Number.isFinite(fc) && Math.floor(fc) >= 1 ? Math.floor(fc) : 3;
     syncStrikeUI();
     save();
   }
@@ -5614,6 +5845,8 @@ window.createAISmartTrading = function (suffix) {
     add('bearish', [f.incDown ? 'Increasing downward' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Increasing downward (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Pane all lines increasing downward' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close crossed below BB middle band (upper+lower expanding)' : null, f.bearPcCrossBelow ? 'Close crossed below price channel middle line' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling + volume increasing' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearOit ? 'OI Trend increasing downward' : null, f.bearEma9_21 ? 'EMA 9 crossed below EMA 21' : null, f.bearEma21_35 ? 'EMA 21 crossed below EMA 35' : null, f.bearEma35_50 ? 'EMA 35 crossed below EMA 50' : null, f.bearEma50_100 ? 'EMA 50 crossed below EMA 100' : null, f.bearEma100_200 ? 'EMA 100 crossed below EMA 200' : null, f.bearEma200_300 ? 'EMA 200 crossed below EMA 300' : null, f.bearSt10_1_2 ? 'Supertrend(10,1) crossed below Supertrend(10,2)' : null, f.bearSt10_2_3 ? 'Supertrend(10,2) crossed below Supertrend(10,3)' : null, f.bearSt1CloseCrossBelow ? 'Close crossed below Supertrend(10,1) (ST crossed above close)' : null, f.bearVwapCloseCrossBelow ? 'Close crossed below VWAP' : null, f.bearMeetEma9_21 ? 'EMA 9 below EMA 21' : null, f.bearMeetEma21_35 ? 'EMA 21 below EMA 35' : null, f.bearMeetEma35_50 ? 'EMA 35 below EMA 50' : null, f.bearMeetEma50_100 ? 'EMA 50 below EMA 100' : null, f.bearMeetEma100_200 ? 'EMA 100 below EMA 200' : null, f.bearMeetEma200_300 ? 'EMA 200 below EMA 300' : null, f.bearMeetSt10_1_2 ? 'Supertrend(10,1) below Supertrend(10,2)' : null, f.bearMeetSt10_2_3 ? 'Supertrend(10,2) below Supertrend(10,3)' : null, f.bearMeetCloseSt ? 'Close below Supertrend(10,1) (ST above close)' : null, f.bearMeetCloseVwap ? 'Close below VWAP' : null, f.bearMeetPaneCross ? 'Pane main line below signal' : null, f.bearMeetCross ? 'Primary below twin line' : null, f.bearMeetCloseBb ? 'Close below BB middle band (middle falling)' : null, f.bearMeetClosePc ? 'Close below price channel middle line (middle falling)' : null, f.bearMeetVl ? 'Volume Line below Signal' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null, f.bearRedCandle ? 'Red candle entry (entry only while forming candle is red)' : null].filter(Boolean));
     PB_BULL_KEYS.forEach(k => { if (f.bullish && f[k]) out.push('Bullish: ' + pbrName(k)); });
     PB_BEAR_KEYS.forEach(k => { if (f.bearish && f[k]) out.push('Bearish: ' + pbrName(k)); });
+    PBG_BULL_KEYS.forEach(k => { if (f.bullish && f[k]) out.push('Bullish: ' + pbgName(k)); });
+    PBG_BEAR_KEYS.forEach(k => { if (f.bearish && f[k]) out.push('Bearish: ' + pbgName(k)); });
     OB_BULL_KEYS.forEach(k => { if (f.bullish && f[k]) out.push('Bullish: ' + obrName(k)); });
     OB_BEAR_KEYS.forEach(k => { if (f.bearish && f[k]) out.push('Bearish: ' + obrName(k)); });
     MEET_BULL_KEYS.forEach(k => { if (f.bullish && f[k]) out.push('Bullish: ' + ovlMeetName(k)); });
@@ -5954,6 +6187,19 @@ window.createAISmartTrading = function (suffix) {
     set('astStrikeCount', st.count || 3);
     set('astOptionType', st.optionType || 'both');
     const posEl = $id('astOnlyPositive'); if (posEl) posEl.checked = st.positiveOnly !== false;
+    const fastEl = $id('astFastestRising'); if (fastEl) fastEl.checked = st.fastestRising === true;
+    const fastCntEl = $id('astFastestCount');
+    if (fastCntEl) fastCntEl.value = Number.isFinite(Number(st.fastestCount)) && Math.floor(Number(st.fastestCount)) >= 1 ? Math.floor(Number(st.fastestCount)) : 3;
+    if (st.fastestRising === true) {
+      const modeEl = $id('astStrikeMode');
+      if (modeEl && modeEl.value !== 'both_atm' && modeEl.value !== 'both_atm_inc') {
+        modeEl.value = 'both_atm_inc';
+        state.strike.mode = 'both_atm_inc';
+      }
+      // +green is implied by fastest-rising: keep it force-checked on reload too.
+      if (posEl) posEl.checked = true;
+      state.strike.positiveOnly = true;
+    }
     syncStrikeUI();
     const ri = state.runIn || (state.runIn = { index: 'both', fno: 'spot', comm: 'spot', default: false });
     set('astRunInIndex', ri.index || 'both');
@@ -6069,14 +6315,47 @@ window.createAISmartTrading = function (suffix) {
 
   function syncStrikeUI() {
     const modeEl = $id('astStrikeMode'), cntEl = $id('astStrikeCount');
-    if (!modeEl || !cntEl) return;
+    if (!modeEl) return;
     const atm = modeEl.value === 'atm';
-    cntEl.disabled = atm;
-    cntEl.style.opacity = atm ? '0.35' : '1';
-    cntEl.style.pointerEvents = atm ? 'none' : '';
-    cntEl.style.background = atm ? '#0b0b1a' : '';
-    cntEl.style.color = atm ? '#666' : '';
-    cntEl.style.cursor = atm ? 'not-allowed' : '';
+    /* Fastest-rising checkbox ON: the normal "Number of Strikes" pool input is
+       inactive (the fastest-rising number drives the run) and the dedicated
+       fastest-count number input becomes active. Off: the normal count input
+       follows the ATM/near pool as before and the fastest-count input fades. */
+    const fastOn = !!(state.strike && state.strike.fastestRising === true);
+    if (cntEl) {
+      const dis = atm || fastOn;
+      cntEl.disabled = dis;
+      cntEl.style.opacity = dis ? '0.35' : '1';
+      cntEl.style.pointerEvents = dis ? 'none' : '';
+      cntEl.style.background = dis ? '#0b0b1a' : '';
+      cntEl.style.color = dis ? '#666' : '';
+      cntEl.style.cursor = dis ? 'not-allowed' : '';
+      const cntWrap = cntEl.closest ? cntEl.closest('label') : null;
+      if (cntWrap) { cntWrap.style.opacity = dis ? '0.5' : '1'; cntWrap.style.pointerEvents = dis ? 'none' : ''; }
+    }
+    const fastCntEl = $id('astFastestCount');
+    if (fastCntEl) {
+      fastCntEl.disabled = !fastOn;
+      fastCntEl.style.opacity = fastOn ? '1' : '0.35';
+      fastCntEl.style.pointerEvents = fastOn ? '' : 'none';
+      fastCntEl.style.background = fastOn ? '' : '#0b0b1a';
+      fastCntEl.style.color = fastOn ? '' : '#666';
+      fastCntEl.style.cursor = fastOn ? '' : 'not-allowed';
+      const wrap = fastCntEl.closest ? fastCntEl.closest('label') : null;
+      if (wrap) { wrap.style.opacity = fastOn ? '1' : '0.5'; wrap.style.pointerEvents = fastOn ? '' : 'none'; }
+    }
+    /* Fastest-rising already only ever picks positive (+green) LTP / LTP-change
+       strikes, so the "Only +green premium strikes" checkbox is redundant while
+       it is on: disable + fade it (it stays force-checked via
+       onFastestRisingInput / applyUniversalToUI). Off: fully interactive again. */
+    const posEl = $id('astOnlyPositive');
+    if (posEl) {
+      posEl.disabled = fastOn;
+      posEl.style.opacity = fastOn ? '0.5' : '1';
+      posEl.style.pointerEvents = fastOn ? 'none' : '';
+      const posWrap = posEl.closest ? posEl.closest('label') : null;
+      if (posWrap) { posWrap.style.opacity = fastOn ? '0.6' : '1'; posWrap.style.pointerEvents = fastOn ? 'none' : ''; }
+    }
   }
 
   function syncTimeframeUI() {
@@ -7950,6 +8229,7 @@ window.createAISmartTrading = function (suffix) {
     poolRefresh() { poolRefresh(); },
     toggleAutoSl,
     onStrikeInput() { readStrikeUI(); },
+    onFastestRisingInput() { onFastestRisingInput(); },
     onRunInInput() { readRunInUI(); },
     onTradeInInput() { readTradeInUI(); },
     onPremiumOnlyInput() { onPremiumOnlyInput(); },

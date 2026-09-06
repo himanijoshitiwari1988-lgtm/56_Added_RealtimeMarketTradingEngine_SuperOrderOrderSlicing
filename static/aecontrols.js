@@ -14,7 +14,7 @@
   const VALUE = [
     'aeLotSize', 'aeLots', 'aeMargin', 'aeTp',
     'aeTradeLimitCount', 'aeStartTradeAfter', 'aeNoTradeAfter', 'aeAutoSquareOffTime',
-    'aeOptionType', 'aeStrikeMode', 'aeStrikeCount',
+    'aeOptionType', 'aeStrikeMode', 'aeStrikeCount', 'aeFastestCount',
     'aeMoversGainers', 'aeMoversLosers'
   ];
   const CHECK = [
@@ -22,7 +22,7 @@
     'aeAutoTrail', 'aeAiTrail', 'aeTf1min', 'aeTf5min', 'aeAiTimeframe',
     'aeTradeLimit', 'aeAiTrades', 'aeStartTradeAfterEnabled', 'aeNoTradeAfterEnabled',
     'aeAutoSquareOffEnabled',
-    'aeOnlyPositive',
+    'aeOnlyPositive', 'aeFastestRising',
     'aeGroup_candlestick', 'aeGroup_elliott', 'aeGroup_indicator', 'aeGroup_pane',
     'aeGroup_symmetry', 'aeGroup_structure', 'aeGroup_atr',
     'aeMoversIndices',

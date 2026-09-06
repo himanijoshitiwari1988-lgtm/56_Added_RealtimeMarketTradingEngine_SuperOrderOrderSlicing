@@ -1,41 +1,79 @@
-CHANGES_SUMMARY for backup (SMI Ergodic Oscillator (smiio) fix - TradingView formula parity)
+CHANGES_SUMMARY for backup 45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp
+(Pane Indicator Behaviour rising-upward filters + Multi-Line Momentum Gap level gates + Rising Strike LTP pick-up + chart hardening)
 Generated: 2026-09-06 UTC
-Diff of committed work between 3df65e4 and the current working tree (HEAD 3df65e4 + the SMI Ergodic fix)
+Diff of committed work between a152c03 (backup 44) and the current working tree (this layer)
 
- static/indicators.js | 8 ++++++--
- templates/index.html | 2 +-
- 2 files changed, 7 insertions(+), 3 deletions(-)
+ static/aecontrols.js         |   4 +-
+ static/aismart.js            | 320 +++++++++++++++++++++++++++++++++++++++---
+ static/autoexperiment.v13.js | 321 ++++++++++++++++++++++++++++++++++++++++---
+ static/indicators.js         | 246 ++++++++++++++++++++++++++++++---
+ templates/index.html         |  28 +++-
+ 5 files changed, 860 insertions(+), 59 deletions(-)
 
 --- name-status ---
+M	static/aecontrols.js
+M	static/aismart.js
+M	static/autoexperiment.v13.js
 M	static/indicators.js
 M	templates/index.html
 
 --- change description ---
-1) SMI Ergodic Oscillator (static/indicators.js, id 'smiio') compute corrected to
-   match the official TradingView SMI Ergodic formula so its SMI line / Signal
-   line / Histogram crossovers line up with TradingView on the same scrip,
-   timeframe and settings:
+1) Fastest positive rising strike pick-up (AI Smart AST + Auto Experiment AE).
+   Both strategy panels get a new toolbar toggle "Pick fastest positive rising
+   LTP and LTP change strike" (astFastestRising / aeFastestRising) plus a
+   "Fastest-Rising Strikes" count input (astFastestCount / aeFastestCount,
+   default 3) that runs/trades on the N fastest positive rising strikes of the
+   decided CE/PE side instead of the fixed strike set. Enabled state and the
+   count are persisted per engine - static/aecontrols.js persistence lists
+   gain 'aeFastestCount' (VALUE) and 'aeFastestRising' (CHECK); both engines
+   wire the onFastestRisingInput handler + fastestCount selection logic.
 
-   - Before: the change series was taken from the current candle's midpoint,
-     pc = close - (high + low)/2, absChange = |close - (high + low)/2|. That
-     non-TradingView change source made SMI/Signal behaviour (crossovers and the
-     sign of the histogram vs the zero line) diverge from TradingView.
-   - After: the change series is close-close momentum exactly as TradingView
-     defines it -
-       change = price - price[previous]
-       absChange = |close - close[previous]|
-     then the same double EMA chain as before (EMA(shortlen=13) then
-     EMA(longlen=25) applied to both change and absChange),
-       SMI = 100 * tempChange / tempAbsChange
-       Signal = EMA(siglen=9) of SMI
-       Histogram = SMI - Signal
-     plotted unchanged (SMI / Signal lines + SMI - Signal histogram). Because
-     both AST (aismart.js) and AE (autoexperiment.v13.js) read every indicator
-     through IndChart.IND[id].compute(), the SMI behaviour filter rows in both
-     engines (direction-mirror group rows etc.) automatically pick up the fixed
-     series with no engine-side change.
+2) New Pane Indicator Behaviour rows + Multi-Line Momentum Gap (PBG) level
+   gates in BOTH engines (aismart.js + autoexperiment.v13.js).
+   - PBG_LIST: 12 multi-line pane indicators (MACD, PPO, SMI, TSI, Stoch RSI,
+     SMF, RSI, OBV, Fisher, Aroon, Vortex, ADX (+DI/-DI pair)) each evaluated
+     as a main-line vs signal-line level-hold gate with cmpType 'self'.
+   - Rows injected into the AST + AE bullish/bearish filter panels under a new
+     "Multi-Line Momentum Gap (level - main line above signal and gap
+     holding/widening up/down)" header (templates/index.html
+     __addNewIndicatorFilterRows), toggle keys bullPbg*/bearPbg*; filter
+     key sets (PBG_BULL_KEYS / PBG_BEAR_KEYS), summaries, pbrOn concat and log
+     name lists (pbgName) updated in both engines.
+   - evalCondAt pbgBull/pbgBear branch + the autoexperiment backtest vector
+     precompute branch implement the same pure level-hold semantics (main above
+     signal and NOT falling and signed gap NOT shrinking; bearish mirror) with
+     O(1) per-bar reads from the cached aligned series.
+   - SMI (smiio) is special-cased via cond.pair = 'v2' (the Histogram series):
+     the SMI filter is the OR of two bullish variants the user specified
+     (bearish is the exact mirror): base = SMI & Signal both above the
+     Histogram line, plus variant-1 = both lines rising and pulling further
+     away from the histogram, variant-2 = both lines rising and the histogram
+     rising (acceleration). SMI UI row label reflects the OR semantics. Other
+     11 indicators keep the plain two-line gap gate.
 
-2) templates/index.html cache-bust bumped (indicators.js?v=63 -> v=64) so the
-   corrected indicator code is served fresh to browsers (no stale JS).
+3) static/indicators.js - new Supply/Demand connected structure overlay +
+   chart renderer hardening + RSI signal EMA.
+   - New 'supplydemand' overlay: ATR-scaled ZigZag pivots (same engine as
+     autosr) rendered as ONE continuous dense polyline (pivot-to-pivot
+     interpolated at every candle index so the Line series never has holes),
+     plus a live (forming) leg to the newest candle and a dashed equal-length
+     forecast of the next leg (mirror of the last completed same-direction leg,
+     trusted only when the last two confirmed legs were balanced within eqTol).
+     Input candle array is sanitised up front (strictly ascending unique finite
+     timestamps). paneLineKeys gains supplydemand v0 'Structure'.
+   - RSI pane now emits a true Signal EMA over the RSI values (default len 9,
+     0 = off), output count fixed at 2 slots (signal slot empty when off or
+     history too short) instead of the old Wilder-smoothed optional second
+     series; labels renamed "Signal EMA length" / "Signal EMA color".
+   - Renderer hardening: on-page error badge surfaces runtime JS errors /
+     unhandled rejections on the chart; per-series creation is guarded with
+     try/catch so one bad overlay series can never abort render() before the
+     candle series gets data; setData/applyPriceLine wrapped in try/catch; and
+     applySeries passes through an optional lineStyle (dashed support).
 
-No other files changed; nothing was removed.
+4) templates/index.html cache-bust bumps so fresh JS is served:
+   indicators.js?v=64 -> v=70, autoexperiment.v13.js?v=146 -> v=152,
+   aismart.js?v=158 -> v=164.
+
+No other files changed; nothing was removed. Full unified diff in
+CHANGES_COMPLETE.patch (a152c03..working tree, doc files excluded).

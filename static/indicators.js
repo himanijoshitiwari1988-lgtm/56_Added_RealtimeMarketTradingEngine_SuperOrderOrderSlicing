@@ -2,6 +2,24 @@
 (function () {
   'use strict';
 
+  /* ---------------- on-page error surfacing ---------------- */
+  let _errBadge = null;
+  function _showErr(msg) {
+    try {
+      if (!_errBadge) {
+        _errBadge = document.createElement('div');
+        _errBadge.id = 'chartErrBadge';
+        _errBadge.style.cssText = 'position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:99999;background:#c62828;color:#fff;padding:6px 12px;font:12px/1.4 monospace;border-radius:6px;max-width:80vw;white-space:pre-wrap;box-shadow:0 2px 8px rgba(0,0,0,.4)';
+        (document.body || document.documentElement).appendChild(_errBadge);
+      }
+      _errBadge.textContent = 'Indicator error: ' + String(msg);
+      clearTimeout(_errBadge._t);
+      _errBadge._t = setTimeout(() => { try { if (_errBadge) _errBadge.remove(); } catch (e) {} }, 15000);
+    } catch (e) {}
+  }
+  window.addEventListener('error', e => _showErr((e && e.message) || e));
+  window.addEventListener('unhandledrejection', e => _showErr(((e && e.reason && e.reason.message) || (e && e.reason) || e)));
+
   /* ---------------- math helpers ---------------- */
   function smaArr(vals, p) {
     const out = new Array(vals.length).fill(null);
@@ -628,6 +646,189 @@
       }
     },
 
+    /* Connected Supply/Demand Structure Path + Equal-Length Forecast
+     * Candlestick-structure overlay. Detects the swing structure with an
+     * ATR-scaled ZigZag (identical engine to autosr so both always agree on the
+     * pivots), then renders it as ONE CONTINUOUS LINE instead of flat bands:
+     *   1. Builds up/down legs between the confirmed pivots and draws the full
+     *      structure as a single joined polyline (each confirmed leg connects
+     *      pivot-to-pivot, so demand legs and supply legs visibly build on top of
+     *      each other as one zig-zag path, no horizontal clutter).
+     *   2. Extends the polyline to the LIVE edge: the in-progress (still
+     *      unconfirmed) leg is drawn from the last confirmed pivot to the newest
+     *      candle so the structure line always ends at the current price.
+     *   3. Predicts the NEXT structure BEFORE it forms: the leg now being built
+     *      should mirror the last COMPLETED leg of the same direction (a demand
+     *      leg repeats the previous demand leg's length, a supply leg repeats the
+     *      previous supply leg's length). A dashed forecast line is drawn from
+     *      the last confirmed pivot up to that equal-length target — i.e. the
+     *      next line is added on top using the measured structure length. The
+     *      mirror is only trusted when the structure it mirrors was BALANCED
+     *      (the last two confirmed legs matched in height within eqTol%); if the
+     *      market is trending without a repeat structure the forecast hides.
+     * Equal-length = probability target, never a guarantee (structure repeats
+     * are a tendency, not a law — price can truncate or overshoot). */
+    supplydemand: {
+      id: 'supplydemand', name: 'Supply Demand', fullName: 'Supply Demand Structure (connected path + equal-length forecast)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ATR mult', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'eqTol', label: 'Mirror match tol %', def: 25, min: 1, max: 100, step: 1 }
+      ],
+      style: [
+        { key: 'structColor', label: 'Structure path', def: '#b388ff' },
+        { key: 'liveColor', label: 'Live (forming) leg', def: '#7ee0ff' },
+        { key: 'projColor', label: 'Forecast line', def: '#ffb74d' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        /* Sanitize: the chart series only accept strictly ascending unique
+           timestamps with finite values. Drop anything else up front so this
+           overlay can never feed the renderer an invalid point. */
+        if (c) {
+          const cc = [];
+          let prevT = 0;
+          for (let i = 0; i < c.length; i++) {
+            const x = c[i];
+            if (x && x.time > prevT && isFinite(x.time) && isFinite(x.open) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close)) {
+              cc.push(x);
+              prevT = x.time;
+            }
+          }
+          c = cc;
+        }
+        const n = c ? c.length : 0;
+        if (!n) return [];
+        const lw = Math.max(1, Math.round(o.lineWidth) || 1);
+        const structColor = o.structColor || '#b388ff';
+        const liveColor = o.liveColor || '#7ee0ff';
+        const projColor = o.projColor || '#ffb74d';
+        const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
+        const atrMult = Number(o.atrMult) > 0 ? Number(o.atrMult) : 2;
+        const minPct = Number(o.minPct) >= 0 ? Number(o.minPct) : 0.15;
+        const eqTol = (Number(o.eqTol) >= 0 ? Number(o.eqTol) : 25) / 100;
+        const emptySeries = () => ({ type: 'line', color: '#000000', lineWidth: lw, data: [] });
+        /* 1) ATR-scaled reversal threshold + ZigZag (same engine as autosr). */
+        const atr = wilderArr(trArr(c), atrPer);
+        const th = (i, ref) => {
+          const a = atr[i] != null && isFinite(atr[i]) ? atr[i] * atrMult : 0;
+          const p = Math.abs(ref) * (minPct / 100);
+          return Math.max(a, p);
+        };
+        const piv = [];           // {type:'high'|'low', price, idx}
+        let dir = 1, ext = c[0].high, extIdx = 0;
+        for (let i = 1; i < n; i++) {
+          const t = th(i, c[i].close);
+          if (dir >= 0) {
+            if (c[i].high > ext) { ext = c[i].high; extIdx = i; }
+            if (c[i].low <= ext - t) {
+              piv.push({ type: 'high', price: ext, idx: extIdx });
+              dir = -1; ext = c[i].low; extIdx = i;
+            }
+          } else {
+            if (c[i].low < ext) { ext = c[i].low; extIdx = i; }
+            if (c[i].high >= ext + t) {
+              piv.push({ type: 'low', price: ext, idx: extIdx });
+              dir = 1; ext = c[i].high; extIdx = i;
+            }
+          }
+        }
+        if (piv.length < 2) return [emptySeries(), emptySeries(), emptySeries()];
+        /* 2) Legs between pivots. */
+        const legs = [];
+        for (let i = 1; i < piv.length; i++) {
+          const a = piv[i - 1], b = piv[i];
+          const up = b.type === 'high';
+          legs.push({ up, h: Math.abs(b.price - a.price), a, b });
+        }
+        /* 3) Fixed output = 3 series, one per slot:
+              - slot 0 = CONNECTED STRUCTURE path (every confirmed pivot joined
+                to the next — the actual S/D zig-zag),
+              - slot 1 = LIVE (forming) leg from the last confirmed pivot to the
+                newest candle (structure line always reaches today's price),
+              - slot 2 = FORECAST of the next leg, equal-length mirror of the last
+                completed leg of the same direction (dashed, drawn on top of the
+                structure only when the mirrored structure is balanced).
+              setData() maps series by array index on every realtime tick, so the
+              count must stay constant even when a slot has nothing to show. */
+        const out = [];
+        /* A Line series must be DENSE: it needs a data point at every candle
+           index it covers. Sparse pivot-only points leave holes that the chart
+           fills with whitespace bars, and painting a whitespace bar through the
+           Line colour pass throws "Value is null" every frame — which blanks the
+           whole chart (candles included) to bare grid. So every non-empty line
+           below is emitted as contiguous interpolated points: between two
+           consecutive pivots the interpolated values sit exactly ON the straight
+           pivot-to-pivot segment, so the drawn path is identical to the old
+           sparse zig-zag, just with no gaps. */
+        const denseFrom = (aIdx, aVal, bIdx, bVal) => {
+          const d = [];
+          if (bIdx < aIdx) return d;
+          if (aIdx === bIdx) { d.push({ time: c[aIdx].time, value: aVal }); return d; }
+          const span = bIdx - aIdx;
+          for (let i = aIdx; i <= bIdx; i++) {
+            const f = (i - aIdx) / span;
+            d.push({ time: c[i].time, value: aVal + (bVal - aVal) * f });
+          }
+          return d;
+        };
+        /* Connected structure polyline: every confirmed pivot joined to the next
+           (capped so a very long history stays light). Points are interpolated
+           at every candle index so the series stays contiguous. */
+        const capPiv = piv.slice(-400);
+        const s0 = [];
+        for (let k = 1; k < capPiv.length; k++) {
+          const a = capPiv[k - 1], b = capPiv[k];
+          const seg = denseFrom(a.idx, a.price, b.idx, b.price);
+          if (k > 1) seg.shift();          /* drop the duplicate joint point */
+          for (let j = 0; j < seg.length; j++) s0.push(seg[j]);
+        }
+        out.push({ type: 'line', color: structColor, lineWidth: lw, data: s0 });
+        /* Live edge: the current, still-forming leg from the last confirmed
+           pivot to the newest candle (dense-interpolated, same geometry). */
+        const lastP = piv[piv.length - 1];
+        const cur = c[n - 1];
+        out.push({
+          type: 'line', color: liveColor, lineWidth: lw,
+          data: denseFrom(lastP.idx, lastP.price, n - 1, cur.close)
+        });
+        /* Forecast: the leg being built now should repeat the length of the last
+           COMPLETED leg of the SAME direction (legs alternate, so that mirror is
+           the leg two steps back = legs[len-2]). Trust the mirror only when the
+           completed structure it sits in was balanced (the last two confirmed
+           legs matched in height within eqTol). The dashed line goes from the
+           last confirmed pivot to the equal-length target at the live edge —
+           i.e. the NEXT line is drawn on top using the measured structure
+           length, and it self-invalidates if price breaks the source pivot. */
+        const lastLeg = legs.length ? legs[legs.length - 1] : null;
+        let mirrorOk = false;
+        if (lastLeg && legs.length >= 2) {
+          const prevLeg = legs[legs.length - 2];
+          const big = Math.max(prevLeg.h, lastLeg.h) || 1;
+          mirrorOk = (Math.abs(prevLeg.h - lastLeg.h) / big) <= eqTol;
+        } else if (lastLeg) {
+          mirrorOk = true;          /* only one leg ever confirmed: mirror itself */
+        }
+        if (mirrorOk && lastLeg) {
+          const wantUp = !lastLeg.up;               /* next leg always flips */
+          const guess = legs.length >= 2 ? legs[legs.length - 2].h : lastLeg.h;
+          const target = wantUp ? lastP.price + guess : lastP.price - guess;
+          if (isFinite(target)) {
+            out.push({
+              type: 'line', color: projColor, lineWidth: lw, lineStyle: 2,
+              data: denseFrom(lastP.idx, lastP.price, n - 1, target)
+            });
+          } else {
+            out.push(emptySeries());
+          }
+        } else {
+          out.push(emptySeries());
+        }
+        return out;
+      }
+    },
+
     bbw: {
       id: 'bbw', name: 'BBW', fullName: 'Bollinger Band Width', cat: 'Volume', type: 'pane', format: 'decimal',
       inputs: [
@@ -977,11 +1178,11 @@
       id: 'rsi', name: 'RSI', fullName: 'Relative Strength Index', cat: 'Momentum', type: 'pane', format: 'percent',
       inputs: [
         { key: 'length', label: 'Length', def: 14, min: 1, max: 200, step: 1 },
-        { key: 'smoothLength', label: 'Smoothed MA length', def: 0, min: 0, max: 200, step: 1 }
+        { key: 'smoothLength', label: 'Signal EMA length', def: 9, min: 0, max: 200, step: 1 }
       ],
       style: [
         { key: 'color', label: 'Color', def: '#e040fb' },
-        { key: 'smoothColor', label: 'Smoothed MA color', def: '#ffca28' },
+        { key: 'smoothColor', label: 'Signal EMA color', def: '#ffca28' },
         { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
       ],
       compute(c, o) {
@@ -1002,15 +1203,21 @@
           rsiData.push({ time: c[i].time, value: v });
         }
         const out = [{ type: 'line', color: o.color, lineWidth: o.lineWidth, data: rsiData }];
-        if (o.smoothLength > 0) {
-          const sm = wilderArr(vals, o.smoothLength);
-          const sData = [];
+        /* Signal EMA: a plain EMA over the RSI values (true smoothed-EMA
+           signal, distinct from the Wilder-smoothed RSI itself). On by default
+           (len 9) so the pane shows RSI + signal like OBV; len 0 turns it off.
+           The pane realtime loop maps series by array index, so the output
+           count stays FIXED at 2 — the signal slot is simply empty when off or
+           when history is still too short to seed the EMA. */
+        const sData = [];
+        if (o.smoothLength > 0 && vals.length >= o.smoothLength) {
+          const sm = emaArr(vals, o.smoothLength);
           for (let i = 0; i < sm.length; i++) {
             if (sm[i] == null || isNaN(sm[i])) continue;
             sData.push({ time: times[i], value: sm[i] });
           }
-          out.push({ type: 'line', color: o.smoothColor, lineWidth: o.lineWidth, data: sData });
         }
+        out.push({ type: 'line', color: o.smoothColor, lineWidth: o.lineWidth, data: sData });
         return out;
       }
     },
@@ -1927,6 +2134,7 @@
   function applySeries(host, o, fmtKind) {
     const s = host.addSeries(o.type === 'histogram' ? LightweightCharts.HistogramSeries : LightweightCharts.LineSeries, {
       color: o.color || '#888', lineWidth: o.lineWidth || 1,
+      ...(o.lineStyle != null ? { lineStyle: o.lineStyle } : {}),
       ...(o.type === 'histogram' ? { base: 0 } : {}),
       ...(fmtKind ? { priceFormat: { type: 'custom', formatter: v => fmtReading(v, fmtKind) } } : {})
     });
@@ -1963,14 +2171,19 @@
     chart.subscribeCrosshairMove(onCrosshair);
     hookRangeSync(chart);
 
-    indicators.forEach(ind => {
-      const out = computeFor(ind);
-      if (ind.def.type === 'pane') {
-        ind._series = createPaneChart(ind, out);
-        return;
-      }
-      ind._series = out.map(o => applySeries(chart, o));
-    });
+      indicators.forEach(ind => {
+        const out = computeFor(ind);
+        if (ind.def.type === 'pane') {
+          ind._series = createPaneChart(ind, out);
+          return;
+        }
+        /* Guarded per-series creation: an overlay whose series fails to attach
+           must never abort render() BEFORE the candle series gets its data
+           (a single bad series used to blank the whole chart to bare grid). */
+        ind._series = out.map(o => {
+          try { return applySeries(chart, o); } catch (e) { return null; }
+        });
+      });
 
     const saneC = candles.filter(x => x && isFinite(x.open) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close) && isFinite(x.time));
     candleSeries.setData(saneC.map(x => ({ time: x.time, open: x.open, high: x.high, low: x.low, close: x.close })));
@@ -2047,8 +2260,8 @@
       const out = computeFor(ind);
       ind._series.forEach((s, i) => {
         if (!s || !out[i]) return;
-        s.setData(out[i].data);
-        applyPriceLine(s, out[i]);
+        try { s.setData(out[i].data); } catch (e) { return; }
+        try { applyPriceLine(s, out[i]); } catch (e) {}
       });
       if (ind._alertLines && ind._alertLines.length && ind._series[0]) applyAlertLines(ind._series[0], ind);
     });
@@ -2113,6 +2326,7 @@
       case 'ppo': return [['v0', 'PPO'], ['v1', 'Signal'], ['v2', 'Histogram']];
       case 'pc': return [['v0', 'Upper'], ['v1', 'Middle'], ['v2', 'Lower']];
       case 'autosr': return [['v0', 'Resistance'], ['v1', 'Support']];
+      case 'supplydemand': return [['v0', 'Structure']];
       case 'obv': return [['v0', 'OBV'], ['v1', 'Smoothed MA']];
       case 'smf': return [['v0', 'SMF'], ['v1', 'Signal'], ['v2', 'Histogram']];
       case 'vl': return [['v0', 'Volume Line'], ['v1', 'Signal']];

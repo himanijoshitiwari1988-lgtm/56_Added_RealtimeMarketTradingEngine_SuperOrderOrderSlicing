@@ -1242,6 +1242,10 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               <input type="number" id="astStrikeCount" value="3" min="0" step="1" style="width:44px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onStrikeInput()">
             </label>
             <label style="font-size:9px;color:#26a69a;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astOnlyPositive" checked onchange="AISmartTrading.onStrikeInput()" style="accent-color:#00d4aa"> Only +green premium strikes (skip minus LTP / minus LTP change)</label>
+            <label style="font-size:9px;color:#26a69a;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFastestRising" onchange="AISmartTrading.onFastestRisingInput()" style="accent-color:#00d4aa"> Pick fastest positive rising LTP and LTP change strike</label>
+            <label id="astFastestCountWrap" style="font-size:9px;color:#26a69a;margin-right:8px;display:flex;align-items:center;gap:3px" title="How many fastest positive rising strikes (of the decided CE/PE side) to run and trade on. Active only when 'Pick fastest...' is checked.">Fastest-Rising Strikes
+              <input type="number" id="astFastestCount" value="3" min="1" step="1" style="width:44px;background:#0b0b1a;border:1px solid #2d2d50;color:#666;border-radius:3px;padding:3px 5px;opacity:0.35" oninput="AISmartTrading.onStrikeInput()">
+            </label>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center;gap:6px">
             <label style="font-size:10px;color:#ffd700;display:flex;align-items:center;gap:5px;font-weight:bold;background:#1a1a35;border:1px solid #ffd700;border-radius:4px;padding:4px 10px;cursor:pointer"><input type="checkbox" id="astPremiumOnly" onchange="AISmartTrading.onPremiumOnlyInput()" style="accent-color:#ffd700"> Premium chart only (run + trade)</label>
@@ -2019,6 +2023,10 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
               <input type="number" id="aeStrikeCount" value="3" min="0" step="1" style="width:44px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AutoExperiment.onStrikeInput()">
             </label>
             <label style="font-size:9px;color:#26a69a;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeOnlyPositive" checked onchange="AutoExperiment.onStrikeInput()" style="accent-color:#00d4aa"> Only +green premium strikes (skip minus LTP / minus LTP change)</label>
+            <label style="font-size:9px;color:#26a69a;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFastestRising" onchange="AutoExperiment.onFastestRisingInput()" style="accent-color:#00d4aa"> Pick fastest positive rising LTP and LTP change strike</label>
+            <label id="aeFastestCountWrap" style="font-size:9px;color:#26a69a;margin-right:8px;display:flex;align-items:center;gap:3px" title="How many fastest positive rising strikes (of the decided CE/PE side) to run and trade on. Active only when 'Pick fastest...' is checked.">Fastest-Rising Strikes
+              <input type="number" id="aeFastestCount" value="3" min="1" step="1" style="width:44px;background:#0b0b1a;border:1px solid #2d2d50;color:#666;border-radius:3px;padding:3px 5px;opacity:0.35" oninput="AutoExperiment.onStrikeInput()">
+            </label>
           </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center;gap:6px">
             <label style="font-size:10px;color:#ffd700;display:flex;align-items:center;gap:5px;font-weight:bold;background:#1a1a35;border:1px solid #ffd700;border-radius:4px;padding:4px 10px;cursor:pointer"><input type="checkbox" id="aePremiumOnly" onchange="AutoExperiment.onPremiumOnlyInput()" style="accent-color:#ffd700"> Premium chart only (run + trade)</label>
@@ -2766,7 +2774,7 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
 </div>
 
 <script src="/static/vlcore.js?v=8"></script>
-<script src="/static/indicators.js?v=64"></script>
+<script src="/static/indicators.js?v=70"></script>
 <script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
@@ -6323,10 +6331,10 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/trendconfirm.js?v=1"></script>
 <script src="/static/papertrade.js?v=66"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=146"></script>
+<script src="/static/autoexperiment.v13.js?v=152"></script>
 <script src="/static/indextrend.js?v=3"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=158"></script>
+<script src="/static/aismart.js?v=164"></script>
 <script src="/static/paperrun.js?v=25"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6382,15 +6390,29 @@ window.__addNewIndicatorFilterRows = function () {
     var cap = side === 'Bullish' ? 'Bull' : 'Bear';
     var upWord = side === 'Bullish' ? 'increasing upward' : 'increasing downward';
     var meetWord = side === 'Bullish' ? 'above' : 'below';
+    var gapWord = side === 'Bullish' ? 'holding/widening upward' : 'holding/widening downward';
     var divs = content.querySelectorAll('div');
     var g2 = byText(divs, 'Pane Indicator Behaviour - Group 2');
     var research = byText(divs, 'Research stream');
     var pane = [['Cmf', 'CMF'], ['Tsi', 'TSI'], ['Cci', 'CCI'], ['Fisher', 'Fisher'], ['Stochrsi', 'Stoch RSI'], ['Sqzmom', 'Squeeze Mom.'], ['Aroon', 'Aroon'], ['Vortex', 'Vortex'], ['Elderforce', 'Force Index']];
+    var pbg = [['Macd', 'MACD'], ['Ppo', 'PPO'], ['Smiio', 'SMI'], ['Tsi', 'TSI'], ['Stochrsi', 'Stoch RSI'], ['Smf', 'SMF'], ['Rsi', 'RSI'], ['Obv', 'OBV'], ['Fisher', 'Fisher'], ['Aroon', 'Aroon'], ['Vortex', 'Vortex'], ['Adx', 'ADX (+DI/-DI)']];
     var obr = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['SenkouA', 'Ichimoku Senkou A'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
     var meet = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
     if (g2) {
       var frag = document.createDocumentFragment();
       pane.forEach(function (p) { frag.appendChild(makeRow(prefix + 'Filter' + cap + 'Pbr' + p[0], handler, p[1] + ' line ' + upWord)); });
+      frag.appendChild(makeHead('Multi-Line Momentum Gap (level - main line above signal and gap holding/widening ' + (side === 'Bullish' ? 'up' : 'down') + ')'));
+      pbg.forEach(function (p) {
+        var lbl;
+        if (p[0] === 'Smiio') {
+          lbl = side === 'Bullish'
+            ? p[1] + ' & Signal above Histogram, both rising (level - OR of widening / histogram rising)'
+            : p[1] + ' & Signal below Histogram, both falling (level - OR of widening / histogram falling)';
+        } else {
+          lbl = p[1] + ' gap ' + gapWord + ' (level)';
+        }
+        frag.appendChild(makeRow(prefix + 'Filter' + cap + 'Pbg' + p[0], handler, lbl));
+      });
       g2.parentNode.insertBefore(frag, g2);
     }
     if (research) {
