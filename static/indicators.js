@@ -2008,6 +2008,7 @@
      realtime updates and corrupting the zoom. */
   let rangeSyncing = false;
   let rangeSyncTimer = null;
+  let crosshairBusy = false;
   function syncRanges(fromChart) {
     if (rangeSyncing) return;
     const from = fromChart || chart;
@@ -2022,12 +2023,28 @@
     let r = null;
     try { r = from.timeScale().getVisibleRange(); } catch (e) { return; }
     if (!r) return;
+    /* Copy the SOURCE chart's pixels-per-bar to every target. Time-range sync
+       alone aligns the windows' dates, but pixel alignment also needs identical
+       bar widths — the main chart is anchored at barSpacing 8 while each pane
+       chart auto-fits its own data, so identical times could land at different
+       x pixels. Only the main chart is authoritative for spacing (a pane's
+       "fit all" reset must never stretch or squash the main view). */
+    let barSpacing = null;
+    if (from === chart) {
+      try {
+        const so = from.timeScale().options();
+        if (so && isFinite(so.barSpacing)) barSpacing = so.barSpacing;
+      } catch (e) { barSpacing = null; }
+    }
     rangeSyncing = true;
     if (rangeSyncTimer) clearTimeout(rangeSyncTimer);
     rangeSyncTimer = setTimeout(() => { rangeSyncing = false; }, 80);
     const targets = [chart].concat(paneCharts.map(p => p.chart)).filter(c => c && c !== from);
     targets.forEach(t => {
-      try { t.timeScale().setVisibleRange(r); } catch (e) {}
+      try {
+        if (barSpacing != null) t.timeScale().applyOptions({ barSpacing });
+        t.timeScale().setVisibleRange(r);
+      } catch (e) {}
     });
   }
 
@@ -2080,6 +2097,13 @@
       chart.timeScale().applyOptions({ barSpacing: 8, rightOffset: 2 });
       chart.timeScale().setVisibleLogicalRange({ from: last - n + 1, to: last });
     } catch (e) {}
+    /* Repositioning the main chart alone leaves every pane on its PREVIOUS
+       visible window (setData() synced them to the old range). After a
+       symbol/timeframe load the main chart jumps to the recent bars but the
+       panes stay frozen on stale time windows until the next pan/zoom/realtime
+       tick. Push the new window to the panes immediately so indicator subcharts
+       always track the candles above them. */
+    syncRanges(chart);
   }
 
   /* During realtime ticks new bars are appended at the right edge. Keep the
@@ -2239,6 +2263,7 @@
     const sub = makeChart({ container: pc, width: pc.clientWidth || 800, height: pc.clientHeight || 130 });
     paneCharts.push({ uid: ind.uid, def: ind.def, chart: sub, box, head, paneEl: pc });
     hookRangeSync(sub);
+    sub.subscribeCrosshairMove(p => onPaneCrosshair(p, sub));
     const series = out.map(o => applySeries(sub, o, ind.def.format));
     if (ind._alertLines && ind._alertLines.length) applyAlertLines(series[0], ind);
     return series;
@@ -2259,7 +2284,17 @@
       if (!ind._series) return;
       const out = computeFor(ind);
       ind._series.forEach((s, i) => {
-        if (!s || !out[i]) return;
+        if (!s) return;
+        /* No output for this series on the CURRENT data (symbol/timeframe
+           switched to a dataset where the indicator produces nothing yet, e.g.
+           warmup longer than the fetched bars). Blank it instead of silently
+           keeping the previous symbol/timeframe's line on screen - that stale
+           line was why pane indicators looked like they did not change when the
+           timeframe switched. */
+        if (!out[i] || !out[i].data) {
+          try { s.setData([]); } catch (e) {}
+          return;
+        }
         try { s.setData(out[i].data); } catch (e) { return; }
         try { applyPriceLine(s, out[i]); } catch (e) {}
       });
@@ -2286,14 +2321,59 @@
 
   function rebuild() { render(); }
 
-  function onCrosshair(param) {
-    if (!param.time) {
-      if (currentReadingIndex !== -1) { currentReadingIndex = -1; updateLegend(); }
-      return;
+  /* Every chart (main + each pane) is its own LightweightCharts instance with
+     an independent time scale and crosshair. Without sharing, hovering the main
+     chart only draws a marker on the main chart and the pane below keeps no
+     indication of the hovered bar - the user asked for ONE crosshair across the
+     whole column so the indicator pane marks the exact same time as the candles
+     above it. Crosshair state is therefore broadcast: whichever chart the mouse
+     is over, the hovered TIME is mirrored onto every other chart with
+     setCrosshairPosition (pane charts keep their own right price scale, so the
+     marker price is taken from each target's visible price range - only the
+     time drives the vertical alignment). setCrosshairPosition does not fire
+     subscribeCrosshairMove, so the broadcast cannot echo back. */
+  function allCharts() {
+    return [chart].concat(paneCharts.map(p => p.chart)).filter(Boolean);
+  }
+  function clearAllCrosshairs() {
+    allCharts().forEach(c => { try { if (c.clearCrosshairPosition) c.clearCrosshairPosition(); } catch (e) {} });
+  }
+  function moveChartCrosshairTo(c, time) {
+    if (!c) return;
+    try {
+      if (time == null) { if (c.clearCrosshairPosition) c.clearCrosshairPosition(); return; }
+      let mid = 0;
+      try {
+        const ps = c.priceScale('right');
+        const vr = ps.getVisibleRange ? ps.getVisibleRange() : null;
+        if (vr && isFinite(vr.from) && isFinite(vr.to) && vr.to > vr.from) mid = (vr.from + vr.to) / 2;
+      } catch (e) { mid = 0; }
+      c.setCrosshairPosition(mid, mid, time);
+    } catch (e) {}
+  }
+  function broadcastCrosshair(param, src) {
+    if (crosshairBusy) return;
+    const time = param && param.time != null ? param.time : null;
+    crosshairBusy = true;
+    try {
+      if (time == null) {
+        if (currentReadingIndex !== -1) { currentReadingIndex = -1; updateLegend(); }
+        allCharts().forEach(c => { if (c && c !== src) moveChartCrosshairTo(c, null); });
+        return;
+      }
+      const idx = candles.findIndex(c => c.time === time);
+      currentReadingIndex = idx;
+      updateLegend();
+      allCharts().forEach(c => { if (c && c !== src) moveChartCrosshairTo(c, time); });
+    } finally {
+      crosshairBusy = false;
     }
-    const idx = candles.findIndex(c => c.time === param.time);
-    currentReadingIndex = idx;
-    updateLegend();
+  }
+  function onCrosshair(param) {
+    broadcastCrosshair(param, chart);
+  }
+  function onPaneCrosshair(param, sub) {
+    broadcastCrosshair(param, sub);
   }
 
   function computeReadings(ind) {
@@ -3008,7 +3088,15 @@
       this._ocLines = {};
       this.clearDirOverlay();
       setData();
-      if (fit && chart) fitToRecent();
+      /* Every setCandles is a NEW dataset (symbol/timeframe switch or refresh).
+         fitToRecent() already anchors the main chart on the recent bars; also
+         re-sync the pane charts' windows + bar spacing so the indicator panes
+         below track the new candles instead of the previous symbol/timeframe.
+         The stale crosshair is cleared so no ghosted time marker survives a
+         switch, and the hovered-bar legend reading resets. */
+      currentReadingIndex = -1;
+      clearAllCrosshairs();
+      if (chart) { if (fit) fitToRecent(); syncRanges(chart); }
       if (realtimeOn) startRealtime();
     },
     resize() { resizeAll(); },

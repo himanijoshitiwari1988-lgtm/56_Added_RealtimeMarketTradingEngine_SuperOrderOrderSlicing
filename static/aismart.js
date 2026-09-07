@@ -94,15 +94,15 @@ window.createAISmartTrading = function (suffix) {
          Williams %R, BB%b, OBV, PVT, A/D, SMF. Bullish list = main line
          increasing upward; Bearish list = main line increasing downward.
          Flag key = bullPbr<Ind> / bearPbr<Ind>.
-        Group 2 (trend strength): ADX, BBW, ATR. The line answers STRENGTH, not
+         Group 2 (trend strength): BBW, ATR. The line answers STRENGTH, not
           direction (rising = strong trend / expanding bands / wide candles), so
           BOTH the Bullish and Bearish list carry the SAME single toggle
           (<side>Pbr<Ind>Up = line increasing). No decreasing variant.
         Group 3 (participation): VolOsc. Volume participation only (rising =
           volume picking up). Same single rising toggle in both lists like
           Group 2. */
-  const PB_G1 = ['macd', 'ppo', 'ao', 'smiio', 'dpo', 'rsi', 'mfi', 'uo', 'williamsR', 'bbpct', 'obv', 'pvt', 'ad', 'smf', 'cmf', 'tsi', 'cci', 'fisher', 'stochrsi', 'sqzmom', 'aroon', 'vortex', 'elderforce'];
-  const PB_G2 = ['adx', 'bbw', 'atr', 'volosc'];
+  const PB_G1 = ['macd', 'ppo', 'ao', 'smiio', 'dpo', 'rsi', 'mfi', 'uo', 'williamsR', 'bbpct', 'obv', 'pvt', 'ad', 'smf', 'cmf', 'tsi', 'cci', 'fisher', 'stochrsi', 'sqzmom', 'aroon', 'elderforce'];
+  const PB_G2 = ['bbw', 'atr', 'volosc'];
   const PB_LABEL = {
     macd: 'MACD', ppo: 'PPO', ao: 'AO', smiio: 'SMI', dpo: 'DPO', rsi: 'RSI', mfi: 'MFI', uo: 'UO',
     williamsR: 'Williams %R', bbpct: 'BB%b', obv: 'OBV', pvt: 'PVT', ad: 'A/D', smf: 'SMF',
@@ -137,10 +137,11 @@ window.createAISmartTrading = function (suffix) {
          NOT required, and a pinned steady gap stays active, e.g. Aroon Up
          holding above Aroon Down for the whole trend).
        - bear: mirror - main below signal, main not rising, gap not rising.
-     `v`/`s` pick the two series of the indicator (default main v0 + signal v1;
-     ADX is special-cased to the +DI/-DI pair because its v0 is the strength
-     gauge, not a direction line). Evaluated through the cached alignedSeries
-     path like every other PB gate - O(1) per bar, no extra scans. */
+     `v`/`s` pick the two series of the indicator (default main v0 + signal v1).
+     Evaluated through the cached alignedSeries path like every other PB gate -
+     O(1) per bar, no extra scans. ADX is special-cased with its own custom
+     function below: the purple ADX gauge (v0) has to be trending while the
+     +DI (v1) / -DI (v2) pair decides the direction. */
   const PBG_LIST = [
     { id: 'macd', name: 'MACD', s: { fast: 12, slow: 26, signal: 9 } },
     { id: 'ppo', name: 'PPO', s: { fast: 12, slow: 26, signal: 9 } },
@@ -153,7 +154,7 @@ window.createAISmartTrading = function (suffix) {
     { id: 'fisher', name: 'Fisher', s: { length: 9 } },
     { id: 'aroon', name: 'Aroon', s: { length: 25 } },
     { id: 'vortex', name: 'Vortex', s: { length: 14 } },
-    { id: 'adx', name: 'ADX (+DI/-DI)', s: { length: 14 }, v: 'v1', c: 'v2' }
+    { id: 'adx', name: 'ADX', s: { length: 14 } }
   ];
   const PBG_BULL_KEYS = PBG_LIST.map(d => 'bullPbg' + pbCap(d.id));
   const PBG_BEAR_KEYS = PBG_LIST.map(d => 'bearPbg' + pbCap(d.id));
@@ -221,6 +222,10 @@ window.createAISmartTrading = function (suffix) {
   }
   /* Readable name of a Multi-Line Momentum Gap (level) flag for filter logs. */
   function pbgName(k) {
+    if (k === 'bullPbgVortex') return 'Vortex VI+ holds above VI- with VI+ rising & VI- falling (gap widening, level)';
+    if (k === 'bearPbgVortex') return 'Vortex VI- holds above VI+ with VI- rising & VI+ falling (gap widening, level)';
+    if (k === 'bullPbgAdx') return 'ADX rising, +DI above -DI and the +DI/-DI gap widening (level)';
+    if (k === 'bearPbgAdx') return 'ADX falling, +DI below -DI and the +DI/-DI gap widening (level)';
     const raw = k.replace(/^(bull|bear)Pbg/, '');
     const d = PBG_LIST.filter(x => x.id.toLowerCase() === raw.toLowerCase())[0];
     const nm = d ? d.name : raw;
@@ -942,14 +947,64 @@ window.createAISmartTrading = function (suffix) {
        SIGNAL series (level-hold: no fresh cross required). Bullish fires while
        main sits above the signal and both the main series and the signed gap
        (main - signal) are holding or widening; bearish is the exact mirror.
-       ADX special-case: its v0 is the strength gauge, not a direction line, so
-       the +DI/-DI pair (v1/v2) is used instead. All evaluated with the
-       STRONG-TREND default settings of each pane on the strategy's candle
-       chart through the cached alignedSeries path - O(1) at the decision bar. */
+       Vortex and ADX are special-cased below with their own custom functions.
+       All evaluated with the STRONG-TREND default settings of each pane on the
+       strategy's candle chart through the cached alignedSeries path - O(1) at
+       the decision bar. */
     if (f.bullish || f.bearish) {
       PBG_LIST.forEach(d => {
         const vk = d.v || 'v0', ck = d.c || 'v1';
         const pair = d.pair || '';
+        if (d.id === 'vortex') {
+          /* Vortex exception - the generic main-vs-signal PBG gate only asks
+             "main not falling + gap not shrinking", but the Vortex pair (VI+ and
+             VI-) is a competing-direction duo whose trend signal must show BOTH
+             lines committed to the trend. Replaced with the user-specified
+             function (still level-hold / "Meet" semantics - no fresh cross
+             required, it stays active on every bar while the relationship
+             holds): v0 = VI+ (positive directional movement) and v1 = VI-
+             (negative directional movement).
+               bull: VI+ sits ABOVE VI- (already crossed, holds) AND VI+ is
+                     rising AND VI- is falling AND the (signed) gap is widening
+                     (implied by the two slopes - kept for clarity).
+               bear: exact mirror - VI- sits above VI+, VI+ falls, VI- rises. */
+          if (f.bullish && f.bullPbgVortex) {
+            out.push(cond({ indId: 'vortex', indSettings: d.s, valueKey: 'v0', logic: 'gt', cmpType: 'indicator', cmpIndId: 'vortex', cmpSettings: d.s, cmpValueKey: 'v1' }));
+            out.push(cond({ indId: 'vortex', indSettings: d.s, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+            out.push(cond({ indId: 'vortex', indSettings: d.s, valueKey: 'v1', logic: 'incDown', cmpType: 'number' }));
+          }
+          if (f.bearish && f.bearPbgVortex) {
+            out.push(cond({ indId: 'vortex', indSettings: d.s, valueKey: 'v0', logic: 'lt', cmpType: 'indicator', cmpIndId: 'vortex', cmpSettings: d.s, cmpValueKey: 'v1' }));
+            out.push(cond({ indId: 'vortex', indSettings: d.s, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+            out.push(cond({ indId: 'vortex', indSettings: d.s, valueKey: 'v1', logic: 'incUp', cmpType: 'number' }));
+          }
+          return;
+        }
+        if (d.id === 'adx') {
+          /* ADX custom function - replaces the old Group-2 "ADX line increasing"
+             toggle (removed) and the generic +DI/-DI gap-hold. The ADX pane has
+             three lines: the purple ADX gauge (v0), +DI (v1, green) and -DI
+             (v2, red). Bullish fires while the ADX gauge is RISING, +DI holds
+             ABOVE -DI ("crossed above" - level semantics, a fresh cross event is
+             NOT required, it stays active on every bar while the relationship
+             holds) AND the +DI/-DI gap is INCREASING (widening). Bearish is the
+             exact mirror: ADX gauge falling, +DI below -DI, and the +DI/-DI gap
+             still widening as -DI pulls away. Built purely from existing conds
+             (incUp/incDown, crossAbove/crossBelow, gapUp) so the cached
+             alignedSeries/trendAt path and the AE signal vectorizer handle it
+             unchanged. */
+          if (f.bullish && f.bullPbgAdx) {
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'crossAbove', cmpType: 'self', cmpValueKey: 'v2' }));
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'gapUp', cmpType: 'self', cmpValueKey: 'v2' }));
+          }
+          if (f.bearish && f.bearPbgAdx) {
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'crossBelow', cmpType: 'self', cmpValueKey: 'v2' }));
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'gapUp', cmpType: 'self', cmpValueKey: 'v2' }));
+          }
+          return;
+        }
         if (f.bullish && f['bullPbg' + pbCap(d.id)]) out.push(cond({ indId: d.id, indSettings: d.s, valueKey: vk, logic: 'pbgBull', cmpType: 'self', cmpValueKey: ck, pair: pair }));
         if (f.bearish && f['bearPbg' + pbCap(d.id)]) out.push(cond({ indId: d.id, indSettings: d.s, valueKey: vk, logic: 'pbgBear', cmpType: 'self', cmpValueKey: ck, pair: pair }));
       });
