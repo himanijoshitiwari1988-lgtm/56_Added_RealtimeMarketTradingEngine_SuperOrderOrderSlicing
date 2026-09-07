@@ -35,6 +35,30 @@ broker = DhanBroker()
 fetcher = None
 sock = Sock(app)
 
+_IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def _ist_now(dt=None):
+    dt = dt or datetime.utcnow()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_IST_TZ)
+
+
+def _ist_clock(dt=None):
+    """Wall-clock IST in 12-hour 'hh:mm:ss AM/PM' for log readouts."""
+    s = _ist_now(dt)
+    hh = s.hour % 12
+    if hh == 0:
+        hh = 12
+    return "%02d:%02d:%02d %s" % (hh, s.minute, s.second, "AM" if s.hour < 12 else "PM")
+
+
+def _ist_clock_dt(dt=None):
+    """IST date + 12-hour clock 'YYYY-MM-DD hh:mm:ss AM/PM' for log headers."""
+    s = _ist_now(dt)
+    return "%04d-%02d-%02d %s" % (s.year, s.month, s.day, _ist_clock(s))
+
 
 # ---------------------------------------------------------------------------
 # Market-Off Candle Simulator
@@ -1278,7 +1302,7 @@ def _ws_on_tick(feed, data):
             _NIFTY_TICKS += 1
         if typ == "Ticker Data" and key.startswith("IDX_I:") and time.time() - _FEED_LAT_LAST > 30:
             _FEED_LAT_LAST = time.time()
-            logger.info("ws feed latency sample: LTT=%s now=%s nifty_ticks/30s=%d", t.get("LTT"), datetime.utcnow().strftime("%H:%M:%S"), _NIFTY_TICKS)
+            logger.info("ws feed latency sample: LTT=%s now=%s nifty_ticks/30s=%d", t.get("LTT"), _ist_clock(), _NIFTY_TICKS)
             _NIFTY_TICKS = 0
         _ws_apply_ltp(key, ltp)
         # Quote/Full packets also carry Volume; Full adds top-of-book Bid/Ask
@@ -2972,7 +2996,7 @@ def api_client_error():
     out_path = "/tmp/opencode/client_errors.log"
     try:
         with open(out_path, "a") as fh:
-            fh.write("=== %s url=%s ua=%s ===\n" % (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), data.get("url", ""), (data.get("ua") or "")[:80]))
+            fh.write("=== %s url=%s ua=%s ===\n" % (_ist_clock_dt(), data.get("url", ""), (data.get("ua") or "")[:80]))
             for e in errs:
                 fh.write("%s | msg=%s | %s | line=%s col=%s | stack=%s\n" % (e.get("type"), e.get("msg"), e.get("src"), e.get("line"), e.get("col"), e.get("stack")))
     except Exception:
@@ -5344,8 +5368,21 @@ class _BoundedThreadWSGIServer(ThreadedWSGIServer):
         super().process_request_thread(request, client_address)
 
 
+class _IST12Formatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        s = _ist_now()
+        hh = s.hour % 12
+        if hh == 0:
+            hh = 12
+        return "%04d-%02d-%02d %02d:%02d:%02d %s" % (
+            s.year, s.month, s.day, hh, s.minute, s.second,
+            "AM" if s.hour < 12 else "PM")
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    for h in logging.getLogger().handlers:
+        h.setFormatter(_IST12Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     server = _BoundedThreadWSGIServer("0.0.0.0", 8081, app)
     server.serve_forever()

@@ -104,9 +104,34 @@
     }
   }
 
-  /* Seed the series once from the server (this also subscribes the symbol on
-     the server WS feed so live ticks start flowing). After seeding every read
-     is purely from memory. */
+  /* Normalise server-fed bar timestamps onto the real wall-clock epoch grid.
+     The REST candle feed labels IST wall-clock minutes as if they were UTC, so
+     every bar time arrives ~+5.5h in the FUTURE relative to Date.now() while
+     the on-screen chart (which normalises on ingest) paints real epochs. If the
+     store kept the raw feed times, its trailing bar would never compare equal
+     to the current wall-clock minute and the engine would keep analysing a bar
+     a minute (or more) BEHIND the realtime chart - the visible analysis-vs-chart
+     mismatch. Aligning the series to Date.now() makes FastLive's bar grid, and
+     therefore every indicator and the roll behaviour, identical to the chart's. */
+  function normalizeFeed(arr, tf) {
+    if (!arr || !arr.length) return arr;
+    var barSec = barMins(tf) * 60;
+    var last = arr[arr.length - 1];
+    if (!last || !(last.time > 0)) return arr;
+    var nowSec = Date.now() / 1000;
+    var realBucket = Math.floor(nowSec / barSec) * barSec;
+    var ahead = last.time - realBucket;
+    if (!(ahead > 600)) return arr; // already real-epoch (or sane) feed
+    var out = arr.slice();
+    for (var i = 0; i < out.length; i++) {
+      if (out[i] && out[i].time > 0) out[i].time = out[i].time - ahead;
+    }
+    return out;
+  }
+
+  /* Seed the series once from the server (this also subscribes the symbol on the
+     server WS feed so live ticks start flowing). After seeding every read is
+     purely from memory. */
   function seed(sym, tf) {
     var e = entryFor(sym, tf);
     if (e.seedP) return e.seedP;
@@ -120,6 +145,7 @@
       if ((!arr || !arr.length) && window.HftPool && HftPool.getCandles) {
         try { arr = await HftPool.getCandles(sym, tf, 0, 0); } catch (err) { arr = null; }
       }
+      arr = normalizeFeed(arr, tf);
       if (arr && arr.length) {
         e.candles = arr.slice();
         if (e.candles.length > MAX_CANDLES) e.candles = e.candles.slice(e.candles.length - MAX_CANDLES);
@@ -135,32 +161,36 @@
 
   /* Patch the forming bar with the current live LTP so a read always returns
      the freshest price even between WS batches. Sub-microsecond; only re-slides
-     the array when the close actually moved. When the live quote's server
-     timestamp has already rolled into the next candle bucket (a sparsely-
-     trading option strike can go many seconds without a tick, so the tick path
-     alone would not roll the forming bar on time), the bar is rolled here too,
-     exactly like the exchange charts do at the minute boundary. */
+     the array when the close actually moved. The forming bar is rolled onto the
+     CURRENT wall-clock minute bucket on every read (falling back to the last
+     known price when no fresh quote has arrived yet), exactly like the exchange
+     charts do at the minute boundary - a sparsely-trading option strike can go
+     many seconds without a tick, so waiting for the next tick (or for the live
+     quote's own timestamp) would leave the engine analysing a bar that is a
+     minute or more BEHIND the realtime chart. */
   function patchLive(sym, e) {
     var qk = quoteKeyFor(sym);
     var qm = (typeof clientQuotes !== 'undefined' && clientQuotes) ? clientQuotes : {};
     var q = qm[qk] || null;
-    if (!q || q.ltp == null || !e.candles.length) return;
-    var ltp = Number(q.ltp);
-    if (!isFinite(ltp) || ltp <= 0) return;
+    if (!e.candles.length) return;
     var barSec = e.barMins * 60;
     var last = e.candles[e.candles.length - 1];
-    var at = Number(q.at) || 0;
-    if (at >= 1) {
-      var curStart = Math.floor(at / barSec) * barSec;
-      if (curStart > last.time) {
-        var c2 = e.candles.slice();
-        c2.push({ time: curStart, open: ltp, high: ltp, low: ltp, close: ltp, volume: (last.volume || 0) });
-        if (c2.length > MAX_CANDLES) c2 = c2.slice(c2.length - MAX_CANDLES);
-        e.candles = c2;
-        e.lastBar = curStart;
-        e.at = Date.now();
-        return;
-      }
+    var nowSec = Date.now() / 1000;
+    var curStart = Math.floor(nowSec / barSec) * barSec;
+    var ltp = (q && q.ltp != null) ? Number(q.ltp) : Number(last.close);
+    if (!isFinite(ltp) || ltp <= 0) return;
+    /* Roll into the current wall-clock bucket whenever the trailing bar is
+       older than it - regardless of whether a new tick / quote timestamp has
+       arrived yet - so the engine always analyses the SAME minute the realtime
+       chart is painting. */
+    if (curStart > last.time) {
+      var c2 = e.candles.slice();
+      c2.push({ time: curStart, open: ltp, high: ltp, low: ltp, close: ltp, volume: (last.volume || 0) });
+      if (c2.length > MAX_CANDLES) c2 = c2.slice(c2.length - MAX_CANDLES);
+      e.candles = c2;
+      e.lastBar = curStart;
+      e.at = Date.now();
+      return;
     }
     if (last.close === ltp) return;
     var c = e.candles.slice();

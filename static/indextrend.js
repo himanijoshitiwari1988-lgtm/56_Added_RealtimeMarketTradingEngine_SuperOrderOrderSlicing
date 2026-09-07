@@ -706,7 +706,7 @@
       '</div>';
     }).join('');
     const now = new Date();
-    const ts = now.toTimeString().slice(0, 8);
+    const ts = (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(now.getTime()) : now.toTimeString().slice(0, 8);
     host.innerHTML =
       '<div style="padding:8px 12px;font-size:10px;color:#888;display:flex;justify-content:space-between;align-items:center">' +
         '<span>Re-evaluated every 3 min · ' + results.length + ' indices · compute ' + ms + ' ms</span>' +
@@ -755,7 +755,7 @@
       (crossRows.length ? '<div style="margin:10px 0;padding:8px;background:#12122a;border:1px solid #2d2d50;border-radius:4px">' +
         '<div style="font-size:10px;font-weight:700;color:#00d4aa;margin-bottom:4px">Inter-Index Relationships</div>' +
         crossRows.join('') + '</div>' : '') +
-      '<div style="margin:6px 0;font-size:10px;color:#888">Updated ' + new Date(r.updatedAt).toTimeString().slice(0, 8) + ' · ATR ' + fmt(r.atr) + ' · RSI ' + fmt(r.rsi, 1) + '</div>';
+      '<div style="margin:6px 0;font-size:10px;color:#888">Updated ' + (window.IST12 && IST12.fmtMs ? IST12.fmtMs(r.updatedAt) : new Date(r.updatedAt).toTimeString().slice(0, 8)) + ' · ATR ' + fmt(r.atr) + ' · RSI ' + fmt(r.rsi, 1) + '</div>';
     m.classList.remove('hidden');
   }
 

@@ -81,6 +81,16 @@
       crosshair: { mode: 1 },
       rightPriceScale: { borderColor: '#2d2d50' },
       timeScale: { borderColor: '#2d2d50', timeVisible: true, secondsVisible: false },
+      localization: {
+        timeFormatter: function (ts) {
+          if (window.IST12 && IST12.fmtCandle) return IST12.fmtCandle(ts, false);
+          const d = new Date(ts * 1000);
+          const h = d.getUTCHours();
+          const m = String(d.getUTCMinutes()).padStart(2, '0');
+          const ap = h >= 12 ? 'PM' : 'AM', h12 = h % 12 || 12;
+          return h12 + ':' + m + ' ' + ap;
+        }
+      },
       width: host.clientWidth || 600,
       height: height
     };

@@ -322,7 +322,7 @@
         '<span>Trade-in: <b>' + esc(tradeIn) + '</b></span>' +
         '<span>Premium-only: <b>' + (set.premiumOnly ? 'ON' : 'OFF') + '</b></span>' +
         '<span>Filters enabled: <b>' + set.filterCount + '</b></span>' +
-        (set.capturedAt ? '<span>Captured: <b>' + new Date(set.capturedAt).toLocaleTimeString('en-IN') + '</b></span>' : '') +
+        (set.capturedAt ? '<span>Captured: <b>' + (window.IST12 && IST12.fmtMs ? IST12.fmtMs(set.capturedAt) : new Date(set.capturedAt).toLocaleTimeString('en-IN')) + '</b></span>' : '') +
       '</div>' +
       '<div style="font-size:8px;color:#666;margin-top:3px">Settings captured at import / paper-entry time by the AI Smart Trading engine (strategy id ' + esc(set.astId || '?') + ').</div>' +
     '</div>';

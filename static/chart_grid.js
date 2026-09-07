@@ -127,6 +127,9 @@
   function _pad2(n) { return (n < 10 ? '0' : '') + n; }
 
   function evTime(ts) {
+    if (window.IST12 && IST12.fmtMs && IST12.fmtD) {
+      return IST12.fmtMs(ts) + ' ' + IST12.fmtD(ts);
+    }
     var d = new Date(ts);
     return _pad2(d.getHours()) + ':' + _pad2(d.getMinutes()) + ':' + _pad2(d.getSeconds()) +
       ' ' + _pad2(d.getDate()) + '/' + _pad2(d.getMonth() + 1);

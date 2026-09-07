@@ -2553,6 +2553,7 @@
      through the warmup queue so the per-tick budget stays under 5ms. */
 
   function timeStr() {
+    if (window.IST12 && IST12.fmtMs) return IST12.fmtMs(Date.now());
     var d = new Date();
     function p(n) { return (n < 10 ? '0' : '') + n; }
     return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
@@ -3059,7 +3060,7 @@
         for (var ci = 0; ci < st.closed.length; ci++) {
           var c = st.closed[ci];
           if ((c.autoKey && String(c.autoKey) === prev) || (!c.autoKey && was && c.symbol === was.sym)) {
-            info = 'closed reason=' + (c.reason || '--') + ' at=' + (c.at ? new Date(c.at).toTimeString().slice(0, 8) : '--');
+            info = 'closed reason=' + (c.reason || '--') + ' at=' + (c.at ? (window.IST12 && IST12.fmtMs ? IST12.fmtMs(c.at) : new Date(c.at).toTimeString().slice(0, 8)) : '--');
             break;
           }
         }

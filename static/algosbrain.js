@@ -47,7 +47,7 @@
     return sign + '\u20B9' + Math.abs(n).toLocaleString('en-IN', { maximumFractionDigits: 0 });
   }
   function pct(n) { return (Number(n) || 0).toFixed(1) + '%'; }
-  function now() { return new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); }
+  function now() { return (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(Date.now(), false) : new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }); }
   function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
 
   /* Which AST engine instance a chat command should target. The chat usually
@@ -544,7 +544,8 @@
       var hh = d.getHours() + d.getMinutes() / 60;
       var week = day >= 1 && day <= 5;
       var open = week && hh >= 9.25 && hh <= 15.4;
-      out.push('Aaj: ' + d.toDateString() + ' | time ' + d.toLocaleTimeString('en-IN'));
+      var aajT = (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(Date.now(), false) : d.toLocaleTimeString('en-IN');
+      out.push('Aaj: ' + d.toDateString() + ' | time ' + aajT);
       out.push(week ? 'Weekday (Mon-Fri).' : 'Weekend - market band.');
       out.push(open ? 'Market KHULA hai (9:15-15:30 IST).' : (week ? 'Market abhi band hai (trading hours 9:15-15:30).' : ''));
       out.push('Agar live feed nahi hai to Simulator chala kar engines test kar sakte ho.');

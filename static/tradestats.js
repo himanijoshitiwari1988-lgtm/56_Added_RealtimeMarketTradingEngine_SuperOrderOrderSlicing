@@ -59,11 +59,15 @@
   }
   function fmtClock(ts) {
     var p = istParts(ts);
-    return p ? pad2(p.h) + ':' + pad2(p.min) : null;
+    if (!p) return null;
+    var ap = p.h < 12 ? 'AM' : 'PM', h12 = p.h % 12 === 0 ? 12 : p.h % 12;
+    return pad2(h12) + ':' + pad2(p.min) + ' ' + ap;
   }
   function fmtDT(ts) {
     var p = istParts(ts);
-    return p ? pad2(p.d) + ' ' + MONS[p.m] + ' ' + pad2(p.h) + ':' + pad2(p.min) : null;
+    if (!p) return null;
+    var ap = p.h < 12 ? 'AM' : 'PM', h12 = p.h % 12 === 0 ? 12 : p.h % 12;
+    return pad2(p.d) + ' ' + MONS[p.m] + ' ' + pad2(h12) + ':' + pad2(p.min) + ' ' + ap;
   }
   function dayKey(ts) {
     var p = istParts(ts);

@@ -1327,7 +1327,7 @@ window.createAIPaperTrade = function (suffix) {
       const net = (chargesOn && t.netPnl != null) ? t.netPnl : t.pnl;
       const col = net >= 0 ? '#00d4aa' : '#ef5350';
       const d = new Date(t.at);
-      const ts = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+      const ts = (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(t.at) : String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
       return '<div style="display:flex;gap:8px;background:#12122a;border:1px solid #2d2d50;border-radius:4px;padding:4px 8px;margin:2px 0;font-size:10px">' +
         '<span style="color:#fff;flex:1">' + esc(t.name) + '</span>' +
         '<span style="color:' + (t.side === 'BUY' ? '#00d4aa' : '#ef5350') + '">' + (t.side === 'BUY' ? 'LONG' : 'SHORT') + '</span>' +
@@ -1398,7 +1398,7 @@ window.createAIPaperTrade = function (suffix) {
     const el = $id('aiptLog');
     if (el) {
       const d = new Date();
-      const ts = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+      const ts = (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(d.getTime()) : String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
       const col = cls === 'buy' ? '#00d4aa' : (cls === 'sell' ? '#ef5350' : (cls === 'warn' ? '#ff9800' : (cls === 'ok' ? '#00d4aa' : '#888')));
       const div = document.createElement('div');
       div.innerHTML = '<span style="color:#555">' + ts + '</span> <span style="color:' + col + '">' + esc(msg) + '</span>';
@@ -1466,6 +1466,16 @@ window.createAIPaperTrade = function (suffix) {
         crosshair: { mode: 1 },
         rightPriceScale: { borderColor: '#2d2d50' },
         timeScale: { borderColor: '#2d2d50', timeVisible: true, secondsVisible: false },
+        localization: {
+          timeFormatter: function (ts) {
+            if (window.IST12 && IST12.fmtCandle) return IST12.fmtCandle(ts, false);
+            const d = new Date(ts * 1000);
+            const h = d.getUTCHours();
+            const m = String(d.getUTCMinutes()).padStart(2, '0');
+            const ap = h >= 12 ? 'PM' : 'AM', h12 = h % 12 || 12;
+            return h12 + ':' + m + ' ' + ap;
+          }
+        },
         width: w, height: h
       });
       _mini.series = _mini.chart.addSeries(window.LightweightCharts.CandlestickSeries, {

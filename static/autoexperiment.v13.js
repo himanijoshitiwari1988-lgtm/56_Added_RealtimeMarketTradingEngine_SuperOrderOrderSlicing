@@ -105,7 +105,8 @@ window.createAutoExperiment = function (suffix) {
       number: o.number != null ? o.number : 0,
       candlePatterns: o.candlePatterns || [],
       dir: o.dir != null ? o.dir : 0,
-      pair: o.pair || ''
+      pair: o.pair || '',
+      _emaClose: o._emaClose === true
     };
   }
   const ema = n => ({ indId: 'ema', indSettings: { length: n, source: 'close' }, valueKey: 'v0' });
@@ -543,6 +544,17 @@ window.createAutoExperiment = function (suffix) {
     vortex: { length: 14 }, elderforce: { smooth: 13 }
   };
   function pbCap(id) { return id.charAt(0).toUpperCase() + id.slice(1); }
+  /* Indicators whose old Group-1 "line direction" (Pbr) toggle was MERGED into
+     their Multi-Line Momentum Gap row. Selecting the Momentum Gap row is now the
+     single source of truth for these; a stale Pbr flag on a saved strategy is
+     still honoured (alias) so no gate is silently dropped. */
+  const PB_CROSS_LEVEL = { macd: 1, ppo: 1, tsi: 1, stochrsi: 1, rsi: 1, obv: 1, fisher: 1 };
+  const PB_MERGED_IDS = { aroon: 1, macd: 1, ppo: 1, tsi: 1, stochrsi: 1, rsi: 1, obv: 1, fisher: 1 };
+  /* Force Index (Elderforce) is a NON-BLOCKING CONFIRMER: ticking its filter
+     row must never block an entry when the other indicator filters pass. It
+     therefore emits no strict-AND gate at all - the rest of the filters alone
+     decide the entry, FI can only ever confirm (never veto). */
+  const PB_NONBLOCK_IDS = { elderforce: 1 };
   const PB_BULL_KEYS = PB_G1.map(id => 'bullPbr' + pbCap(id)).concat(PB_G2.map(id => 'bullPbr' + pbCap(id) + 'Up'));
   const PB_BEAR_KEYS = PB_G1.map(id => 'bearPbr' + pbCap(id)).concat(PB_G2.map(id => 'bearPbr' + pbCap(id) + 'Up'));
   /* Overlay Indicator Behaviour (OBR). These are OVERLAY lines - indicator
@@ -621,7 +633,7 @@ window.createAutoExperiment = function (suffix) {
     const tok = k.replace(/^(bull|bear)Obr/, '');
     const d = OBR_LIST.filter(x => x.tok === tok)[0];
     const nm = d ? d.name : tok;
-    return nm + ' line ' + (/^bull/.test(k) ? 'increasing upward' : 'increasing downward');
+    return nm + ' line ' + (/^bull/.test(k) ? 'direction upward' : 'direction downward');
   }
   /* Readable name of an Overlay Meet Condition (level) flag for filter logs. */
   function ovlMeetName(k) {
@@ -634,23 +646,48 @@ window.createAutoExperiment = function (suffix) {
   function pbrName(k) {
     const raw = k.replace(/^(bull|bear)Pbr/, '');
     const lc = raw.charAt(0).toLowerCase() + raw.slice(1);
+    if (lc === 'elderforce') return 'Force Index soft-confirm (confirmation only - never blocks entry)';
     const g2 = /^(adx|bbw|atr|volosc)Up$/.exec(lc);
     const nm = PB_LABEL[g2 ? g2[1] : lc] || raw;
     const rising = g2 ? true : /^bull/.test(k);
-    return nm + ' line ' + (rising ? 'increasing upward' : 'increasing downward');
+    return nm + ' line ' + (rising ? 'direction upward' : 'direction downward');
   }
   /* Readable name of a Multi-Line Momentum Gap (level) flag for filter logs. */
   function pbgName(k) {
-    if (k === 'bullPbgVortex') return 'Vortex VI+ holds above VI- with VI+ rising & VI- falling (gap widening, level)';
-    if (k === 'bearPbgVortex') return 'Vortex VI- holds above VI+ with VI- rising & VI+ falling (gap widening, level)';
-    if (k === 'bullPbgAdx') return 'ADX rising, +DI above -DI and the +DI/-DI gap widening (level)';
-    if (k === 'bearPbgAdx') return 'ADX falling, +DI below -DI and the +DI/-DI gap widening (level)';
+    if (k === 'bullPbgVortex') return 'Vortex VI+ holds above VI- with VI+ direction upward & VI- direction downward (gap widening, level)';
+    if (k === 'bearPbgVortex') return 'Vortex VI- holds above VI+ with VI- direction upward & VI+ direction downward (gap widening, level)';
+    if (k === 'bullPbgAdx') return 'ADX direction upward, +DI above -DI, +DI direction upward & -DI direction downward, +DI/-DI gap widening (level)';
+    if (k === 'bearPbgAdx') return 'ADX direction downward, +DI below -DI, +DI direction downward & -DI direction upward, +DI/-DI gap widening (level)';
+    if (k === 'bullPbgSmiio') return 'SMI & Signal above Histogram, both direction upward (level - OR of widening / histogram rising)';
+    if (k === 'bearPbgSmiio') return 'SMI & Signal below Histogram, both direction downward (level - OR of widening / histogram falling)';
+    if (k === 'bullPbgAroon') return 'Aroon Up above Aroon Down (level - line direction not required, gap holding/widening)';
+    if (k === 'bearPbgAroon') return 'Aroon Up below Aroon Down (level - line direction not required, gap holding/widening)';
+    if (k === 'bullPbgMacd') return 'MACD main line crossed above signal line (level holding - no gap logic)';
+    if (k === 'bearPbgMacd') return 'MACD main line crossed below signal line (level holding - no gap logic)';
+    if (k === 'bullPbgPpo') return 'PPO main line crossed above signal line (level holding - no gap logic)';
+    if (k === 'bearPbgPpo') return 'PPO main line crossed below signal line (level holding - no gap logic)';
+    if (k === 'bullPbgTsi') return 'TSI main line crossed above signal line (level holding - no gap logic)';
+    if (k === 'bearPbgTsi') return 'TSI main line crossed below signal line (level holding - no gap logic)';
+    if (k === 'bullPbgStochrsi') return 'Stoch RSI main line crossed above signal line (level holding - no gap logic)';
+    if (k === 'bearPbgStochrsi') return 'Stoch RSI main line crossed below signal line (level holding - no gap logic)';
+    if (k === 'bullPbgRsi') return 'RSI main line crossed above signal line (level holding - no gap logic)';
+    if (k === 'bearPbgRsi') return 'RSI main line crossed below signal line (level holding - no gap logic)';
+    if (k === 'bullPbgObv') return 'OBV main line crossed above signal line (level holding - no gap logic)';
+    if (k === 'bearPbgObv') return 'OBV main line crossed below signal line (level holding - no gap logic)';
+    if (k === 'bullPbgFisher') return 'Fisher main line crossed above signal line (level holding - no gap logic)';
+    if (k === 'bearPbgFisher') return 'Fisher main line crossed below signal line (level holding - no gap logic)';
     const raw = k.replace(/^(bull|bear)Pbg/, '');
     const d = PBG_LIST.filter(x => x.id.toLowerCase() === raw.toLowerCase())[0];
     const nm = d ? d.name : raw;
     return nm + ' main-vs-signal gap ' + (/^bull/.test(k) ? 'holding/widening upward (level)' : 'holding/widening downward (level)');
   }
   const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'].concat(PB_BULL_KEYS, PB_BEAR_KEYS, OB_BULL_KEYS, OB_BEAR_KEYS, MEET_BULL_KEYS, MEET_BEAR_KEYS, PBG_BULL_KEYS, PBG_BEAR_KEYS);
+  /* Armed-entry gate flags: NOT indicator filters. Each toggles whether that
+     side (Bullish / Bearish) of the indicator-filter lists only allows an entry
+     on the FIRST bar the side's whole enabled filter set simultaneously holds
+     (re-arming after any filter breaks). Kept out of the indicator key lists so
+     they are never built into filter conditions. */
+  const FILTER_ARM_KEYS = ['bullArmedGate', 'bearArmedGate'];
 
   /* HTML element ids for the filter checkboxes are PascalCase
      ('aeFilterPaneCrossUp'), while the state keys are camelCase
@@ -1063,6 +1100,14 @@ window.createAutoExperiment = function (suffix) {
     return { last: arr[i], prev: i > 0 ? arr[i - 1] : null };
   }
 
+  /* EMA(1) of the close = the candle close itself (period-1 EMA has weight 1 on
+     the latest value, no warmup). Close-vs-indicator filter gates compare the
+     band against this aligned series so the operand rides the same cached
+     indicator path as the band side. */
+  function emaOneSeries(candles) {
+    return alignedSeries('ema', { length: 1, source: 'close' }, 'v0', candles);
+  }
+
   function patternHits(patterns, candles) {
     if (!patterns || !patterns.length) return null;
     const CP = window.CandlePatterns;
@@ -1092,7 +1137,19 @@ window.createAutoExperiment = function (suffix) {
   function cmpReadAt(cond, i, candles) {
     switch (cond.cmpType) {
       case 'number': { const v = Number(cond.number) || 0; return { last: v, prev: v }; }
-      case 'candle': { const k = cond.candleKey || 'close'; return { last: candles[i] ? candles[i][k] : null, prev: i > 0 ? candles[i - 1][k] : null }; }
+      case 'candle': {
+        /* Candle-close filter operand on EMA(1): the close-vs-indicator filter
+           gates compare the band against an EMA(1) of the close (period 1 makes
+           EMA(1) === candle close, index-for-index) instead of the raw candle
+           key, so the operand rides the same alignedSeries path as the band. */
+        if (cond._emaClose) {
+          const a = emaOneSeries(candles);
+          const cl = j => (candles[j] ? candles[j].close : null);
+          return { last: a && a[i] != null ? a[i] : cl(i), prev: i > 0 ? (a && a[i - 1] != null ? a[i - 1] : cl(i - 1)) : null };
+        }
+        const k = cond.candleKey || 'close';
+        return { last: candles[i] ? candles[i][k] : null, prev: i > 0 ? candles[i - 1][k] : null };
+      }
       case 'self': {
         const key = cond.cmpValueKey || 'v1';
         return readTwo(cond.indId, cond.indSettings, key, i, candles);
@@ -1123,6 +1180,19 @@ window.createAutoExperiment = function (suffix) {
       dir = vals[vals.length - 1] > vals[0] ? 'up' : (vals[vals.length - 1] < vals[0] ? 'down' : 'flat');
     }
     return want === 'up' ? dir === 'up' : dir === 'down';
+  }
+
+  /* Ultrafast direction/facing verdict for the "increasing upward / increasing
+     downward" indicator filters: compares ONLY the two most recent values
+     (arr[i] vs arr[i-1]) so the gate turns green the instant the line simply
+     points up / down - no 7-bar rise/fall proof, no window scan (O(1)).
+     'up' = facing upward, 'down' = facing downward, 'flat' = unchanged,
+     null = not enough data yet (neutral SKIP, never a freeze). */
+  function dirFace(arr, i) {
+    if (!arr || i < 1) return null;
+    const a = arr[i], b = arr[i - 1];
+    if (a == null || isNaN(a) || b == null || isNaN(b)) return null;
+    return a > b ? 'up' : (a < b ? 'down' : 'flat');
   }
 
   /* Cached volume series (per candle array) so the volume trend filters reuse
@@ -1454,24 +1524,24 @@ window.createAutoExperiment = function (suffix) {
        Both middle bands are analysed on a 10-period mid band. */
     const bbMid = { length: 20, mult: 2, source: 'close', midType: 'sma', midLength: 10 };
     const pcMid = { length: 20, midType: 'midpoint', midLength: 10 };
-    if (f.bullBbCrossAbove || f.bearBbCrossAbove) out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossAbove', expand: true }));
-    if (f.bullBbCrossBelow || f.bearBbCrossBelow) out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossBelow', expand: true }));
-    if (f.bullPcCrossAbove || f.bearPcCrossAbove) out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossAbove' }));
-    if (f.bullPcCrossBelow || f.bearPcCrossBelow) out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossBelow' }));
+    if (f.bullBbCrossAbove || f.bearBbCrossAbove) out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossAbove', expand: true, _emaClose: true }));
+    if (f.bullBbCrossBelow || f.bearBbCrossBelow) out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossBelow', expand: true, _emaClose: true }));
+    if (f.bullPcCrossAbove || f.bearPcCrossAbove) out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossAbove', _emaClose: true }));
+    if (f.bullPcCrossBelow || f.bearPcCrossBelow) out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossBelow', _emaClose: true }));
     if (f.bullMeetCloseBb) {
-      out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossAbove' }));
+      out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossAbove', _emaClose: true }));
       out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' }));
     }
     if (f.bearMeetCloseBb) {
-      out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossBelow' }));
+      out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossBelow', _emaClose: true }));
       out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' }));
     }
     if (f.bullMeetClosePc) {
-      out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossAbove' }));
+      out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossAbove', _emaClose: true }));
       out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' }));
     }
     if (f.bearMeetClosePc) {
-      out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossBelow' }));
+      out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossBelow', _emaClose: true }));
       out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' }));
     }
     /* EMA ladder + Supertrend twin gates: a faster EMA (or a lower-factor
@@ -1498,15 +1568,15 @@ window.createAutoExperiment = function (suffix) {
        above/below the Supertrend(10,1) band or the VWAP line on this bar (true
        prev->current cross, not a level hold). Bullish = close above the line,
        bearish = close below it. */
-    if (f.bullish && f.bullSt1CloseCrossAbove) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'candle', candleKey: 'close' }));
-    if (f.bearish && f.bearSt1CloseCrossBelow) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'candle', candleKey: 'close' }));
+    if (f.bullish && f.bullSt1CloseCrossAbove) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
+    if (f.bearish && f.bearSt1CloseCrossBelow) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
     const vwapDef = { anchor: 'trend' };
-    if (f.bullish && f.bullVwapCloseCrossAbove) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'candle', candleKey: 'close' }));
-    if (f.bearish && f.bearVwapCloseCrossBelow) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'candle', candleKey: 'close' }));
-    if (f.bullMeetCloseSt) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'lt', cmpType: 'candle', candleKey: 'close' }));
-    if (f.bearMeetCloseSt) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'gt', cmpType: 'candle', candleKey: 'close' }));
-    if (f.bullMeetCloseVwap) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'lt', cmpType: 'candle', candleKey: 'close' }));
-    if (f.bearMeetCloseVwap) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'gt', cmpType: 'candle', candleKey: 'close' }));
+    if (f.bullish && f.bullVwapCloseCrossAbove) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
+    if (f.bearish && f.bearVwapCloseCrossBelow) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
+    if (f.bullMeetCloseSt) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'lt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
+    if (f.bearMeetCloseSt) out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'gt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
+    if (f.bullMeetCloseVwap) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'lt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
+    if (f.bearMeetCloseVwap) out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'gt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
     /* Pane Indicator Behaviour gates - see the PB_* tables at the top of the
        engine. Each gate evaluates the pane indicator's MAIN line (v0) with the
        indicator's DEFAULT settings on the strategy's candle chart and only asks
@@ -1521,11 +1591,11 @@ window.createAutoExperiment = function (suffix) {
            when the same condition is requested from both sections it is simply
            pushed once per side (identical boolean). */
     if (f.bullish) {
-      PB_G1.forEach(id => { const k = 'bullPbr' + pbCap(id); if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incUp', cmpType: 'number' })); });
+      PB_G1.forEach(id => { if (PB_MERGED_IDS[id] || PB_NONBLOCK_IDS[id]) return; const k = 'bullPbr' + pbCap(id); if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incUp', cmpType: 'number' })); });
       PB_G2.forEach(id => { const k = 'bullPbr' + pbCap(id) + 'Up'; if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incUp', cmpType: 'number' })); });
     }
     if (f.bearish) {
-      PB_G1.forEach(id => { const k = 'bearPbr' + pbCap(id); if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incDown', cmpType: 'number' })); });
+      PB_G1.forEach(id => { if (PB_MERGED_IDS[id] || PB_NONBLOCK_IDS[id]) return; const k = 'bearPbr' + pbCap(id); if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incDown', cmpType: 'number' })); });
       PB_G2.forEach(id => { const k = 'bearPbr' + pbCap(id) + 'Up'; if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incUp', cmpType: 'number' })); });
     }
     OBR_LIST.forEach(d => {
@@ -1533,8 +1603,8 @@ window.createAutoExperiment = function (suffix) {
       if (f.bearish && f['bearObr' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incDown', cmpType: 'number' }));
     });
     MEET_OVL_LIST.forEach(d => {
-      if (f['bullMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'lt', cmpType: 'candle', candleKey: 'close' }));
-      if (f['bearMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'gt', cmpType: 'candle', candleKey: 'close' }));
+      if (f['bullMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'lt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
+      if (f['bearMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'gt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
     });
     /* Multi-Line Momentum Gap (PBG) level gates - see PBG_LIST at the top of
        the engine (AST mirror). Each gate evaluates the pane indicator's MAIN
@@ -1590,13 +1660,53 @@ window.createAutoExperiment = function (suffix) {
           if (f.bullish && f.bullPbgAdx) {
             out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
             out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'crossAbove', cmpType: 'self', cmpValueKey: 'v2' }));
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'incUp', cmpType: 'number' }));
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v2', logic: 'incDown', cmpType: 'number' }));
             out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'gapUp', cmpType: 'self', cmpValueKey: 'v2' }));
           }
           if (f.bearish && f.bearPbgAdx) {
             out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
             out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'crossBelow', cmpType: 'self', cmpValueKey: 'v2' }));
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'incDown', cmpType: 'number' }));
+            out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v2', logic: 'incUp', cmpType: 'number' }));
             out.push(cond({ indId: 'adx', indSettings: d.s, valueKey: 'v1', logic: 'gapUp', cmpType: 'self', cmpValueKey: 'v2' }));
           }
+          return;
+        }
+        if (d.id === 'aroon') {
+          /* Aroon MERGED row: the old separate "Aroon line direction upward/
+             downward" (Pbr) toggle was combined with the "Aroon gap holding/
+             widening (level)" (Pbg) toggle into ONE gate so the two never
+             conflict in indicator-filter mode. The gate only compares the pair
+             LEVEL (v0 = Aroon Up, v1 = Aroon Down) with gap holding/widening:
+               bull: v0 stays ABOVE v1 and the gap is NOT shrinking (hold at the
+                     same level or widening) - a separate line-RISING (direction
+                     upward) requirement is NOT imposed, the line may rest flat.
+               bear: exact mirror.
+             A legacy strategy that only ticked the old direction row (no Pbg
+             flag) is migrated onto this same merged gate so it is not silently
+             dropped; when both flags are set only one gate is emitted. */
+          const bullW = f.bullish && (f['bullPbgAroon'] || f['bullPbrAroon']);
+          const bearW = f.bearish && (f['bearPbgAroon'] || f['bearPbrAroon']);
+          if (bullW) out.push(cond({ indId: 'aroon', indSettings: d.s, valueKey: 'v0', logic: 'pbgBull', cmpType: 'self', cmpValueKey: 'v1', pair: '' }));
+          if (bearW) out.push(cond({ indId: 'aroon', indSettings: d.s, valueKey: 'v0', logic: 'pbgBear', cmpType: 'self', cmpValueKey: 'v1', pair: '' }));
+          return;
+        }
+        if (PB_CROSS_LEVEL[d.id]) {
+          /* Main-vs-signal crossover HOLD gate (MACD / PPO / TSI / Stoch RSI /
+             RSI / OBV / Fisher): the old Group-1 "line direction" (Pbr) toggle
+             was MERGED into this row, and the momentum-gap (holding/widening,
+             not-falling) logic was removed. The gate only checks the crossover
+             LEVEL - the main line (v0) must be holding ABOVE its signal (v1)
+             on every bar (bull, "crossed above + level holding"), or holding
+             BELOW it (bear). No gap / no direction-of-gap condition. A stale
+             Pbr flag on a saved strategy is honoured as an alias for the same
+             gate. */
+          const mCap = pbCap(d.id);
+          const bullW = f.bullish && (f['bullPbg' + mCap] || f['bullPbr' + mCap]);
+          const bearW = f.bearish && (f['bearPbg' + mCap] || f['bearPbr' + mCap]);
+          if (bullW) out.push(cond({ indId: d.id, indSettings: d.s, valueKey: 'v0', logic: 'gt', cmpType: 'self', cmpValueKey: 'v1' }));
+          if (bearW) out.push(cond({ indId: d.id, indSettings: d.s, valueKey: 'v0', logic: 'lt', cmpType: 'self', cmpValueKey: 'v1' }));
           return;
         }
         if (f.bullish && f['bullPbg' + pbCap(d.id)]) out.push(cond({ indId: d.id, indSettings: d.s, valueKey: vk, logic: 'pbgBull', cmpType: 'self', cmpValueKey: ck, pair: pair }));
@@ -1838,7 +1948,12 @@ window.createAutoExperiment = function (suffix) {
       const bar = candles[i];
       const band = readTwo(cond.indId, cond.indSettings, cond.valueKey || 'v1', i, candles).last;
       if (!bar || band == null) return false;
-      const crossed = cond.logic === 'closeCrossAbove' ? bar.close > band : bar.close < band;
+      let closeV = bar.close;
+      if (cond._emaClose) {
+        const a = emaOneSeries(candles);
+        if (a && a[i] != null) closeV = a[i];
+      }
+      const crossed = cond.logic === 'closeCrossAbove' ? closeV > band : closeV < band;
       if (!crossed) return false;
       if (cond.expand && cond.indId === 'bb') {
         const width = bbGapSeries(cond.indSettings, candles);
@@ -1849,7 +1964,13 @@ window.createAutoExperiment = function (suffix) {
     if (!cond.indId) return false;
     if (cond.logic === 'incUp' || cond.logic === 'incDown') {
       const arr = alignedSeries(cond.indId, cond.indSettings, cond.valueKey, candles);
-      return trendAt(arr, i, cond.logic === 'incUp' ? 'up' : 'down');
+      /* Direction/facing-only gate (ultrafast O(1)): the current line just has
+         to point up / down (last value vs previous) - a multi-bar rise/fall is
+         no longer required. Not enough data yet = neutral SKIP (PASS) so a
+         warming-up series can never freeze the strict-AND entry. */
+      const face = dirFace(arr, i);
+      if (face === null) return true;
+      return cond.logic === 'incUp' ? face === 'up' : face === 'down';
     }
     /* Multi-Line Momentum Gap (PBG) meet-level gates - mirror of AST. Bull
        fires while the main series sits ABOVE the signal and is NOT falling and
@@ -1903,6 +2024,14 @@ window.createAutoExperiment = function (suffix) {
     }
     const prim = readTwo(cond.indId, cond.indSettings, cond.valueKey, i, candles);
     const cmp = cmpReadAt(cond, i, candles);
+    /* EMA(1) close-vs-line "cross" gates hold as LEVEL rows: the operand is the
+       EMA(1)=close series (it replaced the raw candle), so a "crossed above/
+       below" gate only asks which side the line sits on RIGHT NOW - the fresh
+       prev->current flip is dropped (one-trade-per-signal latch prevents churn). */
+    if (cond._emaClose && (cond.logic === 'crossUpNow' || cond.logic === 'crossDownNow')) {
+      if (prim.last == null || cmp.last == null) return false;
+      return cond.logic === 'crossDownNow' ? prim.last < cmp.last : prim.last > cmp.last;
+    }
     if (cond.logic === 'gapUp' || cond.logic === 'gapDown') {
       if (prim.last == null || prim.prev == null || cmp.last == null || cmp.prev == null) return false;
       const gap = Math.abs(prim.last - cmp.last);
@@ -1986,12 +2115,14 @@ window.createAutoExperiment = function (suffix) {
     if (cond.logic === 'closeCrossAbove' || cond.logic === 'closeCrossBelow') {
       const bandArr = alignedSeries(cond.indId, cond.indSettings, cond.valueKey || 'v1', candles);
       const widthArr = (cond.expand && cond.indId === 'bb') ? bbGapSeries(cond.indSettings, candles) : null;
+      const closeArr = cond._emaClose ? emaOneSeries(candles) : null;
       const out = new Array(n).fill(false);
       for (let i = 0; i < n; i++) {
         const bar = candles[i];
         const band = bandArr ? bandArr[i] : null;
         if (!bar || band == null) continue;
-        const crossed = cond.logic === 'closeCrossAbove' ? bar.close > band : bar.close < band;
+        const c = closeArr && closeArr[i] != null ? closeArr[i] : bar.close;
+        const crossed = cond.logic === 'closeCrossAbove' ? c > band : c < band;
         if (!crossed) continue;
         if (widthArr && !trendAt(widthArr, i, 'up')) continue;
         out[i] = true;
@@ -2056,26 +2187,33 @@ window.createAutoExperiment = function (suffix) {
     if (cond.logic === 'incUp' || cond.logic === 'incDown') {
       const want = cond.logic === 'incUp' ? 'up' : 'down';
       const out = new Array(n).fill(false);
-      for (let i = 0; i < n; i++) out[i] = trendAt(primArr, i, want);
+      for (let i = 1; i < n; i++) {
+        const face = dirFace(primArr, i);
+        if (face !== null && face === want) out[i] = true;
+      }
       return out;
     }
-    let cmpArr = null, cmpNum = null, cmpKey = null;
+    let cmpArr = null, cmpNum = null, cmpKey = null, closeArr = null;
     switch (cond.cmpType) {
       case 'number': cmpNum = Number(cond.number) || 0; break;
-      case 'candle': cmpKey = cond.candleKey || 'close'; break;
+      case 'candle': cmpKey = cond.candleKey || 'close'; if (cond._emaClose && cmpKey === 'close') closeArr = emaOneSeries(candles); break;
       case 'self': cmpArr = alignedSeries(cond.indId, cond.indSettings, cond.cmpValueKey || 'v1', candles); break;
       case 'plot': cmpArr = alignedSeries(cond.indId, cond.indSettings, 'v0', candles); break;
       case 'smoothed': cmpArr = alignedSeries(cond.indId, cond.indSettings, 'v1', candles); break;
       case 'indicator': cmpArr = alignedSeries(cond.cmpIndId, cond.cmpSettings, cond.cmpValueKey || 'v0', candles); break;
       default: break;
     }
+    const emaC = (j) => (closeArr && closeArr[j] != null ? closeArr[j] : null);
     const out = new Array(n).fill(false);
     for (let i = 0; i < n; i++) {
       const last = primArr[i];
       if (last == null) continue;
       let cmpLast = null, cmpPrev = null;
       if (cmpNum != null) { cmpLast = cmpNum; cmpPrev = cmpNum; }
-      else if (cmpKey != null) { cmpLast = candles[i] ? candles[i][cmpKey] : null; cmpPrev = i > 0 ? candles[i - 1][cmpKey] : null; }
+      else if (cmpKey != null) {
+        cmpLast = emaC(i) != null ? emaC(i) : (candles[i] ? candles[i][cmpKey] : null);
+        cmpPrev = i > 0 ? (emaC(i - 1) != null ? emaC(i - 1) : (candles[i - 1] ? candles[i - 1][cmpKey] : null)) : null;
+      }
       else if (cmpArr) { cmpLast = cmpArr[i]; cmpPrev = i > 0 ? cmpArr[i - 1] : null; }
       else continue;
       if (cond.logic === 'gapUp' || cond.logic === 'gapDown') {
@@ -2084,6 +2222,10 @@ window.createAutoExperiment = function (suffix) {
         const gap = Math.abs(last - cmpLast);
         const prevGap = Math.abs(prev - cmpPrev);
         out[i] = cond.logic === 'gapUp' ? gap > prevGap : gap < prevGap;
+        continue;
+      }
+      if (cond._emaClose && (cond.logic === 'crossUpNow' || cond.logic === 'crossDownNow')) {
+        out[i] = cond.logic === 'crossDownNow' ? last < cmpLast : last > cmpLast;
         continue;
       }
       out[i] = applyLogicAt(cond.logic, last, i > 0 ? primArr[i - 1] : null, cmpLast, cmpPrev);
@@ -2280,6 +2422,16 @@ window.createAutoExperiment = function (suffix) {
     const entryExtraSignal = etConds.length ? buildNof(etConds, need, candles) : null;
     const entryCS = (tpl.candlestick && tpl.candlestick.entry && tpl.candlestick.entry.length)
       ? patternHits(tpl.candlestick.entry, candles) : null;
+    /* Armed-entry gate (indicator-filter mode only): when a side's "Armed
+       entry" box is ticked, its strict filter set is treated like a weapon that
+       must be re-armed. Entry fires only on the bar where the whole enabled set
+       flips from false to true - a later bar that merely still holds can never
+       re-trigger, and any break on an intermediate bar disarms the set. Mirrors
+       the live AE/AST armed gate; the gate never rewrites the conditions, it
+       only sharpens when an entry edge is allowed. */
+    const _afNow = state.filters || {};
+    const armedGateOn = (tpl.__filterBuilt === true) && Array.isArray(tpl.entry) && tpl.entry.length > 0 &&
+      (tpl.cat === 'bearish' ? _afNow.bearArmedGate === true : _afNow.bullArmedGate === true);
     for (let i = warm; i < n; i++) {
       const entryNow = (entrySignal ? entrySignal[i] : false) &&
         (entryExtraSignal ? entryExtraSignal[i] : true) &&
@@ -2289,7 +2441,13 @@ window.createAutoExperiment = function (suffix) {
          run fills up to the configured trade count instead of only firing on a
          fresh signal edge. Unlimited backtests keep the strict edge gating. */
       const forceFill = maxTrades != null || perDayLimit != null;
-      const entryEdge = forceFill ? entryNow : (entryNow && !prevEntry);
+      /* Armed gate: the whole filter set must have just completed on this bar
+         (holding now, not holding on the previous bar). The armed bar is the
+         only allowed edge - it ignores forceFill so capped runs still only
+         re-arm on a fresh full hold. */
+      const entryEdge = armedGateOn
+        ? (entryNow && !(entrySignal ? !!entrySignal[i - 1] : true))
+        : (forceFill ? entryNow : (entryNow && !prevEntry));
       prevEntry = entryNow;
       /* Per-day trade cap: the counter resets at each IST day boundary so a
          "limit backtest trades" count of N means up to N trades EACH day. */
@@ -2458,6 +2616,13 @@ window.createAutoExperiment = function (suffix) {
        them to the trade chart by candle time (two-pointer walk, O(n)). */
     const srcs = (Array.isArray(signalSources) && signalSources.length) ? signalSources.filter(c => c && c.length) : [tradeCandles];
     if (!srcs.length) return null;
+    /* Armed-entry gate (indicator-filter mode only): mirrors the live armed
+       gate across every run-in source - each source's whole filter set must
+       flip from false to true on the source bar the trade bar aligns to, so a
+       stale still-holding bar can never re-trigger. */
+    const _afSplit = state.filters || {};
+    const splitArmedOn = (tpl.__filterBuilt === true) && Array.isArray(tpl.entry) && tpl.entry.length > 0 &&
+      (tpl.cat === 'bearish' ? _afSplit.bearArmedGate === true : _afSplit.bullArmedGate === true);
     const tradeTimes = tradeCandles.map(c => c.time);
     const aligned = srcs.map(sc => {
       const entrySignal = Array.isArray(tpl.entry)
@@ -2477,13 +2642,21 @@ window.createAutoExperiment = function (suffix) {
         idx[i] = s;
       }
       const entryArr = new Array(n);
+      /* armedArr[i] = this source's full filter set completed on the source bar
+         that trade bar `i` aligns to (holding now, not holding on the previous
+         SOURCE bar). Computed per source bar so repeated trade bars that map to
+         the same source candle never re-fire the weapon. */
+      const armedArr = (splitArmedOn && entrySignal) ? new Array(n) : null;
       for (let i = 0; i < n; i++) {
         const j = idx[i];
         entryArr[i] = (entrySignal ? entrySignal[j] : false) &&
           (entryExtraSignal ? entryExtraSignal[j] : true) &&
           (entryCS ? entryCS[j] : true);
+        if (armedArr) {
+          armedArr[i] = (j > 0) ? (!!entrySignal[j] && !entrySignal[j - 1]) : false;
+        }
       }
-      return { entryArr };
+      return { entryArr, armedArr };
     });
 
     let pos = null; // { entry }
@@ -2498,7 +2671,17 @@ window.createAutoExperiment = function (suffix) {
          trade limit lets a flat position re-enter on a still-true condition so
          the run reaches the set number of trades instead of stalling on edges. */
       const forceFill = maxTrades != null || perDayLimit != null;
-      const entryEdge = forceFill ? entryNow : (entryNow && !prevEntry);
+      /* Armed gate: every run-in source must show a fresh full-set completion
+         on this trade bar (and the previous TRADE bar must not already be that
+         same fresh completion, so duplicate trade bars aligned to one source
+         candle cannot re-fire). Ignores forceFill just like the single-chart
+         armed loop. */
+      let entryEdge;
+      if (splitArmedOn) {
+        entryEdge = entryNow && aligned.every(a => a.armedArr && a.armedArr[i] && !a.armedArr[i - 1]);
+      } else {
+        entryEdge = forceFill ? entryNow : (entryNow && !prevEntry);
+      }
       prevEntry = entryNow;
       /* Per-day trade cap: the counter resets at each IST day boundary so a
          "limit backtest trades" count of N means up to N trades EACH day. */
@@ -2979,7 +3162,7 @@ window.createAutoExperiment = function (suffix) {
       s.autoSend = { enabled: false, tpls: [] };
     }
     if (s && s.filters) {
-      ['bullish', 'bearish', 'incUp', 'incDown', 'gapUp', 'gapDown', 'incUpAll', 'incDownAll', 'crossUp', 'crossDown', 'gtUp', 'ltUp', 'gtDown', 'ltDown'].concat(FILTER_EXTRA_KEYS, STREAM_FLAG_KEYS).forEach(k => {
+      ['bullish', 'bearish', 'incUp', 'incDown', 'gapUp', 'gapDown', 'incUpAll', 'incDownAll', 'crossUp', 'crossDown', 'gtUp', 'ltUp', 'gtDown', 'ltDown'].concat(FILTER_EXTRA_KEYS, STREAM_FLAG_KEYS, FILTER_ARM_KEYS).forEach(k => {
         if (typeof s.filters[k] !== 'boolean') s.filters[k] = false;
       });
     }
@@ -5976,7 +6159,12 @@ window.createAutoExperiment = function (suffix) {
     const allTogether = state.allInOne === true && window.AISmartTrading &&
       typeof window.AISmartTrading.strictEntryOk === 'function';
     if (allTogether) {
-      return !!window.AISmartTrading.strictEntryOk(r, candles, last);
+      /* The armed-entry gate flags live in this engine's saved filter state, so
+         they are passed down explicitly - the AST strict evaluator reads its own
+         state by default and must not see this engine's arms. */
+      const af = state.filters || {};
+      const armedOverride = { bullish: af.bullArmedGate === true, bearish: af.bearArmedGate === true };
+      return !!window.AISmartTrading.strictEntryOk(r, candles, last, armedOverride);
     }
     return evalCondAll(r.entry, last, candles) &&
       (r.entryExtra && r.entryExtra.length
@@ -6012,7 +6200,7 @@ window.createAutoExperiment = function (suffix) {
     const el = $id('aeLog');
     if (!el) return;
     const d = new Date();
-    const ts = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+    const ts = (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(d.getTime()) : String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
     const col = cls === 'buy' ? '#00d4aa' : (cls === 'sell' ? '#ef5350' : (cls === 'warn' ? '#ff9800' : (cls === 'ok' ? '#00d4aa' : '#888')));
     const div = document.createElement('div');
     div.innerHTML = '<span style="color:#555">' + ts + '</span> <span style="color:' + col + '">' + esc(msg) + '</span>';
@@ -6035,16 +6223,16 @@ window.createAutoExperiment = function (suffix) {
     if (c.logic === 'closeCrossAbove' || c.logic === 'closeCrossBelow') {
       const band = indName(c.indId) + (c.valueKey === 'v1' ? ' middle band' : '');
       const expand = (c.expand && c.indId === 'bb') ? ' with upper and lower band expansion' : '';
-      return 'Candle close ' + (c.logic === 'closeCrossAbove' ? 'crossed above' : 'crossed below') + ' ' + band + expand;
+      return (c._emaClose ? 'Close (EMA1)' : 'Candle close') + ' ' + (c.logic === 'closeCrossAbove' ? 'crossed above' : 'crossed below') + ' ' + band + expand;
     }
     if (!c.indId) return 'none';
     const primary = indName(c.indId);
-    const logicMap = { gt: '>', lt: '<', gte: '>=', lte: '<=', eq: '=', neq: '!=', crossAbove: 'crosses above', crossBelow: 'crosses below', incUp: 'increasing upward', incDown: 'increasing downward', gapUp: 'gap increasing vs', gapDown: 'gap decreasing vs', incUpAll: 'increasing upward (all)', incDownAll: 'increasing downward (all)' };
+    const logicMap = { gt: '>', lt: '<', gte: '>=', lte: '<=', eq: '=', neq: '!=', crossAbove: 'crosses above', crossBelow: 'crosses below', incUp: 'direction upward', incDown: 'direction downward', gapUp: 'gap increasing vs', gapDown: 'gap decreasing vs', incUpAll: 'direction upward (all)', incDownAll: 'direction downward (all)' };
     const lg = logicMap[c.logic] || c.logic;
     if (c.logic === 'incUp' || c.logic === 'incDown' || c.logic === 'incUpAll' || c.logic === 'incDownAll') return primary + ' ' + lg;
     let cmp;
     if (c.cmpType === 'number') cmp = c.number;
-    else if (c.cmpType === 'candle') cmp = 'candle ' + (c.candleKey || 'close');
+    else if (c.cmpType === 'candle') cmp = c._emaClose ? 'candle close (EMA1)' : 'candle ' + (c.candleKey || 'close');
     else if (c.cmpType === 'smoothed') cmp = 'signal (' + indName(c.indId) + ')';
     else if (c.cmpType === 'plot') cmp = 'plot (' + indName(c.indId) + ')';
     else if (c.cmpType === 'indicator') cmp = indName(c.cmpIndId) + indSettingsLabel(c.cmpSettings);
@@ -6859,6 +7047,9 @@ window.createAutoExperiment = function (suffix) {
     STREAM_FLAG_KEYS.forEach(k => {
       state.filters[k] = !!($id('aeFilter' + capId(k)) && $id('aeFilter' + capId(k)).checked);
     });
+    FILTER_ARM_KEYS.forEach(k => {
+      state.filters[k] = !!($id('aeFilter' + capId(k)) && $id('aeFilter' + capId(k)).checked);
+    });
     syncFilterSections({ bullish: prevMaster.bullish && !state.filters.bullish, bearish: prevMaster.bearish && !state.filters.bearish });
     save();
     const any = (state.filters.bullish && (state.filters.incUp || state.filters.crossUp || state.filters.gapUp || state.filters.incUpAll || state.filters.gtUp || state.filters.ltUp || state.filters.bullVolUp || state.filters.bullVolDown || state.filters.bullFakeBreakout || state.filters.bullReversal || state.filters.paneCrossUp || state.filters.paneIncUpAll || state.filters.bullBbwInc || state.filters.bullBbCrossBelow || state.filters.bullBbCrossAbove || state.filters.bullPcCrossBelow || state.filters.bullPcCrossAbove || state.filters.bullSmf || state.filters.bullVl || state.filters.bullAsr || state.filters.bullOit || state.filters.bullEma9_21 || state.filters.bullEma21_35 || state.filters.bullEma35_50 || state.filters.bullEma50_100 || state.filters.bullEma100_200 || state.filters.bullEma200_300 || state.filters.bullSt10_1_2 || state.filters.bullSt10_2_3 || state.filters.bullSt1CloseCrossAbove || state.filters.bullVwapCloseCrossAbove || state.filters.bullMeetEma9_21 || state.filters.bullMeetEma21_35 || state.filters.bullMeetEma35_50 || state.filters.bullMeetEma50_100 || state.filters.bullMeetEma100_200 || state.filters.bullMeetEma200_300 || state.filters.bullMeetSt10_1_2 || state.filters.bullMeetSt10_2_3 || state.filters.bullMeetCloseSt || state.filters.bullMeetCloseVwap || state.filters.bullMeetPaneCross || state.filters.bullMeetCross || state.filters.bullMeetCloseBb || state.filters.bullMeetClosePc || state.filters.bullMeetVl || state.filters.bullGreenCandle || hasStreamFlags(state.filters, 'bull') || pbrOn(state.filters, 'bull'))) ||
@@ -6905,8 +7096,8 @@ window.createAutoExperiment = function (suffix) {
       if (pbs.length) items = items.concat(pbs);
       if (items.length) parts.push((sec === 'bullish' ? 'Bullish' : 'Bearish') + ': ' + items.join(', '));
     };
-    add('bullish', [f.incUp ? 'Increasing upward' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Increasing upward (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Pane all lines increasing upward' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close crossed above BB middle band (upper+lower expanding)' : null, f.bullPcCrossAbove ? 'Close crossed above price channel middle line' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising + volume increasing' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullOit ? 'OI Trend increasing upward' : null, f.bullEma9_21 ? 'EMA 9 crossed above EMA 21' : null, f.bullEma21_35 ? 'EMA 21 crossed above EMA 35' : null, f.bullEma35_50 ? 'EMA 35 crossed above EMA 50' : null, f.bullEma50_100 ? 'EMA 50 crossed above EMA 100' : null, f.bullEma100_200 ? 'EMA 100 crossed above EMA 200' : null, f.bullEma200_300 ? 'EMA 200 crossed above EMA 300' : null, f.bullSt10_1_2 ? 'Supertrend(10,1) crossed above Supertrend(10,2)' : null, f.bullSt10_2_3 ? 'Supertrend(10,2) crossed above Supertrend(10,3)' : null, f.bullSt1CloseCrossAbove ? 'Close crossed above Supertrend(10,1) (ST crossed below close)' : null, f.bullVwapCloseCrossAbove ? 'Close crossed above VWAP' : null, f.bullMeetEma9_21 ? 'EMA 9 above EMA 21' : null, f.bullMeetEma21_35 ? 'EMA 21 above EMA 35' : null, f.bullMeetEma35_50 ? 'EMA 35 above EMA 50' : null, f.bullMeetEma50_100 ? 'EMA 50 above EMA 100' : null, f.bullMeetEma100_200 ? 'EMA 100 above EMA 200' : null, f.bullMeetEma200_300 ? 'EMA 200 above EMA 300' : null, f.bullMeetSt10_1_2 ? 'Supertrend(10,1) above Supertrend(10,2)' : null, f.bullMeetSt10_2_3 ? 'Supertrend(10,2) above Supertrend(10,3)' : null, f.bullMeetCloseSt ? 'Close above Supertrend(10,1) (ST below close)' : null, f.bullMeetCloseVwap ? 'Close above VWAP' : null, f.bullMeetPaneCross ? 'Pane main line above signal' : null, f.bullMeetCross ? 'Primary above twin line' : null, f.bullMeetCloseBb ? 'Close above BB middle band (middle rising)' : null, f.bullMeetClosePc ? 'Close above price channel middle line (middle rising)' : null, f.bullMeetVl ? 'Volume Line above Signal' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null, f.bullGreenCandle ? 'Green candle entry (entry only while forming candle is green)' : null, f.bullCandle ? 'Candlestick patterns' : null, f.bullElliott ? 'Elliott Wave' : null, f.bullIndicator ? 'Indicators' : null, f.bullPane ? 'Pane indicators' : null, f.bullSymmetry ? 'Symmetry' : null, f.bullStructure ? 'Chart structure' : null, f.bullAtr ? 'ATR / Volatility' : null].filter(Boolean));
-    add('bearish', [f.incDown ? 'Increasing downward' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Increasing downward (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Pane all lines increasing downward' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close crossed below BB middle band (upper+lower expanding)' : null, f.bearPcCrossBelow ? 'Close crossed below price channel middle line' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling + volume increasing' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearOit ? 'OI Trend increasing downward' : null, f.bearEma9_21 ? 'EMA 9 crossed below EMA 21' : null, f.bearEma21_35 ? 'EMA 21 crossed below EMA 35' : null, f.bearEma35_50 ? 'EMA 35 crossed below EMA 50' : null, f.bearEma50_100 ? 'EMA 50 crossed below EMA 100' : null, f.bearEma100_200 ? 'EMA 100 crossed below EMA 200' : null, f.bearEma200_300 ? 'EMA 200 crossed below EMA 300' : null, f.bearSt10_1_2 ? 'Supertrend(10,1) crossed below Supertrend(10,2)' : null, f.bearSt10_2_3 ? 'Supertrend(10,2) crossed below Supertrend(10,3)' : null, f.bearSt1CloseCrossBelow ? 'Close crossed below Supertrend(10,1) (ST crossed above close)' : null, f.bearVwapCloseCrossBelow ? 'Close crossed below VWAP' : null, f.bearMeetEma9_21 ? 'EMA 9 below EMA 21' : null, f.bearMeetEma21_35 ? 'EMA 21 below EMA 35' : null, f.bearMeetEma35_50 ? 'EMA 35 below EMA 50' : null, f.bearMeetEma50_100 ? 'EMA 50 below EMA 100' : null, f.bearMeetEma100_200 ? 'EMA 100 below EMA 200' : null, f.bearMeetEma200_300 ? 'EMA 200 below EMA 300' : null, f.bearMeetSt10_1_2 ? 'Supertrend(10,1) below Supertrend(10,2)' : null, f.bearMeetSt10_2_3 ? 'Supertrend(10,2) below Supertrend(10,3)' : null, f.bearMeetCloseSt ? 'Close below Supertrend(10,1) (ST above close)' : null, f.bearMeetCloseVwap ? 'Close below VWAP' : null, f.bearMeetPaneCross ? 'Pane main line below signal' : null, f.bearMeetCross ? 'Primary below twin line' : null, f.bearMeetCloseBb ? 'Close below BB middle band (middle falling)' : null, f.bearMeetClosePc ? 'Close below price channel middle line (middle falling)' : null, f.bearMeetVl ? 'Volume Line below Signal' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null, f.bearRedCandle ? 'Red candle entry (entry only while forming candle is red)' : null, f.bearCandle ? 'Candlestick patterns' : null, f.bearElliott ? 'Elliott Wave' : null, f.bearIndicator ? 'Indicators' : null, f.bearPane ? 'Pane indicators' : null, f.bearSymmetry ? 'Symmetry' : null, f.bearStructure ? 'Chart structure' : null, f.bearAtr ? 'ATR / Volatility' : null].filter(Boolean));
+    add('bullish', [f.incUp ? 'Direction upward' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Direction upward (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Pane all lines direction upward' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close (EMA1) crossed above BB middle band (upper+lower expanding)' : null, f.bullPcCrossAbove ? 'Close (EMA1) crossed above price channel middle line' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising + volume increasing' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullOit ? 'OI Trend direction upward' : null, f.bullEma9_21 ? 'EMA 9 crossed above EMA 21' : null, f.bullEma21_35 ? 'EMA 21 crossed above EMA 35' : null, f.bullEma35_50 ? 'EMA 35 crossed above EMA 50' : null, f.bullEma50_100 ? 'EMA 50 crossed above EMA 100' : null, f.bullEma100_200 ? 'EMA 100 crossed above EMA 200' : null, f.bullEma200_300 ? 'EMA 200 crossed above EMA 300' : null, f.bullSt10_1_2 ? 'Supertrend(10,1) crossed above Supertrend(10,2)' : null, f.bullSt10_2_3 ? 'Supertrend(10,2) crossed above Supertrend(10,3)' : null, f.bullSt1CloseCrossAbove ? 'Close (EMA1) crossed above Supertrend(10,1) (ST crossed below close)' : null, f.bullVwapCloseCrossAbove ? 'Close (EMA1) crossed above VWAP' : null, f.bullMeetEma9_21 ? 'EMA 9 above EMA 21' : null, f.bullMeetEma21_35 ? 'EMA 21 above EMA 35' : null, f.bullMeetEma35_50 ? 'EMA 35 above EMA 50' : null, f.bullMeetEma50_100 ? 'EMA 50 above EMA 100' : null, f.bullMeetEma100_200 ? 'EMA 100 above EMA 200' : null, f.bullMeetEma200_300 ? 'EMA 200 above EMA 300' : null, f.bullMeetSt10_1_2 ? 'Supertrend(10,1) above Supertrend(10,2)' : null, f.bullMeetSt10_2_3 ? 'Supertrend(10,2) above Supertrend(10,3)' : null, f.bullMeetCloseSt ? 'Close (EMA1) above Supertrend(10,1) (ST below close)' : null, f.bullMeetCloseVwap ? 'Close (EMA1) above VWAP' : null, f.bullMeetPaneCross ? 'Pane main line above signal' : null, f.bullMeetCross ? 'Primary above twin line' : null, f.bullMeetCloseBb ? 'Close (EMA1) above BB middle band (middle direction upward)' : null, f.bullMeetClosePc ? 'Close (EMA1) above price channel middle line (middle direction upward)' : null, f.bullMeetVl ? 'Volume Line above Signal' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null, f.bullGreenCandle ? 'Green candle entry (entry only while forming candle is green)' : null, f.bullCandle ? 'Candlestick patterns' : null, f.bullElliott ? 'Elliott Wave' : null, f.bullIndicator ? 'Indicators' : null, f.bullPane ? 'Pane indicators' : null, f.bullSymmetry ? 'Symmetry' : null, f.bullStructure ? 'Chart structure' : null, f.bullAtr ? 'ATR / Volatility' : null].filter(Boolean));
+    add('bearish', [f.incDown ? 'Direction downward' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Direction downward (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Pane all lines direction downward' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close (EMA1) crossed below BB middle band (upper+lower expanding)' : null, f.bearPcCrossBelow ? 'Close (EMA1) crossed below price channel middle line' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling + volume increasing' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearOit ? 'OI Trend direction downward' : null, f.bearEma9_21 ? 'EMA 9 crossed below EMA 21' : null, f.bearEma21_35 ? 'EMA 21 crossed below EMA 35' : null, f.bearEma35_50 ? 'EMA 35 crossed below EMA 50' : null, f.bearEma50_100 ? 'EMA 50 crossed below EMA 100' : null, f.bearEma100_200 ? 'EMA 100 crossed below EMA 200' : null, f.bearEma200_300 ? 'EMA 200 crossed below EMA 300' : null, f.bearSt10_1_2 ? 'Supertrend(10,1) crossed below Supertrend(10,2)' : null, f.bearSt10_2_3 ? 'Supertrend(10,2) crossed below Supertrend(10,3)' : null, f.bearSt1CloseCrossBelow ? 'Close (EMA1) crossed below Supertrend(10,1) (ST crossed above close)' : null, f.bearVwapCloseCrossBelow ? 'Close (EMA1) crossed below VWAP' : null, f.bearMeetEma9_21 ? 'EMA 9 below EMA 21' : null, f.bearMeetEma21_35 ? 'EMA 21 below EMA 35' : null, f.bearMeetEma35_50 ? 'EMA 35 below EMA 50' : null, f.bearMeetEma50_100 ? 'EMA 50 below EMA 100' : null, f.bearMeetEma100_200 ? 'EMA 100 below EMA 200' : null, f.bearMeetEma200_300 ? 'EMA 200 below EMA 300' : null, f.bearMeetSt10_1_2 ? 'Supertrend(10,1) below Supertrend(10,2)' : null, f.bearMeetSt10_2_3 ? 'Supertrend(10,2) below Supertrend(10,3)' : null, f.bearMeetCloseSt ? 'Close (EMA1) below Supertrend(10,1) (ST above close)' : null, f.bearMeetCloseVwap ? 'Close (EMA1) below VWAP' : null, f.bearMeetPaneCross ? 'Pane main line below signal' : null, f.bearMeetCross ? 'Primary below twin line' : null, f.bearMeetCloseBb ? 'Close (EMA1) below BB middle band (middle direction downward)' : null, f.bearMeetClosePc ? 'Close (EMA1) below price channel middle line (middle direction downward)' : null, f.bearMeetVl ? 'Volume Line below Signal' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null, f.bearRedCandle ? 'Red candle entry (entry only while forming candle is red)' : null, f.bearCandle ? 'Candlestick patterns' : null, f.bearElliott ? 'Elliott Wave' : null, f.bearIndicator ? 'Indicators' : null, f.bearPane ? 'Pane indicators' : null, f.bearSymmetry ? 'Symmetry' : null, f.bearStructure ? 'Chart structure' : null, f.bearAtr ? 'ATR / Volatility' : null].filter(Boolean));
     return parts.join(' | ');
   }
 
@@ -7055,7 +7246,7 @@ window.createAutoExperiment = function (suffix) {
     const f = state.filters || (state.filters = Object.assign({}, defaultState().filters));
     const tcEl = $id('aeTrendConfirm');
     if (tcEl) tcEl.checked = !!state.trendConfirm;
-    [['aeFilterBullish', 'bullish'], ['aeFilterBearish', 'bearish'], ['aeFilterIncUp', 'incUp'], ['aeFilterIncDown', 'incDown'], ['aeFilterGapUp', 'gapUp'], ['aeFilterGapDown', 'gapDown'], ['aeFilterIncUpAll', 'incUpAll'], ['aeFilterIncDownAll', 'incDownAll'], ['aeFilterCrossUp', 'crossUp'], ['aeFilterCrossDown', 'crossDown'], ['aeFilterGtUp', 'gtUp'], ['aeFilterLtUp', 'ltUp'], ['aeFilterGtDown', 'gtDown'], ['aeFilterLtDown', 'ltDown']].concat(FILTER_EXTRA_KEYS.map(k => ['aeFilter' + capId(k), k]), STREAM_FLAG_KEYS.map(k => ['aeFilter' + capId(k), k])).forEach(p => {
+    [['aeFilterBullish', 'bullish'], ['aeFilterBearish', 'bearish'], ['aeFilterIncUp', 'incUp'], ['aeFilterIncDown', 'incDown'], ['aeFilterGapUp', 'gapUp'], ['aeFilterGapDown', 'gapDown'], ['aeFilterIncUpAll', 'incUpAll'], ['aeFilterIncDownAll', 'incDownAll'], ['aeFilterCrossUp', 'crossUp'], ['aeFilterCrossDown', 'crossDown'], ['aeFilterGtUp', 'gtUp'], ['aeFilterLtUp', 'ltUp'], ['aeFilterGtDown', 'gtDown'], ['aeFilterLtDown', 'ltDown']].concat(FILTER_EXTRA_KEYS.map(k => ['aeFilter' + capId(k), k]), STREAM_FLAG_KEYS.map(k => ['aeFilter' + capId(k), k]), FILTER_ARM_KEYS.map(k => ['aeFilter' + capId(k), k])).forEach(p => {
       const el = $id(p[0]);
       if (el) el.checked = !!f[p[1]];
       else f[p[1]] = false;
@@ -7886,7 +8077,7 @@ window.createAutoExperiment = function (suffix) {
         const boxes = secEl.querySelectorAll('input[type=checkbox]');
         for (let i = 0; i < boxes.length; i++) {
           const b = boxes[i];
-          if (b && b.id && b.id !== 'aeFilter' + sec) b.checked = on;
+          if (b && b.id && b.id !== 'aeFilter' + sec && b.id.indexOf('ArmedGate') < 0) b.checked = on;
         }
       }
       readFiltersUI();

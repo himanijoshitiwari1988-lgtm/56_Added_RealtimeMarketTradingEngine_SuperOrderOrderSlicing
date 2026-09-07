@@ -386,7 +386,7 @@ window.createPaperTrade = function (suffix) {
       const col = net >= 0 ? '#00d4aa' : '#ef5350';
       const sideCol = t.side === 'BUY' ? '#00d4aa' : '#ef5350';
       const d = new Date(t.at);
-      const ts = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+      const ts = (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(t.at) : (function (dd) { return String(dd.getHours()).padStart(2, '0') + ':' + String(dd.getMinutes()).padStart(2, '0') + ':' + String(dd.getSeconds()).padStart(2, '0'); })(d);
       return '<tr>' +
         '<td>' + (i + 1) + '</td>' +
         '<td>' + (t.symbol || '') + '</td>' +
@@ -428,7 +428,7 @@ window.createPaperTrade = function (suffix) {
     if (state.closed.length || state.position || Object.keys(state.autoPositions || {}).length) {
       points.push({ at: Date.now(), y: Math.round((realizedPnl() + unrealizedPnl()) * 100) / 100 });
     }
-    const labels = points.map(p => { const d = new Date(p.at); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0'); });
+    const labels = points.map(p => { const d = new Date(p.at); if (window.IST12 && IST12.fmtMs) return IST12.fmtMs(p.at); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0'); });
     const data = points.map(p => p.y);
     if (!ptChart) {
       ptChart = new Chart(canvas.getContext('2d'), {
@@ -491,7 +491,7 @@ window.createPaperTrade = function (suffix) {
     if (!el) return;
     el.innerHTML = state.log.slice(-12).map(l => {
       const d = new Date(l.t);
-      const ts = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+      const ts = (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(l.t) : String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
       const col = l.cls === 'buy' ? '#00d4aa' : (l.cls === 'sell' ? '#ef5350' : (l.cls === 'warn' ? '#ff9800' : '#888'));
       return '<div style="color:' + col + '"><span style="color:#555">' + ts + '</span> ' + l.msg + '</div>';
     }).join('');

@@ -3454,7 +3454,7 @@
     const el = $('strat-log-' + id);
     if (!el) return;
     const now = new Date();
-    const t = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0') + ':' + String(now.getSeconds()).padStart(2, '0');
+    const t = (window.IST12 && IST12.fmtMs) ? IST12.fmtMs(now.getTime()) : String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0') + ':' + String(now.getSeconds()).padStart(2, '0');
     const div = document.createElement('div');
     div.className = 'slog ' + (cls || '');
     div.textContent = '[' + t + '] ' + msg;

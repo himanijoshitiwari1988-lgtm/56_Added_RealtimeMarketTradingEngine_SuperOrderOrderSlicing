@@ -80,8 +80,13 @@
 
   function $id(id) { return document.getElementById(id); }
   function fmtTime(iso) {
-    if (!iso) return "—";
-    try { return new Date(iso).toLocaleString(); } catch (e) { return iso; }
+    if (iso == null || iso === "") return "—";
+    try {
+      var ms = typeof iso === "number" ? iso : Date.parse(iso);
+      if (isNaN(ms)) return iso;
+      if (window.IST12 && IST12.fmtMsDT) return IST12.fmtMsDT(ms);
+      return new Date(ms).toLocaleString();
+    } catch (e) { return iso; }
   }
   function sizeFmt(b) {
     if (!b && b !== 0) return "—";

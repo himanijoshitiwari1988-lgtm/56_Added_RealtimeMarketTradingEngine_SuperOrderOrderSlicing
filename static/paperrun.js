@@ -611,7 +611,7 @@ window.createPaperRun = function (suffix) {
     const pnl = tradePnl(p, cur);
     const pnlCol = pnl == null ? '#888' : (pnl >= 0 ? '#00d4aa' : '#ef5350');
     const d = new Date(p.openedAt || Date.now());
-    const ts = d.toLocaleDateString('en-IN') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+    const ts = (window.IST12 && IST12.fmtMsDT) ? IST12.fmtMsDT(p.openedAt || Date.now()) : d.toLocaleDateString('en-IN') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
     const body = $id('ptRunDetailBody');
     if (!body) return;
     body.innerHTML =

@@ -520,6 +520,67 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
   setInterval(send, 5000);
 })();
 </script>
+<script>
+/* ---- IST clock display helpers (shared, 12-hour AM/PM) ------------------
+   Wall-clock readouts across the app now render in Indian time (Asia/Kolkata)
+   in 12-hour AM/PM form so they line up with the broker/NSE clock.
+
+   Two epoch conventions exist in this codebase and callers must feed the right
+   helper:
+     * fmtMs(x)   - x is a REAL epoch ms (Date.now(), trade.at, updatedAt...).
+                    IST is derived by shifting +5h30m then reading UTC fields,
+                    so it is correct regardless of the browser timezone.
+     * fmtCandle(x) - x is a CANDLE epoch SECONDS whose value is the IST wall
+                    clock read as if it were UTC (naive-UTC, as served by the
+                    chart API). Reading getUTC* fields on it yields IST
+                    directly with NO extra shift.
+   Both produce "hh:mm:ss AM/PM". */
+window.IST12 = (function () {
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function hh(h24) { h24 = h24 % 24; var ap = h24 < 12 ? 'AM' : 'PM'; h24 = h24 % 12; if (h24 === 0) h24 = 12; return pad(h24) + ' ' + ap; }
+  function build(d, withSec) {
+    var t = pad(d.getUTCHours() % 12 === 0 ? 12 : d.getUTCHours() % 12);
+    var s = t + ':' + pad(d.getUTCMinutes());
+    if (withSec) s += ':' + pad(d.getUTCSeconds());
+    return s + ' ' + (d.getUTCHours() < 12 ? 'AM' : 'PM');
+  }
+  function dtPart(d) {
+    return pad(d.getUTCDate()) + '-' + pad(d.getUTCMonth() + 1) + '-' + String(d.getUTCFullYear()).slice(2);
+  }
+  return {
+    /* Real epoch ms -> IST "hh:mm[:ss] AM/PM" (browser-TZ independent) */
+    fmtMs: function (ms, withSec) {
+      if (ms == null || isNaN(ms)) return '--';
+      var d = new Date((ms || 0) + 5.5 * 3600 * 1000);
+      return build(d, withSec !== false);
+    },
+    /* Real epoch ms -> IST date + time "DD-MM-YY hh:mm:ss AM/PM" */
+    fmtMsDT: function (ms, withSec) {
+      if (ms == null || isNaN(ms)) return '--';
+      var d = new Date((ms || 0) + 5.5 * 3600 * 1000);
+      return dtPart(d) + ' ' + build(d, withSec !== false);
+    },
+    /* Candle epoch SECONDS (IST wall clock as naive UTC) -> "hh:mm[:ss] AM/PM".
+       No +5.5 shift - the value already encodes IST wall-clock in UTC fields. */
+    fmtCandle: function (sec, withSec) {
+      if (sec == null || isNaN(sec)) return '--';
+      var d = new Date((sec || 0) * 1000);
+      return build(d, withSec !== false);
+    },
+    /* Real epoch ms -> short IST date "DD/MM" (event log rows) */
+    fmtD: function (ms) {
+      if (ms == null || isNaN(ms)) return '--';
+      var d = new Date((ms || 0) + 5.5 * 3600 * 1000);
+      return pad(d.getUTCDate()) + '/' + pad(d.getUTCMonth() + 1);
+    },
+    /* Format a bare hour-of-day number (0-23) as "hh AM/PM" for bucket labels
+       ("Most profitable hour", hourly table rows, axis ticks). */
+    fmtHour: function (h) { return hh(Number(h) || 0); },
+    /* Re-export hour helper for hour-range strings like "02:00 PM – 02:59 PM" */
+    pad: pad, hh: hh
+  };
+})();
+</script>
 <div id="app">
   <div id="header">
     <span class="logo">Dhan Algo Trading System</span>
@@ -1360,10 +1421,13 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <label style="font-size:9px;color:#ffd700;margin-right:10px;padding-top:4px;display:flex;align-items:center;gap:3px" title="ON: the strategy's entry fires ONLY when every selected indicator/filter AND the strategy's own conditions pass together on the same bar (strict AND - no partial N-of-M). OFF: the old default entry behavior (N-of-M threshold)."><input type="checkbox" id="astAllInOne" onchange="AISmartTrading.onAllInOne()" style="accent-color:#ffd700"> All together (strict AND)</label>
             <div id="astFilterSectionBullish" style="border:1px solid #1f4a35;border-radius:4px;padding:4px 8px;margin-right:10px;background:#0e231a">
               <label style="font-size:9px;color:#26a69a;display:flex;align-items:center;gap:3px;font-weight:700"><input type="checkbox" id="astFilterBullish" onchange="AISmartTrading.onFilterMaster('bullish')" style="accent-color:#00d4aa"> Bullish <span style="font-weight:400;color:#4a7a63;font-size:8px">(select all)</span></label>
+              <label style="font-size:8.5px;color:#ffd700;display:flex;align-items:center;gap:3px;margin-top:2px;font-weight:700" title="When ON, an entry fires only on the first bar where the whole enabled Bullish filter set turns true at once (set re-arms only after any filter breaks).">
+                <input type="checkbox" id="astFilterBullArmedGate" onchange="AISmartTrading.onFiltersInput()" style="accent-color:#ffd700"> Armed entry (first full-hold bar only)
+              </label>
               <div style="margin-top:4px;display:flex;flex-direction:column;gap:3px">
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterIncUp" onchange="AISmartTrading.onFiltersInput()"> Increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterIncUp" onchange="AISmartTrading.onFiltersInput()"> Direction upward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterGapUp" onchange="AISmartTrading.onFiltersInput()"> Gap increasing</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterIncUpAll" onchange="AISmartTrading.onFiltersInput()"> Increasing upward (all)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterIncUpAll" onchange="AISmartTrading.onFiltersInput()"> Direction upward (all)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterCrossUp" onchange="AISmartTrading.onFiltersInput()"> Crossed above</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterGtUp" onchange="AISmartTrading.onFiltersInput()"> Greater than</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterLtUp" onchange="AISmartTrading.onFiltersInput()"> Less than</label>
@@ -1373,14 +1437,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullReversal" onchange="AISmartTrading.onFiltersInput()"> Reversal</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullGreenCandle" onchange="AISmartTrading.onFiltersInput()"> Strategy entry on green candle</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneCrossUp" onchange="AISmartTrading.onFiltersInput()"> Pane crossover</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneIncUpAll" onchange="AISmartTrading.onFiltersInput()"> Pane all lines increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneIncUpAll" onchange="AISmartTrading.onFiltersInput()"> Pane all lines direction upward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullBbwInc" onchange="AISmartTrading.onFiltersInput()"> BBW increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSmf" onchange="AISmartTrading.onFiltersInput()"> Smart Money Flow bullish (SMF above signal)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line rising + volume increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullAsr" onchange="AISmartTrading.onFiltersInput()"> Support gap widening (price rising away from support)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be increasing upward"><input type="checkbox" id="astFilterBullOit" onchange="AISmartTrading.onFiltersInput()"> OI Trend increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullBbCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above BB middle band (upper+lower expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPcCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above price channel middle line</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be direction upward"><input type="checkbox" id="astFilterBullOit" onchange="AISmartTrading.onFiltersInput()"> OI Trend direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullBbCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed above BB middle band (upper+lower expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPcCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed above price channel middle line</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 crossed above EMA 21</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 crossed above EMA 35</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma35_50" onchange="AISmartTrading.onFiltersInput()"> EMA 35 crossed above EMA 50</label>
@@ -1389,27 +1453,23 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 crossed above EMA 300</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) crossed above Supertrend(10,2)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt1CloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed below close (close crossed above ST)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVwapCloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close crossed above VWAP</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt1CloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed below close (Close (EMA1) crossed above ST)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVwapCloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed above VWAP</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 1 (direction mirror - line behaviour)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrMacd" onchange="AISmartTrading.onFiltersInput()"> MACD line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrPpo" onchange="AISmartTrading.onFiltersInput()"> PPO line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAo" onchange="AISmartTrading.onFiltersInput()"> AO line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrSmiio" onchange="AISmartTrading.onFiltersInput()"> SMI line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrDpo" onchange="AISmartTrading.onFiltersInput()"> DPO line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrRsi" onchange="AISmartTrading.onFiltersInput()"> RSI line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrMfi" onchange="AISmartTrading.onFiltersInput()"> MFI line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrUo" onchange="AISmartTrading.onFiltersInput()"> UO line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrWilliamsR" onchange="AISmartTrading.onFiltersInput()"> Williams %R line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrBbpct" onchange="AISmartTrading.onFiltersInput()"> BB%b line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrObv" onchange="AISmartTrading.onFiltersInput()"> OBV line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrPvt" onchange="AISmartTrading.onFiltersInput()"> PVT line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAd" onchange="AISmartTrading.onFiltersInput()"> A/D line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrSmf" onchange="AISmartTrading.onFiltersInput()"> SMF line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAo" onchange="AISmartTrading.onFiltersInput()"> AO line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrSmiio" onchange="AISmartTrading.onFiltersInput()"> SMI line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrDpo" onchange="AISmartTrading.onFiltersInput()"> DPO line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrMfi" onchange="AISmartTrading.onFiltersInput()"> MFI line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrUo" onchange="AISmartTrading.onFiltersInput()"> UO line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrWilliamsR" onchange="AISmartTrading.onFiltersInput()"> Williams %R line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrBbpct" onchange="AISmartTrading.onFiltersInput()"> BB%b line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrPvt" onchange="AISmartTrading.onFiltersInput()"> PVT line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAd" onchange="AISmartTrading.onFiltersInput()"> A/D line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrSmf" onchange="AISmartTrading.onFiltersInput()"> SMF line direction upward</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line increasing (bands expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAtrUp" onchange="AISmartTrading.onFiltersInput()"> ATR line increasing (wide candles)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrVoloscUp" onchange="AISmartTrading.onFiltersInput()"> VolOsc line increasing (volume picking up)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line direction upward (bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAtrUp" onchange="AISmartTrading.onFiltersInput()"> ATR line direction upward (wide candles)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrVoloscUp" onchange="AISmartTrading.onFiltersInput()"> VolOsc line direction upward (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 above EMA 21 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 above EMA 35 (level)</label>
@@ -1419,12 +1479,12 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 above EMA 300 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) above Supertrend(10,2) (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) above Supertrend(10,3) (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseSt" onchange="AISmartTrading.onFiltersInput()"> Close above Supertrend (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseVwap" onchange="AISmartTrading.onFiltersInput()"> Close above VWAP (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseSt" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) above Supertrend (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseVwap" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) above VWAP (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetPaneCross" onchange="AISmartTrading.onFiltersInput()"> Pane crossed line pair still above (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCross" onchange="AISmartTrading.onFiltersInput()"> Crossed-above indicator pair still above (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close above BB middle (level, middle rising)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close above PC middle line (level, middle rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) above BB middle (level, middle direction upward)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) above PC middle line (level, middle direction upward)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullMeetVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line above Signal (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullCandle" onchange="AISmartTrading.onFiltersInput()"> Candlestick patterns</label>
@@ -1438,10 +1498,13 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             </div>
             <div id="astFilterSectionBearish" style="border:1px solid #4a1f1f;border-radius:4px;padding:4px 8px;margin-right:10px;background:#230e0e">
               <label style="font-size:9px;color:#ef5350;display:flex;align-items:center;gap:3px;font-weight:700"><input type="checkbox" id="astFilterBearish" onchange="AISmartTrading.onFilterMaster('bearish')" style="accent-color:#ef5350"> Bearish <span style="font-weight:400;color:#a14a4a;font-size:8px">(select all)</span></label>
+              <label style="font-size:8.5px;color:#ffd700;display:flex;align-items:center;gap:3px;margin-top:2px;font-weight:700" title="When ON, an entry fires only on the first bar where the whole enabled Bearish filter set turns true at once (set re-arms only after any filter breaks).">
+                <input type="checkbox" id="astFilterBearArmedGate" onchange="AISmartTrading.onFiltersInput()" style="accent-color:#ffd700"> Armed entry (first full-hold bar only)
+              </label>
               <div style="margin-top:4px;display:flex;flex-direction:column;gap:3px">
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterIncDown" onchange="AISmartTrading.onFiltersInput()"> Increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterIncDown" onchange="AISmartTrading.onFiltersInput()"> Direction downward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterGapDown" onchange="AISmartTrading.onFiltersInput()"> Gap decreasing</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterIncDownAll" onchange="AISmartTrading.onFiltersInput()"> Increasing downward (all)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterIncDownAll" onchange="AISmartTrading.onFiltersInput()"> Direction downward (all)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterCrossDown" onchange="AISmartTrading.onFiltersInput()"> Crossed below</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterGtDown" onchange="AISmartTrading.onFiltersInput()"> Greater than</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterLtDown" onchange="AISmartTrading.onFiltersInput()"> Less than</label>
@@ -1451,14 +1514,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearReversal" onchange="AISmartTrading.onFiltersInput()"> Reversal</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearRedCandle" onchange="AISmartTrading.onFiltersInput()"> Strategy entry on red candle</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneCrossDown" onchange="AISmartTrading.onFiltersInput()"> Pane crossover</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneIncDownAll" onchange="AISmartTrading.onFiltersInput()"> Pane all lines increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneIncDownAll" onchange="AISmartTrading.onFiltersInput()"> Pane all lines direction downward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearBbwInc" onchange="AISmartTrading.onFiltersInput()"> BBW increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSmf" onchange="AISmartTrading.onFiltersInput()"> Smart Money Flow bearish (SMF below signal)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line falling + volume increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearAsr" onchange="AISmartTrading.onFiltersInput()"> Resistance gap widening (price falling away below resistance)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be increasing downward"><input type="checkbox" id="astFilterBearOit" onchange="AISmartTrading.onFiltersInput()"> OI Trend increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearBbCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below BB middle band (upper+lower expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPcCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below price channel middle line</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be direction downward"><input type="checkbox" id="astFilterBearOit" onchange="AISmartTrading.onFiltersInput()"> OI Trend direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearBbCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed below BB middle band (upper+lower expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPcCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed below price channel middle line</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 crossed below EMA 21</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 crossed below EMA 35</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma35_50" onchange="AISmartTrading.onFiltersInput()"> EMA 35 crossed below EMA 50</label>
@@ -1467,27 +1530,23 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 crossed below EMA 300</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) crossed below Supertrend(10,2)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt1CloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed above close (close crossed below ST)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVwapCloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close crossed below VWAP</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt1CloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Supertrend crossed above close (Close (EMA1) crossed below ST)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVwapCloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed below VWAP</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 1 (direction mirror - line behaviour)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrMacd" onchange="AISmartTrading.onFiltersInput()"> MACD line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrPpo" onchange="AISmartTrading.onFiltersInput()"> PPO line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAo" onchange="AISmartTrading.onFiltersInput()"> AO line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrSmiio" onchange="AISmartTrading.onFiltersInput()"> SMI line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrDpo" onchange="AISmartTrading.onFiltersInput()"> DPO line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrRsi" onchange="AISmartTrading.onFiltersInput()"> RSI line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrMfi" onchange="AISmartTrading.onFiltersInput()"> MFI line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrUo" onchange="AISmartTrading.onFiltersInput()"> UO line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrWilliamsR" onchange="AISmartTrading.onFiltersInput()"> Williams %R line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrBbpct" onchange="AISmartTrading.onFiltersInput()"> BB%b line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrObv" onchange="AISmartTrading.onFiltersInput()"> OBV line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrPvt" onchange="AISmartTrading.onFiltersInput()"> PVT line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAd" onchange="AISmartTrading.onFiltersInput()"> A/D line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrSmf" onchange="AISmartTrading.onFiltersInput()"> SMF line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAo" onchange="AISmartTrading.onFiltersInput()"> AO line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrSmiio" onchange="AISmartTrading.onFiltersInput()"> SMI line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrDpo" onchange="AISmartTrading.onFiltersInput()"> DPO line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrMfi" onchange="AISmartTrading.onFiltersInput()"> MFI line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrUo" onchange="AISmartTrading.onFiltersInput()"> UO line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrWilliamsR" onchange="AISmartTrading.onFiltersInput()"> Williams %R line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrBbpct" onchange="AISmartTrading.onFiltersInput()"> BB%b line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrPvt" onchange="AISmartTrading.onFiltersInput()"> PVT line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAd" onchange="AISmartTrading.onFiltersInput()"> A/D line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrSmf" onchange="AISmartTrading.onFiltersInput()"> SMF line direction downward</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line increasing (bands expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAtrUp" onchange="AISmartTrading.onFiltersInput()"> ATR line increasing (wide candles)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrVoloscUp" onchange="AISmartTrading.onFiltersInput()"> VolOsc line increasing (volume picking up)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line direction upward (bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAtrUp" onchange="AISmartTrading.onFiltersInput()"> ATR line direction upward (wide candles)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrVoloscUp" onchange="AISmartTrading.onFiltersInput()"> VolOsc line direction upward (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma9_21" onchange="AISmartTrading.onFiltersInput()"> EMA 9 below EMA 21 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma21_35" onchange="AISmartTrading.onFiltersInput()"> EMA 21 below EMA 35 (level)</label>
@@ -1497,12 +1556,12 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 below EMA 300 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) below Supertrend(10,2) (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) below Supertrend(10,3) (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseSt" onchange="AISmartTrading.onFiltersInput()"> Close below Supertrend (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseVwap" onchange="AISmartTrading.onFiltersInput()"> Close below VWAP (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseSt" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) below Supertrend (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseVwap" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) below VWAP (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetPaneCross" onchange="AISmartTrading.onFiltersInput()"> Pane crossed line pair still below (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCross" onchange="AISmartTrading.onFiltersInput()"> Crossed-below indicator pair still below (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close below BB middle (level, middle falling)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close below PC middle line (level, middle falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetCloseBb" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) below BB middle (level, middle direction downward)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetClosePc" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) below PC middle line (level, middle direction downward)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearMeetVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line below Signal (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearCandle" onchange="AISmartTrading.onFiltersInput()"> Candlestick patterns</label>
@@ -2138,10 +2197,13 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             <div style="font-size:9px;color:#888;margin-right:10px;padding-top:4px"><b style="color:#ffd700">Indicator filters:</b></div>
             <div id="aeFilterSectionBullish" style="border:1px solid #1f4a35;border-radius:4px;padding:4px 8px;margin-right:10px;background:#0e231a">
               <label style="font-size:9px;color:#26a69a;display:flex;align-items:center;gap:3px;font-weight:700"><input type="checkbox" id="aeFilterBullish" onchange="AutoExperiment.onFilterMaster('bullish')" style="accent-color:#00d4aa"> Bullish <span style="font-weight:400;color:#4a7a63;font-size:8px">(select all)</span></label>
+              <label style="font-size:8.5px;color:#ffd700;display:flex;align-items:center;gap:3px;margin-top:2px;font-weight:700" title="When ON, an entry fires only on the first bar where the whole enabled Bullish filter set turns true at once (set re-arms only after any filter breaks).">
+                <input type="checkbox" id="aeFilterBullArmedGate" onchange="AutoExperiment.onFiltersInput()" style="accent-color:#ffd700"> Armed entry (first full-hold bar only)
+              </label>
               <div id="aeFilterSubsBullish" style="margin-top:4px;display:flex;flex-direction:column;gap:3px">
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterIncUp" onchange="AutoExperiment.onFiltersInput()"> Increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterIncUp" onchange="AutoExperiment.onFiltersInput()"> Direction upward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterGapUp" onchange="AutoExperiment.onFiltersInput()"> Gap increasing</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterIncUpAll" onchange="AutoExperiment.onFiltersInput()"> Increasing upward (all)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterIncUpAll" onchange="AutoExperiment.onFiltersInput()"> Direction upward (all)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterCrossUp" onchange="AutoExperiment.onFiltersInput()"> Crossed above</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterGtUp" onchange="AutoExperiment.onFiltersInput()"> Greater than</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterLtUp" onchange="AutoExperiment.onFiltersInput()"> Less than</label>
@@ -2151,14 +2213,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullReversal" onchange="AutoExperiment.onFiltersInput()"> Reversal</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullGreenCandle" onchange="AutoExperiment.onFiltersInput()"> Strategy entry on green candle</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneCrossUp" onchange="AutoExperiment.onFiltersInput()"> Pane crossover</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneIncUpAll" onchange="AutoExperiment.onFiltersInput()"> Pane all lines increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneIncUpAll" onchange="AutoExperiment.onFiltersInput()"> Pane all lines direction upward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullBbwInc" onchange="AutoExperiment.onFiltersInput()"> BBW increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSmf" onchange="AutoExperiment.onFiltersInput()"> Smart Money Flow bullish (SMF above signal)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullVl" onchange="AutoExperiment.onFiltersInput()"> Volume Line rising + volume increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullAsr" onchange="AutoExperiment.onFiltersInput()"> Support gap widening (price rising away from support)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be increasing upward"><input type="checkbox" id="aeFilterBullOit" onchange="AutoExperiment.onFiltersInput()"> OI Trend increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullBbCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above BB middle band (upper+lower expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPcCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above price channel middle line</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be direction upward"><input type="checkbox" id="aeFilterBullOit" onchange="AutoExperiment.onFiltersInput()"> OI Trend direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullBbCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) crossed above BB middle band (upper+lower expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPcCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) crossed above price channel middle line</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 crossed above EMA 21</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 crossed above EMA 35</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma35_50" onchange="AutoExperiment.onFiltersInput()"> EMA 35 crossed above EMA 50</label>
@@ -2167,27 +2229,23 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullEma200_300" onchange="AutoExperiment.onFiltersInput()"> EMA 200 crossed above EMA 300</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt10_1_2" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,1) crossed above Supertrend(10,2)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt1CloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed below close (close crossed above ST)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullVwapCloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close crossed above VWAP</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullSt1CloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed below close (Close (EMA1) crossed above ST)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullVwapCloseCrossAbove" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) crossed above VWAP</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 1 (direction mirror - line behaviour)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrMacd" onchange="AutoExperiment.onFiltersInput()"> MACD line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrPpo" onchange="AutoExperiment.onFiltersInput()"> PPO line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAo" onchange="AutoExperiment.onFiltersInput()"> AO line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrSmiio" onchange="AutoExperiment.onFiltersInput()"> SMI line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrDpo" onchange="AutoExperiment.onFiltersInput()"> DPO line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrRsi" onchange="AutoExperiment.onFiltersInput()"> RSI line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrMfi" onchange="AutoExperiment.onFiltersInput()"> MFI line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrUo" onchange="AutoExperiment.onFiltersInput()"> UO line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrWilliamsR" onchange="AutoExperiment.onFiltersInput()"> Williams %R line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrBbpct" onchange="AutoExperiment.onFiltersInput()"> BB%b line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrObv" onchange="AutoExperiment.onFiltersInput()"> OBV line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrPvt" onchange="AutoExperiment.onFiltersInput()"> PVT line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAd" onchange="AutoExperiment.onFiltersInput()"> A/D line increasing upward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrSmf" onchange="AutoExperiment.onFiltersInput()"> SMF line increasing upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAo" onchange="AutoExperiment.onFiltersInput()"> AO line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrSmiio" onchange="AutoExperiment.onFiltersInput()"> SMI line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrDpo" onchange="AutoExperiment.onFiltersInput()"> DPO line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrMfi" onchange="AutoExperiment.onFiltersInput()"> MFI line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrUo" onchange="AutoExperiment.onFiltersInput()"> UO line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrWilliamsR" onchange="AutoExperiment.onFiltersInput()"> Williams %R line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrBbpct" onchange="AutoExperiment.onFiltersInput()"> BB%b line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrPvt" onchange="AutoExperiment.onFiltersInput()"> PVT line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAd" onchange="AutoExperiment.onFiltersInput()"> A/D line direction upward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrSmf" onchange="AutoExperiment.onFiltersInput()"> SMF line direction upward</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrBbwUp" onchange="AutoExperiment.onFiltersInput()"> BBW line increasing (bands expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAtrUp" onchange="AutoExperiment.onFiltersInput()"> ATR line increasing (wide candles)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrVoloscUp" onchange="AutoExperiment.onFiltersInput()"> VolOsc line increasing (volume picking up)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrBbwUp" onchange="AutoExperiment.onFiltersInput()"> BBW line direction upward (bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrAtrUp" onchange="AutoExperiment.onFiltersInput()"> ATR line direction upward (wide candles)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullPbrVoloscUp" onchange="AutoExperiment.onFiltersInput()"> VolOsc line direction upward (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 above EMA 21 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 above EMA 35 (level)</label>
@@ -2197,12 +2255,12 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetEma200_300" onchange="AutoExperiment.onFiltersInput()"> EMA 200 above EMA 300 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetSt10_1_2" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,1) above Supertrend(10,2) (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) above Supertrend(10,3) (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseSt" onchange="AutoExperiment.onFiltersInput()"> Close above Supertrend (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseVwap" onchange="AutoExperiment.onFiltersInput()"> Close above VWAP (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseSt" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) above Supertrend (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseVwap" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) above VWAP (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetPaneCross" onchange="AutoExperiment.onFiltersInput()"> Pane crossed line pair still above (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCross" onchange="AutoExperiment.onFiltersInput()"> Crossed-above indicator pair still above (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close above BB middle (level, middle rising)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close above PC middle line (level, middle rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) above BB middle (level, middle direction upward)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) above PC middle line (level, middle direction upward)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullMeetVl" onchange="AutoExperiment.onFiltersInput()"> Volume Line above Signal (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBullCandle" onchange="AutoExperiment.onFiltersInput()"> Candlestick patterns</label>
@@ -2216,10 +2274,13 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
             </div>
             <div id="aeFilterSectionBearish" style="border:1px solid #4a1f1f;border-radius:4px;padding:4px 8px;margin-right:10px;background:#230e0e">
               <label style="font-size:9px;color:#ef5350;display:flex;align-items:center;gap:3px;font-weight:700"><input type="checkbox" id="aeFilterBearish" onchange="AutoExperiment.onFilterMaster('bearish')" style="accent-color:#ef5350"> Bearish <span style="font-weight:400;color:#8a4a4a;font-size:8px">(select all)</span></label>
+              <label style="font-size:8.5px;color:#ffd700;display:flex;align-items:center;gap:3px;margin-top:2px;font-weight:700" title="When ON, an entry fires only on the first bar where the whole enabled Bearish filter set turns true at once (set re-arms only after any filter breaks).">
+                <input type="checkbox" id="aeFilterBearArmedGate" onchange="AutoExperiment.onFiltersInput()" style="accent-color:#ffd700"> Armed entry (first full-hold bar only)
+              </label>
               <div id="aeFilterSubsBearish" style="margin-top:4px;display:flex;flex-direction:column;gap:3px">
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterIncDown" onchange="AutoExperiment.onFiltersInput()"> Increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterIncDown" onchange="AutoExperiment.onFiltersInput()"> Direction downward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterGapDown" onchange="AutoExperiment.onFiltersInput()"> Gap decreasing</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterIncDownAll" onchange="AutoExperiment.onFiltersInput()"> Increasing downward (all)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterIncDownAll" onchange="AutoExperiment.onFiltersInput()"> Direction downward (all)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterCrossDown" onchange="AutoExperiment.onFiltersInput()"> Crossed below</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterGtDown" onchange="AutoExperiment.onFiltersInput()"> Greater than</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterLtDown" onchange="AutoExperiment.onFiltersInput()"> Less than</label>
@@ -2229,14 +2290,14 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearReversal" onchange="AutoExperiment.onFiltersInput()"> Reversal</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearRedCandle" onchange="AutoExperiment.onFiltersInput()"> Strategy entry on red candle</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneCrossDown" onchange="AutoExperiment.onFiltersInput()"> Pane crossover</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneIncDownAll" onchange="AutoExperiment.onFiltersInput()"> Pane all lines increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterPaneIncDownAll" onchange="AutoExperiment.onFiltersInput()"> Pane all lines direction downward</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearBbwInc" onchange="AutoExperiment.onFiltersInput()"> BBW increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSmf" onchange="AutoExperiment.onFiltersInput()"> Smart Money Flow bearish (SMF below signal)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearVl" onchange="AutoExperiment.onFiltersInput()"> Volume Line falling + volume increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearAsr" onchange="AutoExperiment.onFiltersInput()"> Resistance gap widening (price falling away below resistance)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be increasing downward"><input type="checkbox" id="aeFilterBearOit" onchange="AutoExperiment.onFiltersInput()"> OI Trend increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearBbCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below BB middle band (upper+lower expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPcCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below price channel middle line</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) must be direction downward"><input type="checkbox" id="aeFilterBearOit" onchange="AutoExperiment.onFiltersInput()"> OI Trend direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearBbCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) crossed below BB middle band (upper+lower expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPcCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) crossed below price channel middle line</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 crossed below EMA 21</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 crossed below EMA 35</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma35_50" onchange="AutoExperiment.onFiltersInput()"> EMA 35 crossed below EMA 50</label>
@@ -2245,27 +2306,23 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearEma200_300" onchange="AutoExperiment.onFiltersInput()"> EMA 200 crossed below EMA 300</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt10_1_2" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,1) crossed below Supertrend(10,2)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt1CloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed above close (close crossed below ST)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearVwapCloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close crossed below VWAP</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearSt1CloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Supertrend crossed above close (Close (EMA1) crossed below ST)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearVwapCloseCrossBelow" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) crossed below VWAP</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 1 (direction mirror - line behaviour)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrMacd" onchange="AutoExperiment.onFiltersInput()"> MACD line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrPpo" onchange="AutoExperiment.onFiltersInput()"> PPO line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAo" onchange="AutoExperiment.onFiltersInput()"> AO line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrSmiio" onchange="AutoExperiment.onFiltersInput()"> SMI line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrDpo" onchange="AutoExperiment.onFiltersInput()"> DPO line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrRsi" onchange="AutoExperiment.onFiltersInput()"> RSI line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrMfi" onchange="AutoExperiment.onFiltersInput()"> MFI line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrUo" onchange="AutoExperiment.onFiltersInput()"> UO line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrWilliamsR" onchange="AutoExperiment.onFiltersInput()"> Williams %R line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrBbpct" onchange="AutoExperiment.onFiltersInput()"> BB%b line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrObv" onchange="AutoExperiment.onFiltersInput()"> OBV line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrPvt" onchange="AutoExperiment.onFiltersInput()"> PVT line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAd" onchange="AutoExperiment.onFiltersInput()"> A/D line increasing downward</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrSmf" onchange="AutoExperiment.onFiltersInput()"> SMF line increasing downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAo" onchange="AutoExperiment.onFiltersInput()"> AO line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrSmiio" onchange="AutoExperiment.onFiltersInput()"> SMI line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrDpo" onchange="AutoExperiment.onFiltersInput()"> DPO line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrMfi" onchange="AutoExperiment.onFiltersInput()"> MFI line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrUo" onchange="AutoExperiment.onFiltersInput()"> UO line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrWilliamsR" onchange="AutoExperiment.onFiltersInput()"> Williams %R line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrBbpct" onchange="AutoExperiment.onFiltersInput()"> BB%b line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrPvt" onchange="AutoExperiment.onFiltersInput()"> PVT line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAd" onchange="AutoExperiment.onFiltersInput()"> A/D line direction downward</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrSmf" onchange="AutoExperiment.onFiltersInput()"> SMF line direction downward</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrBbwUp" onchange="AutoExperiment.onFiltersInput()"> BBW line increasing (bands expanding)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAtrUp" onchange="AutoExperiment.onFiltersInput()"> ATR line increasing (wide candles)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrVoloscUp" onchange="AutoExperiment.onFiltersInput()"> VolOsc line increasing (volume picking up)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrBbwUp" onchange="AutoExperiment.onFiltersInput()"> BBW line direction upward (bands expanding)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrAtrUp" onchange="AutoExperiment.onFiltersInput()"> ATR line direction upward (wide candles)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearPbrVoloscUp" onchange="AutoExperiment.onFiltersInput()"> VolOsc line direction upward (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma9_21" onchange="AutoExperiment.onFiltersInput()"> EMA 9 below EMA 21 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma21_35" onchange="AutoExperiment.onFiltersInput()"> EMA 21 below EMA 35 (level)</label>
@@ -2275,12 +2332,12 @@ body::-webkit-scrollbar-corner{background:#0b0b1a}
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetEma200_300" onchange="AutoExperiment.onFiltersInput()"> EMA 200 below EMA 300 (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetSt10_1_2" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,1) below Supertrend(10,2) (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetSt10_2_3" onchange="AutoExperiment.onFiltersInput()"> Supertrend(10,2) below Supertrend(10,3) (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseSt" onchange="AutoExperiment.onFiltersInput()"> Close below Supertrend (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseVwap" onchange="AutoExperiment.onFiltersInput()"> Close below VWAP (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseSt" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) below Supertrend (level)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseVwap" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) below VWAP (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetPaneCross" onchange="AutoExperiment.onFiltersInput()"> Pane crossed line pair still below (level)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCross" onchange="AutoExperiment.onFiltersInput()"> Crossed-below indicator pair still below (level)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close below BB middle (level, middle falling)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close below PC middle line (level, middle falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetCloseBb" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) below BB middle (level, middle direction downward)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetClosePc" onchange="AutoExperiment.onFiltersInput()"> Close (EMA1) below PC middle line (level, middle direction downward)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearMeetVl" onchange="AutoExperiment.onFiltersInput()"> Volume Line below Signal (level)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Research stream (run only this group on this side)</div>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeFilterBearCandle" onchange="AutoExperiment.onFiltersInput()"> Candlestick patterns</label>
@@ -3911,7 +3968,11 @@ function syncTradeChartLines(){
     add(base, subKey+":entry", p.entryPrice, p.side === "BUY" ? "#00d4aa" : "#ff5252", "ENTRY " + (p.symbol||"").slice(0,14), 0);
     const liveLtp = liveQuoteForSymbol(p.symbolId, p.symbolExch);
     const slLvl = trailSlDisplayLevel(p, liveLtp);
-    const chartLtp = tradeChartPrice(p);
+    /* The chart's running-P&L label must use the SAME current price the Running
+       Trades list shows (live feed quote first, chart/candle close as the
+       fallback) - previously the label used only the chart close while Running
+       Trades used the live feed, so the two P&L figures drifted apart. */
+    const chartLtp = (liveLtp != null && liveLtp > 0) ? liveLtp : tradeChartPrice(p);
     const liveTitle = chartLtp != null ? liveLineTitle(p, chartLtp) : null;
     if(liveTitle) add(base, subKey+":live", chartLtp, "#00e5ff", liveTitle, 1);
     if(slLvl != null){
@@ -6323,25 +6384,25 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/autotrail.js?v=2"></script>
 <script src="/static/aitrail.js?v=2"></script>
 <script src="/static/aitrades.js?v=2"></script>
-<script src="/static/strategies.js?v=71"></script>
+<script src="/static/strategies.js?v=72"></script>
 <script src="/static/trendconfirm.js?v=1"></script>
-<script src="/static/papertrade.js?v=66"></script>
+<script src="/static/papertrade.js?v=67"></script>
 <script src="/static/strategy_container.js?v=16"></script>
-<script src="/static/autoexperiment.v13.js?v=153"></script>
-<script src="/static/indextrend.js?v=3"></script>
+ <script src="/static/autoexperiment.v13.js?v=170"></script>
+<script src="/static/indextrend.js?v=4"></script>
 <script src="/static/simulator.js?v=3"></script>
-<script src="/static/aismart.js?v=166"></script>
-<script src="/static/paperrun.js?v=25"></script>
+ <script src="/static/aismart.js?v=189"></script>
+<script src="/static/paperrun.js?v=26"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
-<script src="/static/fast_live.js?v=2"></script>
+<script src="/static/fast_live.js?v=3"></script>
 <script src="/static/hft_runner.js?v=9"></script>
-<script src="/static/final_strategy.js?v=3"></script>
-<script src="/static/smart_ntrader.js?v=65"></script>
-<script src="/static/niftybbp_alert.js?v=5"></script>
-<script src="/static/chart_grid.js?v=9"></script>
-<script src="/static/tradestats.js?v=1"></script>
-<script src="/static/backup.js?v=2"></script>
+<script src="/static/final_strategy.js?v=4"></script>
+<script src="/static/smart_ntrader.js?v=66"></script>
+<script src="/static/niftybbp_alert.js?v=6"></script>
+<script src="/static/chart_grid.js?v=10"></script>
+<script src="/static/tradestats.js?v=2"></script>
+<script src="/static/backup.js?v=3"></script>
 <script>
 /* Indicator filter rows injected by runtime for the 14 new indicators added in
    indicators.js (CMF/TSI/CCI/Fisher/Stoch RSI/Squeeze Momentum/Aroon/Vortex/
@@ -6384,34 +6445,47 @@ window.__addNewIndicatorFilterRows = function () {
     if (!content) return;
     if (content.getAttribute('data-aiRows')) return;
     var cap = side === 'Bullish' ? 'Bull' : 'Bear';
-    var upWord = side === 'Bullish' ? 'increasing upward' : 'increasing downward';
+    var upWord = side === 'Bullish' ? 'direction upward' : 'direction downward';
     var meetWord = side === 'Bullish' ? 'above' : 'below';
     var gapWord = side === 'Bullish' ? 'holding/widening upward' : 'holding/widening downward';
     var divs = content.querySelectorAll('div');
     var g2 = byText(divs, 'Pane Indicator Behaviour - Group 2');
     var research = byText(divs, 'Research stream');
-    var pane = [['Cmf', 'CMF'], ['Tsi', 'TSI'], ['Cci', 'CCI'], ['Fisher', 'Fisher'], ['Stochrsi', 'Stoch RSI'], ['Sqzmom', 'Squeeze Mom.'], ['Aroon', 'Aroon'], ['Elderforce', 'Force Index']];
+    var pane = [['Cmf', 'CMF'], ['Cci', 'CCI'], ['Sqzmom', 'Squeeze Mom.'], ['Elderforce', 'Force Index']];
     var pbg = [['Macd', 'MACD'], ['Ppo', 'PPO'], ['Smiio', 'SMI'], ['Tsi', 'TSI'], ['Stochrsi', 'Stoch RSI'], ['Smf', 'SMF'], ['Rsi', 'RSI'], ['Obv', 'OBV'], ['Fisher', 'Fisher'], ['Aroon', 'Aroon'], ['Vortex', 'Vortex'], ['Adx', 'ADX']];
     var obr = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['SenkouA', 'Ichimoku Senkou A'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core'], ['SupplyDemand', 'Supply Demand']];
     var meet = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
     if (g2) {
       var frag = document.createDocumentFragment();
-      pane.forEach(function (p) { frag.appendChild(makeRow(prefix + 'Filter' + cap + 'Pbr' + p[0], handler, p[1] + ' line ' + upWord)); });
+      pane.forEach(function (p) {
+        var lbl = p[0] === 'Elderforce'
+          ? 'Force Index soft-confirm (confirmation only - never blocks entry)'
+          : p[1] + ' line ' + upWord;
+        frag.appendChild(makeRow(prefix + 'Filter' + cap + 'Pbr' + p[0], handler, lbl));
+      });
       frag.appendChild(makeHead('Multi-Line Momentum Gap (level - main line above signal and gap holding/widening ' + (side === 'Bullish' ? 'up' : 'down') + ')'));
       pbg.forEach(function (p) {
         var lbl;
         if (p[0] === 'Smiio') {
           lbl = side === 'Bullish'
-            ? p[1] + ' & Signal above Histogram, both rising (level - OR of widening / histogram rising)'
-            : p[1] + ' & Signal below Histogram, both falling (level - OR of widening / histogram falling)';
+            ? p[1] + ' & Signal above Histogram, both direction upward (level - OR of widening / histogram rising)'
+            : p[1] + ' & Signal below Histogram, both direction downward (level - OR of widening / histogram falling)';
         } else if (p[0] === 'Vortex') {
           lbl = side === 'Bullish'
-            ? 'Vortex VI+ above VI-, VI+ rising & VI- falling, gap widening (level)'
-            : 'Vortex VI- above VI+, VI- rising & VI+ falling, gap widening (level)';
+            ? 'Vortex VI+ above VI-, VI+ direction upward & VI- direction downward, gap widening (level)'
+            : 'Vortex VI- above VI+, VI- direction upward & VI+ direction downward, gap widening (level)';
         } else if (p[0] === 'Adx') {
           lbl = side === 'Bullish'
-            ? 'ADX rising, +DI above -DI and +DI/-DI gap widening (level)'
-            : 'ADX falling, +DI below -DI and +DI/-DI gap widening (level)';
+            ? 'ADX direction upward, +DI above -DI, +DI direction upward & -DI direction downward, +DI/-DI gap widening (level)'
+            : 'ADX direction downward, +DI below -DI, +DI direction downward & -DI direction upward, +DI/-DI gap widening (level)';
+        } else if (p[0] === 'Aroon') {
+          lbl = side === 'Bullish'
+            ? 'Aroon Up above Aroon Down (level - line direction not required, gap holding/widening)'
+            : 'Aroon Up below Aroon Down (level - line direction not required, gap holding/widening)';
+        } else if (p[0] === 'Macd' || p[0] === 'Ppo' || p[0] === 'Tsi' || p[0] === 'Stochrsi' || p[0] === 'Rsi' || p[0] === 'Obv' || p[0] === 'Fisher') {
+          lbl = side === 'Bullish'
+            ? p[1] + ' main line crossed above signal line (level holding - no gap logic)'
+            : p[1] + ' main line crossed below signal line (level holding - no gap logic)';
         } else {
           lbl = p[1] + ' gap ' + gapWord + ' (level)';
         }
@@ -6421,7 +6495,7 @@ window.__addNewIndicatorFilterRows = function () {
     }
     if (research) {
       var frag2 = document.createDocumentFragment();
-      meet.forEach(function (p) { frag2.appendChild(makeRow(prefix + 'Filter' + cap + 'MeetOvl' + p[0], handler, 'Close ' + meetWord + ' ' + p[1] + ' (level)')); });
+      meet.forEach(function (p) { frag2.appendChild(makeRow(prefix + 'Filter' + cap + 'MeetOvl' + p[0], handler, 'Close (EMA1) ' + meetWord + ' ' + p[1] + ' (level)')); });
       frag2.appendChild(makeHead('Overlay Indicator Behaviour (direction mirror - overlay line behaviour)'));
       obr.forEach(function (p) { frag2.appendChild(makeRow(prefix + 'Filter' + cap + 'Obr' + p[0], handler, p[1] + ' line ' + upWord)); });
       research.parentNode.insertBefore(frag2, research);
@@ -6528,6 +6602,6 @@ window.KickRefresh = {
   ae: function (){ this._safe(function(){ if (typeof AutoExperiment !== 'undefined' && AutoExperiment.onTabShow) AutoExperiment.onTabShow(); }); }
 };
 </script>
-<script src="/static/algosbrain.js?v=11"></script>
+<script src="/static/algosbrain.js?v=12"></script>
 </body>
 </html>
