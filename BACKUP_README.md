@@ -1,56 +1,60 @@
-# Backup: 46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision
+# Backup: 49_Fixed_bb-b_TradeEntry_Active_Inactive
 
 Complete snapshot backup of the project (working directory
-`repo_preview`, full history continuing from the `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp`
-backup commit `872b61b`) pushed to
-`himanijoshitiwari1988-lgtm/46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision`
+`repo_preview`, full history continuing from the
+`48_Added_TradeEntryPossibilityArmGate_FixedIndicatorFilterDirection` backup
+commit `f0a3feb`) pushed to
+`himanijoshitiwari1988-lgtm/49_Fixed_bb-b_TradeEntry_Active_Inactive`
 (branch `main`).
 
-## Latest layer (2026-09-06) — Supply Demand overlay filter rows + chart-direct entry decision
+## Latest layer (2026-09-07) — 15-min NIFTY TF for the BB%b feed + BB%b engine run window ACTIVE/INACTIVE
 
-Incremental layer on top of commit `872b61b` (3 files, +35/-19):
+Incremental layer on top of commit `f0a3feb` (4 files, +307/-28):
 
-- **Supply Demand overlay filter rows** wired into AI Smart + Auto Experiment:
-  `OBR_LIST` (and its autoexperiment mirror) gains
-  `{ tok:'SupplyDemand', id:'supplydemand', valueKey:'v0',
-  settings:{atrPeriod:14, atrMult:2, minPct:0.15, eqTol:25}, name:'Supply Demand' }`,
-  and the `obr` row array in `templates/index.html` injects the new row
-  ("Supply Demand line increasing upward/downward"). `OBR_BULL_KEYS` /
-  `OBR_BEAR_KEYS` pick the entry up automatically in both engines; the
-  Supply/Demand structure series already ships from `static/indicators.js`
-  (added in the previous layer). Cache-bump:
-  `autoexperiment.v13.js?v=152 -> v=153`, `aismart.js?v=164 -> v=166`.
-- **AST paper-poll entry decision now runs directly on the real-time chart
-  candles only.** In the normal poll (`tickBody`) the option-chain
-  execution-target resolution (`executionSymbolsFor` / `contractsFor`) and the
-  REST quote/candle subscription (`ensureOptionQuotes`) no longer run before
-  every per-instrument condition check. Both are deferred to just after a fresh
-  signal fires (immediately before the order is placed), so a condition that
-  meets on the live chart places the paper entry on the next poll without
-  waiting on chain resolution / quote subscription. Open-position management
-  for a strategy+instrument now reads the paper engine's own positions
-  (`autoKey === key`) instead of iterating chain-derived trade targets, so even
-  held trades no longer trigger a chain fetch per poll. The decision path for
-  entries and the "waiting for signal" state perform zero chain / REST-quote
-  work.
+- **15-min NIFTY timeframe option** added symmetrically to both engines' NIFTY
+  TF dropdowns (`astNiftyTf` in AI Smart + `aeNiftyTf` in Auto-Experiment) and
+  accepted everywhere the NIFTY ensemble trend / BB%b feed reads the timeframe:
+  `niftybbp_alert.js` treats `15min` as a valid pane timeframe (feed
+  chart-update + pane depth `1min:1 / 5min:3 / 15min:7` days), and both
+  `aismart.js` and `autoexperiment.v13.js` whitelist `15min` in the TF init /
+  `niftyBias(tf)` / `enhanceNiftyBias(et)` / `setNiftyTf` validation with a new
+  `niftyTfLabel()` human-label helper and `niftyCandleDays(tf)` (7 days for
+  15min, 3 otherwise) applied to the NIFTY / GIFT NIFTY / INDIA VIX candle
+  fetches so 15-min indicators warm up at the same depth the HTF regime uses.
+- **BB%b engine run window** (AST only): a new BB%b control that auto-starts /
+  auto-stops the engine run between two BB%b lines, using the same two-line
+  alert UI the BULL CE / BEAR PE rows use (ACTIVE default crossed above 0.8,
+  INACTIVE default crossed below 0.2). The engine allows NEW entries only
+  inside the window — it starts from the first BB%b ACTIVE crossing and stops at
+  the BB%b INACTIVE crossing; open trades keep running to their SL/TP/trail. A
+  fresh run always begins dormant/INACTIVE and waits for the ACTIVE line
+  crossing. Implemented as a crossing latch in `static/niftybbp_alert.js`
+  (`stepWindowState` from the same prev/last samples the BB%b alerts use,
+  persisted under `astBbpWinCfg`, exported `windowStatus` / `windowReset` /
+  `setWindowEnabled` / `editWinDraft`), layered above the existing BB%b alert
+  gate in `static/aismart.js` via a new `bbpWindowBlock()` helper called at both
+  AST entry seams (HFT scanner + normal poll / Indicator-filters path) plus
+  `bbpWindowArmRun()` re-arming dormant on every run start, with the RUN WINDOW
+  editor box (`astBbpWinBox`) in the AST BB%b section of `templates/index.html`.
+  Cache-bumps: `aismart.js?v=190 -> v=191`, `niftybbp_alert.js?v=7 -> v=9`.
 
-## Modified files (latest layer `872b61b..current`, in CHANGES_COMPLETE.patch)
+## Modified files (latest layer `f0a3feb..current`, in CHANGES_COMPLETE.patch)
 
 ```
- static/aismart.js            | 45 +++++++++++++++++++++++++++++---------------
- static/autoexperiment.v13.js |  3 ++-
- templates/index.html         |  6 +++---
- 3 files changed, 35 insertions(+), 19 deletions(-)
+ static/aismart.js            |  72 +++++++++++++---
+ static/autoexperiment.v13.js |  30 ++++---
+ static/niftybbp_alert.js     | 191 ++++++++++++++++++++++++++++++++++++++++++-
+ templates/index.html         |  42 +++++++++-
+ 4 files changed, 307 insertions(+), 28 deletions(-)
 ```
 
 Patch diff for this layer: `CHANGES_COMPLETE.patch` /
-`CHANGES_SUMMARY.txt` below cover `872b61b..current` (this window).
+`CHANGES_SUMMARY.txt` below cover `f0a3feb..current` (this window).
 
 ## Contents
 
 - **Complete project files** — the full committed working tree as of the
-  Supply Demand overlay filter rows + chart-direct entry decision milestone
-  (HEAD), including:
+  15-min NIFTY TF + BB%b engine run window milestone (HEAD), including:
   - `app.py`, `main.py`, `broker.py`, `charts.py`, `data_fetcher.py`, `requirements.txt`
   - `.env.example` (config template - the real `.env` with any key is never
     tracked or shipped)
@@ -61,26 +65,25 @@ Patch diff for this layer: `CHANGES_COMPLETE.patch` /
   - `templates/index.html`
   - `CHANGELOG.md`, `HANDOFF.md`, `SESSION.md`
 - **CHANGES_COMPLETE.patch** — the complete unified diff of the latest
-  incremental layer between the previous backup commit `872b61b` and the
-  current working tree (HEAD) — the Supply Demand overlay filter rows in both
-  engines + index.html, and the chart-direct entry decision reorder in
-  `static/aismart.js` (no chain fetch / no REST quote subscription before the
-  entry signal) — generated with `git diff 872b61b`, excluding the regenerated
-  doc files themselves.
+  incremental layer between the previous backup commit `f0a3feb` and the
+  current working tree (HEAD) — the 15-min NIFTY TF option + the BB%b engine
+  run window (ACTIVE/INACTIVE) across `aismart.js`, `autoexperiment.v13.js`,
+  `niftybbp_alert.js` and `templates/index.html` — generated with
+  `git diff f0a3feb`, excluding the regenerated doc files themselves.
 - **CHANGES_SUMMARY.txt** — `git diff --stat` plus `--name-status` of the same,
   with a plain-language change description.
 
-## Underlying snapshot (highlights of `a152c03..872b61b`)
+## Underlying snapshot (highlights of `95666ad..f0a3feb`)
 
-- **45_Added_PaneIndicaterRisingUpward...** milestone — Pane Indicator
-  Behaviour rising-upward / rising-downward filter rows, the Multi-Line
-  Momentum Gap (PBG) level gates for 12 pane indicators (incl. the SMI
-  OR-of-two histogram variant), the fastest positive rising strike LTP pick-up
-  toggles/count, plus the connected Supply/Demand structure overlay + RSI true
-  Signal EMA + chart hardening in `static/indicators.js`.
+- **48_Added_TradeEntryPossibilityArmGate_FixedIndicatorFilterDirection**
+  milestone — the Trade-Entry-Possibility arm gate + Indicator-filter-direction
+  fixes plus the ADX filter rebuild in Multi-Line Momentum Gap and the shared
+  pane crosshair/timeframe sync that closed out the 48 chain.
 
 ## Previous backups
 
+- `48_Added_TradeEntryPossibilityArmGate_FixedIndicatorFilterDirection` (commit `f0a3feb`)
+- `46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision` (commit `95666ad`)
 - `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp` (commit `872b61b`)
 - `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour` (commit `a152c03`)
 - `43_Added_vLindicatorFilter` (commit `b61f17e`)

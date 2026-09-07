@@ -1,59 +1,79 @@
-CHANGES_SUMMARY for backup 46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision
-(Supply Demand overlay filter rows in AST+AE + chart-direct paper entry decision - no chain fetch / no REST quote before the entry signal)
-Generated: 2026-09-06 UTC
-Diff of committed work between 872b61b (backup 45) and the current working tree (this layer)
+CHANGES_SUMMARY for backup 49_Fixed_bb-b_TradeEntry_Active_Inactive
+(15-min NIFTY timeframe option for the BB%b alert feed + BB%b engine run window ACTIVE/INACTIVE)
+Generated: 2026-09-07 UTC
+Diff of committed work between f0a3feb (backup 48) and the current working tree (this layer)
 
- static/aismart.js            | 45 +++++++++++++++++++++++++++++---------------
- static/autoexperiment.v13.js |  3 ++-
- templates/index.html         |  6 +++---
- 3 files changed, 35 insertions(+), 19 deletions(-)
+ static/aismart.js            |  72 +++++++++++++---
+ static/autoexperiment.v13.js |  30 ++++---
+ static/niftybbp_alert.js     | 191 ++++++++++++++++++++++++++++++++++++++++++-
+ templates/index.html         |  42 +++++++++-
+ 4 files changed, 307 insertions(+), 28 deletions(-)
 
 --- name-status ---
 M	static/aismart.js
 M	static/autoexperiment.v13.js
+M	static/niftybbp_alert.js
 M	templates/index.html
 
 --- change description ---
-1) Supply Demand overlay filter rows (AI Smart AST + Auto Experiment AE).
-   The overlay direction-mirror group OBR_LIST in both engines gains a new
-   entry:
-     { tok:'SupplyDemand', id:'supplydemand', valueKey:'v0',
-       settings:{atrPeriod:14, atrMult:2, minPct:0.15, eqTol:25},
-       name:'Supply Demand' }
-   so the existing "Supply Demand line increasing upward/downward" behaviour
-   rows become available in the bullish/bearish filter panels of both engines
-   (OBR_BULL_KEYS / OBR_BEAR_KEYS pick it up automatically, with matching
-   summaries). templates/index.html __addNewIndicatorFilterRows injects the new
-   row into the obr array next to HMA / Tenkan / Kijun / SenkouA / Keltner /
-   Donchian / TrendCore. The Supply/Demand structure series itself is computed
-   by static/indicators.js (shipped in the previous layer). Cache-bump:
-   autoexperiment.v13.js?v=152 -> v=153, aismart.js?v=164 -> v=166.
+1) 15-min NIFTY timeframe option added symmetrically to both engines' NIFTY TF
+   dropdowns (AST astNiftyTf + Auto-Experiment aeNiftyTf) and accepted
+   everywhere the NIFTY ensemble trend / BB%b feed reads the timeframe.
+   - static/niftybbp_alert.js: '15min' is now a valid pane timeframe - feed()
+     chart-updates on it (effTf guard) and renderPane() depth map is
+     1min:1 / 5min:3 / 15min:7 days (else 5).
+   - static/aismart.js and static/autoexperiment.v13.js: '15min' is whitelisted
+     in the _NIFTY_TF init, niftyBias(tf) / enhanceNiftyBias(et) selection and
+     setNiftyTf validation; new niftyTfLabel() human label helper (replaces the
+     raw '1min+5min'/'both' strings in the UI helper text + change logs) and
+     niftyCandleDays(tf) returning 7 history days for 15min (3 otherwise),
+     applied to the NIFTY / GIFT NIFTY / INDIA VIX candle fetches so the 15-min
+     indicators get the same warm-up depth the HTF regime already used.
+   - templates/index.html: <option value="15min">15 min</option> added to the
+     astNiftyTf and aeNiftyTf dropdowns.
 
-2) AST paper-poll entry decision now runs directly on the real-time chart
-   candles (static/aismart.js tickBody per-instrument loop).
-   - The option-chain execution-target resolution (executionSymbolsFor /
-     contractsFor) and the REST quote/candle subscription (ensureOptionQuotes)
-     no longer run BEFORE every per-instrument condition check. They were moved
-     out of the decision path and are deferred to just after a fresh entry
-     signal fires - immediately before the order is placed - so a condition
-     that meets on the live chart places the paper entry on the next poll
-     without ever waiting on chain resolution / quote subscription. The
-     "waiting for entry signal" state and every non-firing instrument now do
-     zero chain / REST-quote work per poll.
-   - Open-position management for a strategy+instrument now reads the paper
-     engine's own positions directly (positions whose autoKey === key) instead
-     of iterating chain-derived trade targets (posKeyOf over executionSymbols
-     targets), so even a held trade no longer triggers a chain fetch every
-     poll. The one-trade-per-signal latch (armed while a position of ours is
-     open) and the existing exit/trail management behaviour are preserved.
-   - The realtime evaluation still reads the same chart/FastLive candles as
-     before; only the ordering relative to chain/quote work changed. The HFT
-     scanner path is unaffected (it already resolved targets synchronously
-     from cache).
+2) BB%b ENGINE RUN WINDOW (AST only) - a new BB%b control in the AST BB%b alert
+   section that AUTO-STARTS / AUTO-STOPS the engine run between two BB%b lines,
+   using the same "two alert lines" UI pattern the BULL CE / BEAR PE rows use
+   (each line = crossed_above/crossed_below dropdown + value input moved up/down
+   to set). Defaults: ACTIVE = crossed above 0.8, INACTIVE = crossed below 0.2.
+   Semantics: the engine only allows NEW entries inside the window - it starts
+   from the first BB%b ACTIVE crossing and stops at the BB%b INACTIVE crossing.
+   Open trades keep running to their SL/TP/trail the whole time (only the
+   entry side is paused). When the window is ON a fresh run always starts
+   dormant/INACTIVE and waits for the ACTIVE line crossing.
+   - static/niftybbp_alert.js: win config {enabled, active{...}, inactive{...}}
+     persisted under localStorage <pfx>BbpWinCfg (astBbpWinCfg); crossing-based
+     latch stepWindowState() advanced inside feed() on the same prev/last sample
+     pair the BB%b alerts fire from; seedWindowState() on attach/enable (seeds
+     ACTIVE only when BB%b is already past ACTIVE and not past INACTIVE, else
+     dormant); windowReset() (forces INACTIVE, no-ops when window off),
+     windowStatus(), setWindowEnabled(), editWinDraft() (values clamped
+     ALERT_MIN..ALERT_MAX), paintWindowChip() (chip <pfx>BbpWinState shows
+     "RUN ACTIVE/INACTIVE"), syncWinEditor/syncWinEditorRow for the editor
+     rows. All exported on window.NiftyBbpAlert. Extra attach() state: winKey,
+     win, winState; reset() re-seeds the window on a timeframe change.
+   - static/aismart.js: new bbpWindowBlock() helper returns a block reason when
+     the window switch is ON and the window state is INACTIVE (and null when OFF
+     or ACTIVE) - a higher-level pause/resume latch layered ABOVE the existing
+     BB%b alert gate (bbpGateBlock) so an INACTIVE window stops entries
+     regardless of the gate state. Called immediately before bbpGateBlock at
+     both AST entry seams: the HFT scanner path and the normal poll path (which
+     also carries the Indicator-filters runs), so an INACTIVE window keeps the
+     engine dormant while the open-position/trail/SL-TP management loop keeps
+     running. New bbpWindowArmRun() resets the window to INACTIVE on every fresh
+     run start (Auto toggle ON / Run Paper Trading / Indicator-filters run) so a
+     run always begins dormant and only opens entries after the first BB%b
+     ACTIVE crossing.
+   - templates/index.html: new RUN WINDOW box (astBbpWinBox) in the AST BB%b
+     section with the master enable checkbox astBbpWinEn ("engine runs between
+     ACTIVE & INACTIVE only"), the status chip astBbpWinState, the ACTIVE line
+     controls astBbpWinActEn/Cond/Val (green) and the INACTIVE line controls
+     astBbpWinInaEn/Cond/Val (red). Auto-Experiment section left untouched.
 
-3) templates/index.html cache-bust bumps: autoexperiment.v13.js?v=152 -> v=153,
-   aismart.js?v=164 -> v=166 (the Supply Demand obr row addition is a JS-side
-   injection, no separate markup).
+3) templates/index.html cache-bust bumps for this window:
+   aismart.js?v=190 -> v=191, niftybbp_alert.js?v=7 -> v=9 (autoexperiment.v13.js
+   stays at v=171 - its 15min edits were served in the earlier v=171 bump).
 
 No other files changed; nothing was removed. Full unified diff in
-CHANGES_COMPLETE.patch (872b61b..working tree, doc files excluded).
+CHANGES_COMPLETE.patch (f0a3feb..working tree, doc files excluded).

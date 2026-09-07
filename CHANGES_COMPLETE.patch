@@ -1,118 +1,633 @@
 diff --git a/static/aismart.js b/static/aismart.js
-index ea595d4..a894c62 100644
+index e0e7a7d..3fd95a7 100644
 --- a/static/aismart.js
 +++ b/static/aismart.js
-@@ -169,7 +169,8 @@ window.createAISmartTrading = function (suffix) {
-     { tok: 'SenkouA', id: 'ichimoku', valueKey: 'v2', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Senkou A' },
-     { tok: 'Keltner', id: 'keltner', valueKey: 'v1', settings: { length: 20, mult: 2 }, name: 'Keltner middle' },
-     { tok: 'Donchian', id: 'donchian', valueKey: 'v1', settings: { length: 20 }, name: 'Donchian middle' },
--    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' }
-+    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' },
-+    { tok: 'SupplyDemand', id: 'supplydemand', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15, eqTol: 25 }, name: 'Supply Demand' }
-   ];
-   const OB_BULL_KEYS = OBR_LIST.map(d => 'bullObr' + d.tok);
-   const OB_BEAR_KEYS = OBR_LIST.map(d => 'bearObr' + d.tok);
-@@ -5029,28 +5030,29 @@ window.createAISmartTrading = function (suffix) {
-           if (!candles || candles.length < 10) { prog(s.id, 5, 'Waiting candles'); bump(instr, 'candles'); continue; }
-           const trendCandles = trendTf ? await candlesForInstrument(instr, trendTf) : null;
+@@ -3013,8 +3013,16 @@ window.createAISmartTrading = function (suffix) {
+   const INDIA_VIX_IDX = { id: 21, exch: 'IDX_I', inst: 'INDEX', name: 'INDIA VIX' };
+   const NIFTY_ZONE_LABEL = { overbought: 'Overbought', oversold: 'Oversold', above_upper: 'Above upper band', upper_half: 'Upper half', lower_half: 'Lower half', below_lower: 'Below lower band', inc_up: 'Increasing upward', inc_down: 'Increasing downward' };
+   const _NIFTY_TF_KEY = 'algodhan_ast_nifty_tf' + suffix;
+-  const _NIFTY_TF = (function () { const v = localStorage.getItem(_NIFTY_TF_KEY); return (v === '1min' || v === '5min' || v === 'both') ? v : '5min'; })();
++  const _NIFTY_TF = (function () { const v = localStorage.getItem(_NIFTY_TF_KEY); return (v === '1min' || v === '5min' || v === '15min' || v === 'both') ? v : '5min'; })();
+   let _niftyTf = _NIFTY_TF;
++  /* Human label for a NIFTY ensemble-trend timeframe value (used by the TF
++     dropdown helper text and the change log). */
++  const _NIFTY_TF_LABELS = { '1min': '1 min', '5min': '5 min', '15min': '15 min', both: '1 min + 5 min' };
++  function niftyTfLabel(tf) { return _NIFTY_TF_LABELS[tf] || tf || '5 min'; }
++  /* History depth for the NIFTY ensemble trend per timeframe: 1/5 min keep the
++     existing 3-session depth; 15 min needs more bars for the same indicator
++     warm-up so it mirrors the 7 days the HTF regime confirmation already uses. */
++  function niftyCandleDays(tf) { return tf === '15min' ? 7 : 3; }
+   const _niftyBiasCache = {};
+   /* Most recent NIFTY trend direction observed by this engine (updated by the
+      paper poll). Drives the NIFTY trend-following symbol picker without
+@@ -3401,7 +3409,7 @@ window.createAISmartTrading = function (suffix) {
+   }
  
--          const tradeTargets = await executionSymbolsFor(instr, s);
--          if (!tradeTargets.length) {
--            if (chainRateLimited(instr.symbol)) prog(s.id, 15, 'Option chain rate-limited - retrying in ~' + _CHAIN_RL_SEC + 's');
--            else prog(s.id, 15, 'No execution target (option chain unavailable)');
--            bump(instr, 'targets'); continue;
--          }
--          await ensureOptionQuotes(tradeTargets, entryTf);
--          prog(s.id, 30, 'Execution target ready');
--
-+          /* The entry DECISION runs on the real-time chart candles only: the
-+             option chain is not fetched and no REST quote/candle subscription
-+             happens while the engine is waiting for / analysing a signal. Those
-+             two steps are deferred until a fresh signal actually fires, just
-+             before the order is placed (below). A condition that meets on the
-+             chart therefore gets placed on the next poll without waiting on
-+             chain resolution. */
-           // Immediate chart-based execution: a strategy signal on the run chart
-           // fires the entry directly - the companion-chart confirmation wait is
-           // removed. The fill happens at the live chart price.
+   async function niftyBias(tf) {
+-    const t = (tf === '1min' || tf === '5min' || tf === 'both') ? tf : _niftyTf;
++    const t = (tf === '1min' || tf === '5min' || tf === '15min' || tf === 'both') ? tf : _niftyTf;
+     const now = Date.now();
+     const c = _niftyBiasCache[t];
+     if (c && (now - c.at) < 60000) return c.bias;
+@@ -3415,7 +3423,7 @@ window.createAISmartTrading = function (suffix) {
+         bias = combineNiftyTfs(c5, c1);
+         if (bias) bias.at = now;
+       } else {
+-        const candles = await SE.fetchCandlesFor(NIFTY_IDX, t, 3);
++        const candles = await SE.fetchCandlesFor(NIFTY_IDX, t, niftyCandleDays(t));
+         if (!candles || candles.length < 30) return (c && c.bias) || null;
+         const ta = niftyTrendAnalysis(candles);
+         const range = sessionBbRange(candles);
+@@ -3439,10 +3447,10 @@ window.createAISmartTrading = function (suffix) {
+   async function enhanceNiftyBias(bias, t) {
+     const SE = window.StratEngine;
+     if (!SE || !SE.fetchCandlesFor) return bias;
+-    const et = (t === '1min' || t === '5min') ? t : '5min';
++    const et = (t === '1min' || t === '5min' || t === '15min') ? t : '5min';
+     let scoreAdj = 0, weight = 0, giftRev = null, giftDir = null, vixVote = null;
+     try {
+-      const giftC = await SE.fetchCandlesFor(GIFT_NIFTY_IDX, et, 3);
++      const giftC = await SE.fetchCandlesFor(GIFT_NIFTY_IDX, et, niftyCandleDays(et));
+       if (giftC && giftC.length >= 30) {
+         const g = niftyTrendAnalysis(giftC);
+         if (g && g.dir) {
+@@ -3454,7 +3462,7 @@ window.createAISmartTrading = function (suffix) {
+       }
+     } catch (e) {}
+     try {
+-      const vixC = await SE.fetchCandlesFor(INDIA_VIX_IDX, et, 3);
++      const vixC = await SE.fetchCandlesFor(INDIA_VIX_IDX, et, niftyCandleDays(et));
+       if (vixC && vixC.length >= 30) {
+         const v = vixTrendSignal(vixC);
+         if (v) { scoreAdj += v * 2; weight += 2; vixVote = v; }
+@@ -3600,7 +3608,7 @@ window.createAISmartTrading = function (suffix) {
+   async function updateNiftyBiasStatus(bias) {
+     const sum = _niftySummary(bias);
+     const sumEl = $id('astNiftyStatus');
+-    if (sumEl) sumEl.innerHTML = (sum || '<span style="color:#666">waiting for NIFTY ' + _niftyTf + ' data&hellip;</span>') + ' ' + niftyConfirmStatusHtml();
++    if (sumEl) sumEl.innerHTML = (sum || '<span style="color:#666">waiting for NIFTY ' + niftyTfLabel(_niftyTf) + ' data&hellip;</span>') + ' ' + niftyConfirmStatusHtml();
+     if (bias && isFinite(bias.pctb) && window.NiftyBbpAlert) {
+       NiftyBbpAlert.feed('ast', { pctb: bias.pctb, overall: bias.overall });
+     }
+@@ -3670,6 +3678,28 @@ window.createAISmartTrading = function (suffix) {
+     return rowWait(needBear ? 'bear' : 'bull', row.met, row.valueText);
+   }
  
--          // Manage any open legs on the execution targets before considering a
--          // new entry. When a dual (both) leg is held, exits are managed here.
-+          // Manage any open legs of this strategy+instrument (autoKey === key)
-+          // before considering a new entry - decided purely from the paper
-+          // engine's own positions, never from a chain fetch. While a position
-+          // of ours is open its signal episode stays latched, so an SL/TP exit
-+          // cannot be followed by an instant re-buy on the same still-true
-+          // condition.
-           let anyOpen = false;
--          for (const tSym of tradeTargets) {
--            const pkey = posKeyOf(tSym);
-+          for (const pkey of Object.keys(autoPositions)) {
-             const open = autoPositions[pkey];
-             if (!open) continue;
--            anyOpen = true;
-             if (String(open.autoKey || '') !== key) continue; /* owned by another engine / manual trade */
-+            anyOpen = true;
-             /* An open position on this instrument means this signal episode has
-                already been used - keep the one-trade-per-signal latch armed so a
-                stop/TP exit cannot be followed by an instant re-buy while the
-@@ -5113,6 +5115,19 @@ window.createAISmartTrading = function (suffix) {
++  /* BB%b RUN WINDOW (AST engine run window): when the "Run Win" switch is ON
++     the whole engine run (both normal poll and HFT scanner) only allows NEW
++     entries between the two window lines:
++       - BB%b crosses ACTIVE line  -> run window ACTIVE  (entries allowed).
++       - BB%b crosses INACTIVE line -> run window INACTIVE (no new entries;
++         open trades keep running to their SL/TP/trail).
++     The window is a separate, higher-level pause/resume latch layered above the
++     BB%b alert gate: when the window is INACTIVE no entry passes regardless of
++     the BB%b gate state; when ACTIVE the BB%b gate still applies as usual.
++     Returns null when the window is off / active, else a human reason. */
++  function bbpWindowBlock() {
++    if (!window.NiftyBbpAlert) return null;
++    const w = NiftyBbpAlert.windowStatus('ast');
++    if (!w || !w.enabled) return null;
++    if (w.state === 'active') return null;
++    const a = w.active;
++    const reason = a && a.enabled
++      ? 'BB%b ' + (a.cond === 'crossed_above' ? 'above' : 'below') + ' ' + a.valueText + ' (ACTIVE)'
++      : 'ACTIVE line';
++    return 'BB%b run window INACTIVE - engine dormant. Naye entries tab tak nahi jab tak BB%b ' + reason + ' cross na kare (ab ' + (w.lastText || '--') + '). Open trades chalti rahengi.';
++  }
++
+   /* NIFTY ensemble-trend timeframe (1 min / 5 min). Switching invalidates the
+      cached bias so the trend is recomputed on the newly chosen timeframe, the
+      static helper text is updated and the choice persists across reloads. */
+@@ -3677,11 +3707,11 @@ window.createAISmartTrading = function (suffix) {
+     const selEl = $id('astNiftyTf');
+     if (selEl) selEl.value = _niftyTf;
+     const labEl = $id('astNiftyTfLabel');
+-    if (labEl) labEl.textContent = (_niftyTf === 'both' ? '1min+5min' : _niftyTf) + ' ensemble trend, refreshed at most once a minute.';
++    if (labEl) labEl.textContent = niftyTfLabel(_niftyTf) + ' ensemble trend, refreshed at most once a minute.';
+   }
+ 
+   function setNiftyTf(tf) {
+-    if (tf !== '1min' && tf !== '5min' && tf !== 'both') tf = '5min';
++    if (tf !== '1min' && tf !== '5min' && tf !== '15min' && tf !== 'both') tf = '5min';
+     _niftyTf = tf;
+     localStorage.setItem(_NIFTY_TF_KEY, tf);
+     delete _niftyBiasCache[tf];
+@@ -3689,7 +3719,7 @@ window.createAISmartTrading = function (suffix) {
+     syncNiftyTfUI();
+     updateNiftyBiasStatus(null);
+     niftyBias().then(b => { if (b) updateNiftyBiasStatus(b); });
+-    log('NIFTY ensemble trend timeframe set to ' + (_niftyTf === 'both' ? '1 min + 5 min' : _niftyTf), 'ok');
++    log('NIFTY ensemble trend timeframe set to ' + niftyTfLabel(_niftyTf), 'ok');
+   }
+ 
+   /* Per-symbol trend/movement/direction classifier used to auto-pick the option
+@@ -4872,6 +4902,11 @@ window.createAISmartTrading = function (suffix) {
            /* One-trade-per-signal: this still-true condition already fired its
               trade - no re-entry until the signal resets and meets again. */
-           if (firedSignal(key)) { prog(s.id, 72, 'One trade per signal - same condition still active, waiting for a fresh signal'); bump(instr, 'signal'); continue; }
-+          /* A fresh signal wants to trade - NOW resolve the execution leg(s).
-+             The option chain is consulted only here, to place the order; it is
-+             never needed to analyse. The quote/candle subscription runs at the
-+             same point so a wait on it can never delay a signal that is still
-+             building on the chart. */
-+          const tradeTargets = await executionSymbolsFor(instr, s);
-+          if (!tradeTargets.length) {
-+            if (chainRateLimited(instr.symbol)) prog(s.id, 15, 'Option chain rate-limited - retrying in ~' + _CHAIN_RL_SEC + 's');
-+            else prog(s.id, 15, 'No execution target (option chain unavailable)');
-+            bump(instr, 'targets'); continue;
-+          }
-+          await ensureOptionQuotes(tradeTargets, entryTf);
-+          prog(s.id, 30, 'Execution target ready');
+           if (firedSignal(key)) continue;
++          /* BB%b run window (engine run window): when the window is INACTIVE
++             the HFT scanner stays dormant - no new entries until BB%b crosses
++             the ACTIVE line. Higher-level than the BB%b alert gate below. */
++          const winBlock = bbpWindowBlock();
++          if (winBlock) continue;
+           const bbpBlock = bbpGateBlock(instr, tradeTargets);
+           if (bbpBlock) continue;
+           gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });
+@@ -5560,6 +5595,11 @@ window.createAISmartTrading = function (suffix) {
+             if (cold.length) { try { await ensureOptionQuotes(cold, entryTf); } catch (e) {} }
+           }
+           prog(s.id, 30, 'Execution target ready');
++          /* BB%b run window (engine run window): when INACTIVE the engine stays
++             dormant - no new entries until BB%b crosses the ACTIVE line. Open
++             trades keep running. Higher-level than the BB%b alert gate below. */
++          const winBlock = bbpWindowBlock();
++          if (winBlock) { prog(s.id, 76, winBlock); bump(instr, 'bbp'); continue; }
            const bbpBlock = bbpGateBlock(instr, tradeTargets);
            if (bbpBlock) { prog(s.id, 77, bbpBlock); bump(instr, 'bbp'); continue; }
            gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });
+@@ -7870,12 +7910,22 @@ window.createAISmartTrading = function (suffix) {
+     syncRunStrategyInUI();
+   }
+ 
++  /* Fresh-run arming of the BB%b run window: when the window switch is ON, a
++     new engine run always starts dormant/INACTIVE and only allows entries once
++     BB%b crosses the ACTIVE line (windowReset no-ops when the window is off). */
++  function bbpWindowArmRun() {
++    if (window.NiftyBbpAlert && typeof NiftyBbpAlert.windowReset === 'function') {
++      try { NiftyBbpAlert.windowReset('ast'); } catch (e) {}
++    }
++  }
++
+   /* ---------------- actions ---------------- */
+   function toggleAuto() {
+     state.enabled = !state.enabled;
+     if (state.enabled) {
+       state.runIntent = { active: true, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
+       _userFastDataOff = false;
++      bbpWindowArmRun();
+     } else {
+       state.runIntent = { active: false, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
+     }
+@@ -7961,6 +8011,7 @@ window.createAISmartTrading = function (suffix) {
+     state.enabled = true;
+     state.runIntent = { active: true, mode: 'normal', at: Date.now() };
+     _userFastDataOff = false;
++    bbpWindowArmRun();
+     save();
+     applyUniversalToUI();
+     render();
+@@ -7983,6 +8034,7 @@ window.createAISmartTrading = function (suffix) {
+     state.enabled = true;
+     state.runIntent = { active: true, mode: 'filter', at: Date.now() };
+     _userFastDataOff = false;
++    bbpWindowArmRun();
+     save();
+     applyUniversalToUI();
+     render();
 diff --git a/static/autoexperiment.v13.js b/static/autoexperiment.v13.js
-index c8c24ce..46519ea 100644
+index 24c477a..e57d24a 100644
 --- a/static/autoexperiment.v13.js
 +++ b/static/autoexperiment.v13.js
-@@ -557,7 +557,8 @@ window.createAutoExperiment = function (suffix) {
-     { tok: 'SenkouA', id: 'ichimoku', valueKey: 'v2', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Senkou A' },
-     { tok: 'Keltner', id: 'keltner', valueKey: 'v1', settings: { length: 20, mult: 2 }, name: 'Keltner middle' },
-     { tok: 'Donchian', id: 'donchian', valueKey: 'v1', settings: { length: 20 }, name: 'Donchian middle' },
--    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' }
-+    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' },
-+    { tok: 'SupplyDemand', id: 'supplydemand', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15, eqTol: 25 }, name: 'Supply Demand' }
-   ];
-   const OB_BULL_KEYS = OBR_LIST.map(d => 'bullObr' + d.tok);
-   const OB_BEAR_KEYS = OBR_LIST.map(d => 'bearObr' + d.tok);
+@@ -3809,7 +3809,7 @@ window.createAutoExperiment = function (suffix) {
+     if (s.filters) state.filters = Object.assign(state.filters || {}, JSON.parse(JSON.stringify(s.filters)));
+     if (s.movers) state.movers = Object.assign(state.movers || {}, JSON.parse(JSON.stringify(s.movers)));
+     if (s.niftyTrend) state.niftyTrend = Object.assign(state.niftyTrend || {}, JSON.parse(JSON.stringify(s.niftyTrend)));
+-    if (s.niftyTf && (s.niftyTf === '1min' || s.niftyTf === '5min' || s.niftyTf === 'both')) _niftyTf = s.niftyTf;
++    if (s.niftyTf && (s.niftyTf === '1min' || s.niftyTf === '5min' || s.niftyTf === '15min' || s.niftyTf === 'both')) _niftyTf = s.niftyTf;
+   }
+ 
+   /* NIFTY 50 ensemble trend used by the live bias readout and the trend-
+@@ -3825,8 +3825,16 @@ window.createAutoExperiment = function (suffix) {
+   const INDIA_VIX_IDX = { id: 21, exch: 'IDX_I', inst: 'INDEX', name: 'INDIA VIX' };
+   const NIFTY_ZONE_LABEL = { overbought: 'Overbought', oversold: 'Oversold', above_upper: 'Above upper band', upper_half: 'Upper half', lower_half: 'Lower half', below_lower: 'Below lower band', inc_up: 'Increasing upward', inc_down: 'Increasing downward' };
+   const _NIFTY_TF_KEY = 'algodhan_ae_nifty_tf' + suffix;
+-  const _NIFTY_TF = (function () { const v = localStorage.getItem(_NIFTY_TF_KEY); return (v === '1min' || v === '5min' || v === 'both') ? v : '5min'; })();
++  const _NIFTY_TF = (function () { const v = localStorage.getItem(_NIFTY_TF_KEY); return (v === '1min' || v === '5min' || v === '15min' || v === 'both') ? v : '5min'; })();
+   let _niftyTf = _NIFTY_TF;
++  /* Human label for a NIFTY ensemble-trend timeframe value (used by the TF
++     dropdown helper text and the change log). */
++  const _NIFTY_TF_LABELS = { '1min': '1 min', '5min': '5 min', '15min': '15 min', both: '1 min + 5 min' };
++  function niftyTfLabel(tf) { return _NIFTY_TF_LABELS[tf] || tf || '5 min'; }
++  /* History depth for the NIFTY ensemble trend per timeframe: 1/5 min keep the
++     existing 3-session depth; 15 min needs more bars for the same indicator
++     warm-up so it mirrors the 7 days the HTF regime confirmation already uses. */
++  function niftyCandleDays(tf) { return tf === '15min' ? 7 : 3; }
+   const _niftyBiasCache = {};
+   /* Most recent NIFTY trend direction observed by this engine (updated by
+      the poll tick / runExperiment). Drives the NIFTY trend-following symbol picker
+@@ -4258,7 +4266,7 @@ window.createAutoExperiment = function (suffix) {
+   }
+ 
+   async function niftyBias(tf) {
+-    const t = (tf === '1min' || tf === '5min' || tf === 'both') ? tf : _niftyTf;
++    const t = (tf === '1min' || tf === '5min' || tf === '15min' || tf === 'both') ? tf : _niftyTf;
+     const now = Date.now();
+     const c = _niftyBiasCache[t];
+     if (c && (now - c.at) < 60000) return c.bias;
+@@ -4272,7 +4280,7 @@ window.createAutoExperiment = function (suffix) {
+         bias = combineNiftyTfs(c5, c1);
+         if (bias) bias.at = now;
+       } else {
+-        const candles = await SE.fetchCandlesFor(NIFTY_IDX, t, 3);
++        const candles = await SE.fetchCandlesFor(NIFTY_IDX, t, niftyCandleDays(t));
+         if (!candles || candles.length < 30) return (c && c.bias) || null;
+         const ta = niftyTrendAnalysis(candles);
+         const range = sessionBbRange(candles);
+@@ -4296,10 +4304,10 @@ window.createAutoExperiment = function (suffix) {
+   async function enhanceNiftyBias(bias, t) {
+     const SE = window.StratEngine;
+     if (!SE || !SE.fetchCandlesFor) return bias;
+-    const et = (t === '1min' || t === '5min') ? t : '5min';
++    const et = (t === '1min' || t === '5min' || t === '15min') ? t : '5min';
+     let scoreAdj = 0, weight = 0, giftRev = null, giftDir = null, vixVote = null;
+     try {
+-      const giftC = await SE.fetchCandlesFor(GIFT_NIFTY_IDX, et, 3);
++      const giftC = await SE.fetchCandlesFor(GIFT_NIFTY_IDX, et, niftyCandleDays(et));
+       if (giftC && giftC.length >= 30) {
+         const g = niftyTrendAnalysis(giftC);
+         if (g && g.dir) {
+@@ -4311,7 +4319,7 @@ window.createAutoExperiment = function (suffix) {
+       }
+     } catch (e) {}
+     try {
+-      const vixC = await SE.fetchCandlesFor(INDIA_VIX_IDX, et, 3);
++      const vixC = await SE.fetchCandlesFor(INDIA_VIX_IDX, et, niftyCandleDays(et));
+       if (vixC && vixC.length >= 30) {
+         const v = vixTrendSignal(vixC);
+         if (v) { scoreAdj += v * 2; weight += 2; vixVote = v; }
+@@ -4367,7 +4375,7 @@ window.createAutoExperiment = function (suffix) {
+   async function updateNiftyBiasStatus(bias) {
+     const sum = _niftySummary(bias);
+     const sumEl = $id('aeNiftyStatus');
+-    if (sumEl) sumEl.innerHTML = (sum || '<span style="color:#666">waiting for NIFTY ' + _niftyTf + ' data&hellip;</span>') + ' ' + niftyConfirmHtmlAE();
++    if (sumEl) sumEl.innerHTML = (sum || '<span style="color:#666">waiting for NIFTY ' + niftyTfLabel(_niftyTf) + ' data&hellip;</span>') + ' ' + niftyConfirmHtmlAE();
+     if (bias && isFinite(bias.pctb) && window.NiftyBbpAlert) {
+       NiftyBbpAlert.feed('ae', { pctb: bias.pctb, overall: bias.overall });
+     }
+@@ -4380,11 +4388,11 @@ window.createAutoExperiment = function (suffix) {
+     const selEl = $id('aeNiftyTf');
+     if (selEl) selEl.value = _niftyTf;
+     const labEl = $id('aeNiftyTfLabel');
+-    if (labEl) labEl.textContent = (_niftyTf === 'both' ? '1min+5min' : _niftyTf) + ' ensemble trend, refreshed at most once a minute.';
++    if (labEl) labEl.textContent = niftyTfLabel(_niftyTf) + ' ensemble trend, refreshed at most once a minute.';
+   }
+ 
+   function setNiftyTf(tf) {
+-    if (tf !== '1min' && tf !== '5min' && tf !== 'both') tf = '5min';
++    if (tf !== '1min' && tf !== '5min' && tf !== '15min' && tf !== 'both') tf = '5min';
+     _niftyTf = tf;
+     localStorage.setItem(_NIFTY_TF_KEY, tf);
+     delete _niftyBiasCache[tf];
+@@ -4392,7 +4400,7 @@ window.createAutoExperiment = function (suffix) {
+     syncNiftyTfUI();
+     updateNiftyBiasStatus(null);
+     niftyBias().then(b => { if (b) updateNiftyBiasStatus(b); });
+-    log('NIFTY ensemble trend timeframe set to ' + (_niftyTf === 'both' ? '1 min + 5 min' : _niftyTf), 'ok');
++    log('NIFTY ensemble trend timeframe set to ' + niftyTfLabel(_niftyTf), 'ok');
+   }
+ 
+   /* Wait helpers for transient Dhan rate limits. When the server is inside its
+diff --git a/static/niftybbp_alert.js b/static/niftybbp_alert.js
+index a6f06dc..b20da9a 100644
+--- a/static/niftybbp_alert.js
++++ b/static/niftybbp_alert.js
+@@ -15,6 +15,171 @@
+       bear: { enabled: false, cond: CROSS_BELOW, value: 0.2, side: 'PE' }
+     };
+   }
++  /* Run Window config: an optional second BB%b control that AUTO-STARTS /
++     AUTO-STOPS the engine run between two BB%b levels:
++       - ACTIVE line   : when BB%b crosses it the engine run becomes ACTIVE
++                         (new entries allowed).
++       - INACTIVE line : when BB%b crosses it the engine run becomes INACTIVE
++                         (no new entries - open trades keep running).
++     This mirrors the "two alert lines" idea: the strategy / Indicator-filters
++     mode only runs in the window between the two crossings, stays inactive the
++     rest of the time. */
++  const WIN_ROWS = ['active', 'inactive'];
++  function defaultsWin() {
++    return {
++      enabled: false,
++      active: { enabled: true, cond: CROSS_ABOVE, value: 0.8 },
++      inactive: { enabled: true, cond: CROSS_BELOW, value: 0.2 }
++    };
++  }
++  function cloneWin(cfg) {
++    const d = defaultsWin();
++    const out = { enabled: !!(cfg && cfg.enabled), active: {}, inactive: {} };
++    WIN_ROWS.forEach(function (k) {
++      const s = (cfg && cfg[k]) ? cfg[k] : {};
++      const defCond = (k === 'active') ? CROSS_ABOVE : CROSS_BELOW;
++      out[k].enabled = (s.enabled === undefined) ? true : !!s.enabled;
++      out[k].cond = (s.cond === CROSS_ABOVE || s.cond === CROSS_BELOW) ? s.cond : defCond;
++      out[k].value = (Number(s.value) >= ALERT_MIN && Number(s.value) <= ALERT_MAX) ? Number(s.value) : d[k].value;
++    });
++    return out;
++  }
++  function loadWin(inst) {
++    let out;
++    try {
++      const j = JSON.parse(localStorage.getItem(inst.winKey) || 'null');
++      out = cloneWin(j);
++    } catch (e) { out = cloneWin(null); }
++    return out;
++  }
++  function saveWin(inst) {
++    try { localStorage.setItem(inst.winKey, JSON.stringify(inst.win || {})); } catch (e) {}
++  }
++  function winRowMet(s, last) {
++    if (!s || !s.enabled || last == null) return false;
++    const v = Number(s.value);
++    if (!isFinite(v)) return false;
++    return (s.cond === CROSS_BELOW) ? (last <= v) : (last >= v);
++  }
++  function winRowCrossed(s, prev, last) {
++    if (!s || !s.enabled || prev == null || last == null) return false;
++    const v = Number(s.value);
++    if (!isFinite(v)) return false;
++    return (s.cond === CROSS_BELOW) ? (prev > v && last <= v) : (prev < v && last >= v);
++  }
++  function winRowSummary(k, s) {
++    const lab = k === 'active' ? 'ACTIVE' : 'INACTIVE';
++    if (!s.enabled) return lab + ' off';
++    return lab + ' ' + (s.cond === CROSS_BELOW ? 'crossed below' : 'crossed above') + ' ' + fmtV(s.value);
++  }
++  /* Seed the window state from the current sample when the window is switched
++     on (or reset): if BB%b is already beyond the ACTIVE boundary (and not past
++     the INACTIVE one) the run starts ACTIVE immediately, otherwise it stays
++     INACTIVE and waits for the ACTIVE line crossing. */
++  function seedWindowState(inst) {
++    if (inst.lastPctt == null) { inst.winState = 'inactive'; return; }
++    const last = Number(inst.lastPctt);
++    const aMet = winRowMet(inst.win.active, last);
++    const iMet = winRowMet(inst.win.inactive, last);
++    inst.winState = (aMet && !iMet) ? 'active' : 'inactive';
++  }
++  function paintWindowChip(inst) {
++    const chip = el(inst.pfx + 'BbpWinState');
++    if (!chip) return;
++    const w = inst.win;
++    if (!w.enabled) { chip.textContent = 'Run Win off'; chip.style.color = '#777'; return; }
++    const st = inst.winState === 'active';
++    chip.textContent = 'RUN ' + (st ? 'ACTIVE' : 'INACTIVE') + (st ? '' : ' (waiting BB%b ' + winRowSummary('active', w.active) + ')');
++    chip.style.color = st ? '#00d4aa' : '#ef5350';
++    chip.title = st
++      ? 'Engine run ACTIVE - new entries allowed. BB%b ne ACTIVE line cross kar di hai.'
++      : 'Engine run INACTIVE - no new entries until BB%b ACTIVE line cross ho. Open trades chalti rahengi.';
++  }
++  function syncWinEditorRow(inst, k) {
++    const s = inst.win[k];
++    const en = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'En');
++    const cond = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Cond');
++    const val = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Val');
++    if (en) en.checked = !!s.enabled;
++    if (cond) cond.value = s.cond;
++    if (val) val.value = s.value;
++    [cond, val].forEach(function (c) { if (c) c.disabled = !s.enabled; });
++    const wrap = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Wrap');
++    if (wrap) wrap.style.opacity = s.enabled ? '1' : '0.55';
++  }
++  function syncWinEditor(inst) {
++    WIN_ROWS.forEach(function (k) { syncWinEditorRow(inst, k); });
++    paintWindowChip(inst);
++  }
++  function setWindowEnabled(pfx, on) {
++    const inst = attach({ pfx: pfx });
++    if (!inst) return;
++    inst.win.enabled = !!on;
++    if (inst.win.enabled) seedWindowState(inst);
++    saveWin(inst);
++    syncWinEditor(inst);
++    if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b RUN WINDOW ' + (inst.win.enabled ? 'ON - engine run ab BB%b ACTIVE line par start & INACTIVE line par stop hogi' : 'OFF - normal BB%b alert gate hi apply hoga'), inst.win.enabled ? 'ok' : 'warn');
++  }
++  function editWinDraft(pfx, k, field, raw) {
++    const inst = instances[pfx];
++    if (!inst) return;
++    const s = inst.win[k];
++    if (!s) return;
++    if (field === 'enabled') s.enabled = !!raw;
++    else if (field === 'cond') s.cond = (raw === CROSS_BELOW) ? CROSS_BELOW : CROSS_ABOVE;
++    else if (field === 'value') {
++      const rawStr = String(raw == null ? '' : raw).trim();
++      if (rawStr === '' || rawStr === '-' || rawStr === '+' || rawStr === '.') return;
++      const v = parseFloat(rawStr);
++      if (isFinite(v)) s.value = Math.min(ALERT_MAX, Math.max(ALERT_MIN, v));
++      else s.value = (k === 'inactive') ? 0.2 : 0.8;
++    }
++    saveWin(inst);
++    syncWinEditor(inst);
++  }
++  function windowReset(pfx) {
++    const inst = instances[pfx];
++    if (!inst) return;
++    if (!inst.win || !inst.win.enabled) return;
++    inst.winState = 'inactive';
++    if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b RUN WINDOW state reset -> INACTIVE (nayi entries tab tak nahi jab tak BB%b ACTIVE line cross na kare)', 'warn');
++    paintWindowChip(inst);
++  }
++  function windowStatus(pfx) {
++    const inst = instances[pfx];
++    if (!inst) return { enabled: false, state: 'inactive' };
++    const state = inst.winState === 'active' ? 'active' : 'inactive';
++    return {
++      enabled: !!inst.win.enabled,
++      state: state,
++      last: (inst.lastPctt == null) ? null : Number(inst.lastPctt),
++      lastText: (inst.lastPctt == null) ? '--' : fmtV(inst.lastPctt),
++      active: { enabled: !!inst.win.active.enabled, cond: inst.win.active.cond, value: Number(inst.win.active.value), valueText: fmtV(inst.win.active.value) },
++      inactive: { enabled: !!inst.win.inactive.enabled, cond: inst.win.inactive.cond, value: Number(inst.win.inactive.value), valueText: fmtV(inst.win.inactive.value) }
++    };
++  }
++  /* Called from feed() with the fresh prev/last sample pair: toggles the window
++     state when the ACTIVE or INACTIVE line is crossed. */
++  function stepWindowState(inst, prev, last) {
++    if (!inst || !inst.win || !inst.win.enabled) return;
++    let next = null;
++    if (winRowCrossed(inst.win.active, prev, last)) next = 'active';
++    if (winRowCrossed(inst.win.inactive, prev, last)) next = 'inactive';
++    if (!next) return;
++    if (next !== inst.winState) {
++      const from = inst.winState;
++      inst.winState = next;
++      const msg = 'NIFTY BB%b RUN ' + (next === 'active' ? 'ACTIVE' : 'INACTIVE') +
++        ' - BB%b ' + winRowSummary(next === 'active' ? 'active' : 'inactive', inst.win[next === 'active' ? 'active' : 'inactive']) +
++        ' -> ' + fmtV(last) + '  [engine run ' + (next === 'active' ? 'start/allow' : 'stop/no new entries') + ']';
++      toastMsg('BB%b ' + (next === 'active' ? 'RUN ACTIVE' : 'RUN INACTIVE'));
++      if (inst.log) inst.log('[BB%b run window] ' + msg, next === 'active' ? 'ok' : 'warn');
++      if (next === 'inactive' && from === 'active') {
++        toastMsg('Engine run INACTIVE - nayi entries band (open trades chalti rahengi). Wapas ACTIVE ke liye BB%b ACTIVE line cross kare.');
++      }
++      paintWindowChip(inst);
++    }
++  }
+   function cloneCfg(cfg) {
+     const d = defaults();
+     const out = { bull: {}, bear: {} };
+@@ -109,9 +274,12 @@
+       cfgKey: pfx + 'BbpAlertCfg',
+       draftKey: pfx + 'BbpAlertDraft',
+       enabledKey: pfx + 'BbpEnabled',
++      winKey: pfx + 'BbpWinCfg',
+       cfg: null,
+       draft: null,
+       master: false,
++      win: null,
++      winState: 'inactive',
+       prev: null,
+       lastPctt: null,
+       lastFireAt: { bull: 0, bear: 0 },
+@@ -123,10 +291,14 @@
+     inst.cfg = loadCfg(inst);
+     inst.draft = loadDraft(inst) || cloneCfg(inst.cfg);
+     inst.master = loadMaster(inst);
++    inst.win = loadWin(inst);
++    seedWindowState(inst);
+     instances[pfx] = inst;
+     paint(inst);
+     paintMaster(inst);
++    paintWindowChip(inst);
+     syncEditor(inst);
++    syncWinEditor(inst);
+     syncAlertBtn(inst);
+     return inst;
+   }
+@@ -298,6 +470,9 @@
+     if (!inst) return;
+     inst.prev = null;
+     inst.lastPctt = null;
++    /* A timeframe change restarts the BB%b history: re-arm the run window to
++       dormant/INACTIVE until the ACTIVE line is crossed again on the new TF. */
++    if (inst.win && inst.win.enabled) seedWindowState(inst);
+     paintLive(inst);
+     if (inst.chart) renderPane(pfx);
+   }
+@@ -310,12 +485,16 @@
+     inst.lastPctt = last;
+     paintLive(inst);
+     const effTf = (typeof inst.tfGet === 'function') ? inst.tfGet() : '5min';
+-    if (inst.chart && inst.series && inst._lastDataTime && (effTf === '1min' || effTf === '5min')) {
++    if (inst.chart && inst.series && inst._lastDataTime && (effTf === '1min' || effTf === '5min' || effTf === '15min')) {
+       try { inst.series.update({ time: inst._lastDataTime, value: last }); } catch (e) {}
+     }
+     const prev = inst.prev;
+     inst.prev = last;
+     if (prev == null) return;
++    /* Run window: advance the ACTIVE/INACTIVE latch from the same fresh sample
++       pair the BB%b alert rows use. Runs before the per-row alert firing so the
++       window chip/state reflect this tick even when an alert also fires. */
++    stepWindowState(inst, prev, last);
+     ROWS.forEach(function (r) {
+       const s = inst.cfg[r.key];
+       if (!s || !s.enabled) return;
+@@ -375,14 +554,14 @@
+     const chart = ensureChart(inst);
+     if (!chart) return;
+     const tf = inst.tfGet();
+-    const eff = (tf === '1min' || tf === '5min') ? tf : '5min';
++    const eff = (tf === '1min' || tf === '5min' || tf === '15min') ? tf : '5min';
+     const tfEl = el(pfx + 'BbpPaneTf');
+     if (tfEl) tfEl.textContent = eff + ' • BB(20,2)';
+     const SE = window.StratEngine;
+     if (!SE || !SE.fetchCandlesFor) return;
+     const paneEl = el(inst.pfx + 'BbpPane');
+     try { inst.chart.applyOptions({ width: (paneEl && paneEl.clientWidth) || 600 }); } catch (e) {}
+-    const days = eff === '1min' ? 1 : (eff === '5min' ? 3 : 5);
++    const days = eff === '1min' ? 1 : (eff === '5min' ? 3 : (eff === '15min' ? 7 : 5));
+     SE.fetchCandlesFor(inst.symbol, eff, days).then(function (candles) {
+       if (!Array.isArray(candles) || !candles.length || !inst.chart) {
+         if (inst.series) { try { inst.series.setData([]); } catch (e) {} }
+@@ -433,6 +612,10 @@
+     paneRefresh: paneRefresh,
+     isEnabled: isEnabled,
+     setEnabled: setEnabled,
+-    gateStatus: gateStatus
++    gateStatus: gateStatus,
++    setWindowEnabled: setWindowEnabled,
++    editWinDraft: editWinDraft,
++    windowReset: windowReset,
++    windowStatus: windowStatus
+   };
+ })();
 diff --git a/templates/index.html b/templates/index.html
-index 0d67923..ecd0f7c 100644
+index 83e15cc..802c8e1 100644
 --- a/templates/index.html
 +++ b/templates/index.html
-@@ -6331,10 +6331,10 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
+@@ -1210,6 +1210,7 @@ window.IST12 = (function () {
+               <select id="astNiftyTf" onchange="AISmartTrading.setNiftyTf(this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
+                 <option value="1min">1 min</option>
+                 <option value="5min" selected>5 min</option>
++                <option value="15min">15 min</option>
+                 <option value="both">Both</option>
+               </select>
+             </label>
+@@ -1269,6 +1270,40 @@ window.IST12 = (function () {
+               </div>
+             </div>
+           </div>
++          <div id="astBbpWinBox" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:flex-start;border:1px dashed #3d3d5c;border-radius:4px;padding:5px 7px;background:#12121f">
++            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;width:100%">
++              <span style="font-size:10px;font-weight:700;color:#00d4aa">RUN WINDOW</span>
++              <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px;cursor:pointer" title="Engine run window: jab ON, AST engine (normal + HFT) sirf BB%b ke ACTIVE line cross karne ke baad naye entries allow karega aur INACTIVE line cross hote hi naye entries band - open trades apne SL/TP par chalti rahengi.">
++                <input type="checkbox" id="astBbpWinEn" onchange="NiftyBbpAlert.setWindowEnabled('ast',this.checked)" style="accent-color:#00d4aa"> engine runs between ACTIVE &amp; INACTIVE only
++              </label>
++              <span id="astBbpWinState" style="font-size:9px;font-weight:700;color:#777;font-variant-numeric:tabular-nums">Run Win off</span>
++              <span style="flex:1"></span>
++            </div>
++            <div id="astBbpWinActWrap" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;border-left:3px solid #00d4aa;padding-left:5px">
++              <input type="checkbox" id="astBbpWinActEn" onchange="NiftyBbpAlert.editWinDraft('ast','active','enabled',this.checked)" style="width:12px;height:12px;accent-color:#00d4aa">
++              <label style="font-size:9px;font-weight:700;color:#00d4aa;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('astBbpWinActEn');c.checked=!c.checked;NiftyBbpAlert.editWinDraft('ast','active','enabled',c.checked)">ACTIVE line</label>
++              <span style="font-size:9px;color:#888;white-space:nowrap">engine run ON when BB%b</span>
++              <select id="astBbpWinActCond" onchange="NiftyBbpAlert.editWinDraft('ast','active','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
++                <option value="crossed_above">crossed above</option>
++                <option value="crossed_below">crossed below</option>
++              </select>
++              <input type="number" id="astBbpWinActVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editWinDraft('ast','active','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
++              <span style="font-size:8px;color:#666">ACTIVE par lines ko neeche/upar move karke set karo</span>
++            </div>
++            <div id="astBbpWinInaWrap" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;border-left:3px solid #ef5350;padding-left:5px">
++              <input type="checkbox" id="astBbpWinInaEn" onchange="NiftyBbpAlert.editWinDraft('ast','inactive','enabled',this.checked)" style="width:12px;height:12px;accent-color:#ef5350">
++              <label style="font-size:9px;font-weight:700;color:#ef5350;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('astBbpWinInaEn');c.checked=!c.checked;NiftyBbpAlert.editWinDraft('ast','inactive','enabled',c.checked)">INACTIVE line</label>
++              <span style="font-size:9px;color:#888;white-space:nowrap">engine run OFF when BB%b</span>
++              <select id="astBbpWinInaCond" onchange="NiftyBbpAlert.editWinDraft('ast','inactive','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
++                <option value="crossed_above">crossed above</option>
++                <option value="crossed_below">crossed below</option>
++              </select>
++              <input type="number" id="astBbpWinInaVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editWinDraft('ast','inactive','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
++            </div>
++            <div style="min-width:170px;flex:1">
++              <div style="font-size:8px;color:#666;line-height:1.5">Engine start = first ACTIVE crossing (BB%b ACTIVE line cross). Uske baad engine entries allow karta hai jab tak BB%b INACTIVE line cross na ho jaye - phir &quot;run INACTIVE&quot; (nayi entries band, open trades apne SL/TP/trail par chalti rahengi). Wapas entries ke liye naya ACTIVE crossing chahiye.</div>
++            </div>
++          </div>
+           <div id="astBbpPaneWrap" style="display:none;margin-top:6px;border:1px solid #2d2d50;border-radius:3px;background:#0b0b1a;padding:4px 6px">
+             <div style="display:flex;align-items:center;gap:8px">
+               <span style="font-size:8px;color:#888">NIFTY BB%b pane</span>
+@@ -1987,6 +2022,7 @@ window.IST12 = (function () {
+               <select id="aeNiftyTf" onchange="AutoExperiment.setNiftyTf(this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px">
+                 <option value="1min">1 min</option>
+                 <option value="5min" selected>5 min</option>
++                <option value="15min">15 min</option>
+                 <option value="both">Both</option>
+               </select>
+             </label>
+@@ -6388,10 +6424,10 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
  <script src="/static/trendconfirm.js?v=1"></script>
- <script src="/static/papertrade.js?v=66"></script>
+ <script src="/static/papertrade.js?v=67"></script>
  <script src="/static/strategy_container.js?v=16"></script>
--<script src="/static/autoexperiment.v13.js?v=152"></script>
-+<script src="/static/autoexperiment.v13.js?v=153"></script>
- <script src="/static/indextrend.js?v=3"></script>
+- <script src="/static/autoexperiment.v13.js?v=170"></script>
++ <script src="/static/autoexperiment.v13.js?v=171"></script>
+ <script src="/static/indextrend.js?v=4"></script>
  <script src="/static/simulator.js?v=3"></script>
--<script src="/static/aismart.js?v=164"></script>
-+<script src="/static/aismart.js?v=166"></script>
- <script src="/static/paperrun.js?v=25"></script>
+- <script src="/static/aismart.js?v=189"></script>
++ <script src="/static/aismart.js?v=191"></script>
+ <script src="/static/paperrun.js?v=26"></script>
  <script src="/static/paperstrategies.js?v=6"></script>
  <script src="/static/hft_pool.js?v=6"></script>
-@@ -6396,7 +6396,7 @@ window.__addNewIndicatorFilterRows = function () {
-     var research = byText(divs, 'Research stream');
-     var pane = [['Cmf', 'CMF'], ['Tsi', 'TSI'], ['Cci', 'CCI'], ['Fisher', 'Fisher'], ['Stochrsi', 'Stoch RSI'], ['Sqzmom', 'Squeeze Mom.'], ['Aroon', 'Aroon'], ['Vortex', 'Vortex'], ['Elderforce', 'Force Index']];
-     var pbg = [['Macd', 'MACD'], ['Ppo', 'PPO'], ['Smiio', 'SMI'], ['Tsi', 'TSI'], ['Stochrsi', 'Stoch RSI'], ['Smf', 'SMF'], ['Rsi', 'RSI'], ['Obv', 'OBV'], ['Fisher', 'Fisher'], ['Aroon', 'Aroon'], ['Vortex', 'Vortex'], ['Adx', 'ADX (+DI/-DI)']];
--    var obr = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['SenkouA', 'Ichimoku Senkou A'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
-+    var obr = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['SenkouA', 'Ichimoku Senkou A'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core'], ['SupplyDemand', 'Supply Demand']];
-     var meet = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
-     if (g2) {
-       var frag = document.createDocumentFragment();
+@@ -6399,7 +6435,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
+ <script src="/static/hft_runner.js?v=9"></script>
+ <script src="/static/final_strategy.js?v=4"></script>
+ <script src="/static/smart_ntrader.js?v=66"></script>
+-<script src="/static/niftybbp_alert.js?v=6"></script>
++<script src="/static/niftybbp_alert.js?v=9"></script>
+ <script src="/static/chart_grid.js?v=10"></script>
+ <script src="/static/tradestats.js?v=2"></script>
+ <script src="/static/backup.js?v=3"></script>

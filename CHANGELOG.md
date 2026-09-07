@@ -1,9 +1,50 @@
 # AlgoDhan Trading System — Change Log & Continuation Guide
 
-Backup target: `himanijoshitiwari1988-lgtm/46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision`
-Source history: `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`, `43_Added_vLindicatorFilter`, `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`, `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp`)
+Backup target: `himanijoshitiwari1988-lgtm/49_Fixed_bb-b_TradeEntry_Active_Inactive`
+Source history: `48_Added_TradeEntryPossibilityArmGate_FixedIndicatorFilterDirection` (earlier backups: `33algodhan`..`39algodhan`, `38_Added_DirectChartTradeExecution_For_IndicaterFilterMode_And_StrategyNormalMode`, `41_added_TradeStats_NiftyTrendFollowingFixed`, `42_Added_AiBrainAlgo`, `43_Added_vLindicatorFilter`, `44_Added_14NewIndicater_Added_NewIndicaterFilterBasedOnBehaviour`, `45_Added_PaneIndicaterRisingUpward_RisingStrikeLTPpickUp`, `46_Added_SupplyDemandOverlayFilterAnd_DirectChartEntryDecision`)
 
-## Latest backup (2026-09-06) — Supply Demand overlay filter rows + chart-direct paper entry decision (no chain fetch / no REST quote before the signal)
+## Latest backup (2026-09-07) — 15-min NIFTY TF for the BB%b feed + BB%b engine run window ACTIVE/INACTIVE
+
+Incremental layer on top of commit `f0a3feb`. Full diff:
+`f0a3feb..current` (4 files, +307/-28), regenerated `CHANGES_COMPLETE.patch` /
+`CHANGES_SUMMARY.txt` / `BACKUP_README.md` / `CHANGELOG.md` for this window.
+Complete code state is pushed to
+`49_Fixed_bb-b_TradeEntry_Active_Inactive` `main`.
+
+- **15-min NIFTY timeframe option** added symmetrically to both engines' NIFTY
+  TF dropdowns (`astNiftyTf` in AI Smart + `aeNiftyTf` in Auto-Experiment) and
+  accepted everywhere the NIFTY ensemble trend / BB%b feed reads the timeframe.
+  `static/niftybbp_alert.js` treats `15min` as a valid pane timeframe (feed
+  chart-update + pane depth `1min:1 / 5min:3 / 15min:7` days, else 5); both
+  `static/aismart.js` and `static/autoexperiment.v13.js` whitelist `15min` in
+  the `_NIFTY_TF` init / `niftyBias(tf)` / `enhanceNiftyBias(et)` /
+  `setNiftyTf` validation, with a new `niftyTfLabel()` human-label helper and
+  `niftyCandleDays(tf)` (7 days for 15min, 3 otherwise) applied to the NIFTY /
+  GIFT NIFTY / INDIA VIX candle fetches so 15-min indicators warm up at the same
+  depth the HTF regime already used. `templates/index.html` adds
+  `<option value="15min">15 min</option>` to both TF dropdowns.
+- **BB%b engine run window** (AST only): a new BB%b control that auto-starts /
+  auto-stops the engine run between two BB%b lines, using the same two-line
+  alert UI as the BULL CE / BEAR PE rows (ACTIVE default crossed above 0.8,
+  INACTIVE default crossed below 0.2). The engine allows NEW entries only inside
+  the window — it starts from the first BB%b ACTIVE crossing and stops at the
+  BB%b INACTIVE crossing; open trades keep running to their SL/TP/trail. A fresh
+  run always begins dormant/INACTIVE and waits for the ACTIVE line crossing.
+  Implemented as a crossing latch in `static/niftybbp_alert.js`
+  (`stepWindowState` from the same prev/last samples the BB%b alerts fire from,
+  config persisted under `astBbpWinCfg`, exported `windowStatus` /
+  `windowReset` / `setWindowEnabled` / `editWinDraft`), layered above the
+  existing BB%b alert gate in `static/aismart.js` via a new `bbpWindowBlock()`
+  helper called right before `bbpGateBlock` at both AST entry seams (HFT scanner
+  + normal poll / Indicator-filters path) plus `bbpWindowArmRun()` re-arming
+  dormant on every run start (Auto toggle / Run Paper / Indicator-filters run),
+  with the RUN WINDOW editor box (`astBbpWinBox`) in the AST BB%b section of
+  `templates/index.html` (master `astBbpWinEn`, chip `astBbpWinState`, ACTIVE
+  line `astBbpWinAct*`, INACTIVE line `astBbpWinIna*`). Auto-Experiment section
+  untouched. Cache-bumps: `aismart.js?v=190 -> v=191`,
+  `niftybbp_alert.js?v=7 -> v=9` (`autoexperiment.v13.js` stays `v=171`).
+
+## Previous backup — Supply Demand overlay filter rows + chart-direct paper entry decision
 
 Incremental layer on top of commit `872b61b`. Full diff:
 `872b61b..current` (3 files, +35/-19), regenerated `CHANGES_COMPLETE.patch` /

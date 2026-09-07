@@ -15,6 +15,171 @@
       bear: { enabled: false, cond: CROSS_BELOW, value: 0.2, side: 'PE' }
     };
   }
+  /* Run Window config: an optional second BB%b control that AUTO-STARTS /
+     AUTO-STOPS the engine run between two BB%b levels:
+       - ACTIVE line   : when BB%b crosses it the engine run becomes ACTIVE
+                         (new entries allowed).
+       - INACTIVE line : when BB%b crosses it the engine run becomes INACTIVE
+                         (no new entries - open trades keep running).
+     This mirrors the "two alert lines" idea: the strategy / Indicator-filters
+     mode only runs in the window between the two crossings, stays inactive the
+     rest of the time. */
+  const WIN_ROWS = ['active', 'inactive'];
+  function defaultsWin() {
+    return {
+      enabled: false,
+      active: { enabled: true, cond: CROSS_ABOVE, value: 0.8 },
+      inactive: { enabled: true, cond: CROSS_BELOW, value: 0.2 }
+    };
+  }
+  function cloneWin(cfg) {
+    const d = defaultsWin();
+    const out = { enabled: !!(cfg && cfg.enabled), active: {}, inactive: {} };
+    WIN_ROWS.forEach(function (k) {
+      const s = (cfg && cfg[k]) ? cfg[k] : {};
+      const defCond = (k === 'active') ? CROSS_ABOVE : CROSS_BELOW;
+      out[k].enabled = (s.enabled === undefined) ? true : !!s.enabled;
+      out[k].cond = (s.cond === CROSS_ABOVE || s.cond === CROSS_BELOW) ? s.cond : defCond;
+      out[k].value = (Number(s.value) >= ALERT_MIN && Number(s.value) <= ALERT_MAX) ? Number(s.value) : d[k].value;
+    });
+    return out;
+  }
+  function loadWin(inst) {
+    let out;
+    try {
+      const j = JSON.parse(localStorage.getItem(inst.winKey) || 'null');
+      out = cloneWin(j);
+    } catch (e) { out = cloneWin(null); }
+    return out;
+  }
+  function saveWin(inst) {
+    try { localStorage.setItem(inst.winKey, JSON.stringify(inst.win || {})); } catch (e) {}
+  }
+  function winRowMet(s, last) {
+    if (!s || !s.enabled || last == null) return false;
+    const v = Number(s.value);
+    if (!isFinite(v)) return false;
+    return (s.cond === CROSS_BELOW) ? (last <= v) : (last >= v);
+  }
+  function winRowCrossed(s, prev, last) {
+    if (!s || !s.enabled || prev == null || last == null) return false;
+    const v = Number(s.value);
+    if (!isFinite(v)) return false;
+    return (s.cond === CROSS_BELOW) ? (prev > v && last <= v) : (prev < v && last >= v);
+  }
+  function winRowSummary(k, s) {
+    const lab = k === 'active' ? 'ACTIVE' : 'INACTIVE';
+    if (!s.enabled) return lab + ' off';
+    return lab + ' ' + (s.cond === CROSS_BELOW ? 'crossed below' : 'crossed above') + ' ' + fmtV(s.value);
+  }
+  /* Seed the window state from the current sample when the window is switched
+     on (or reset): if BB%b is already beyond the ACTIVE boundary (and not past
+     the INACTIVE one) the run starts ACTIVE immediately, otherwise it stays
+     INACTIVE and waits for the ACTIVE line crossing. */
+  function seedWindowState(inst) {
+    if (inst.lastPctt == null) { inst.winState = 'inactive'; return; }
+    const last = Number(inst.lastPctt);
+    const aMet = winRowMet(inst.win.active, last);
+    const iMet = winRowMet(inst.win.inactive, last);
+    inst.winState = (aMet && !iMet) ? 'active' : 'inactive';
+  }
+  function paintWindowChip(inst) {
+    const chip = el(inst.pfx + 'BbpWinState');
+    if (!chip) return;
+    const w = inst.win;
+    if (!w.enabled) { chip.textContent = 'Run Win off'; chip.style.color = '#777'; return; }
+    const st = inst.winState === 'active';
+    chip.textContent = 'RUN ' + (st ? 'ACTIVE' : 'INACTIVE') + (st ? '' : ' (waiting BB%b ' + winRowSummary('active', w.active) + ')');
+    chip.style.color = st ? '#00d4aa' : '#ef5350';
+    chip.title = st
+      ? 'Engine run ACTIVE - new entries allowed. BB%b ne ACTIVE line cross kar di hai.'
+      : 'Engine run INACTIVE - no new entries until BB%b ACTIVE line cross ho. Open trades chalti rahengi.';
+  }
+  function syncWinEditorRow(inst, k) {
+    const s = inst.win[k];
+    const en = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'En');
+    const cond = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Cond');
+    const val = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Val');
+    if (en) en.checked = !!s.enabled;
+    if (cond) cond.value = s.cond;
+    if (val) val.value = s.value;
+    [cond, val].forEach(function (c) { if (c) c.disabled = !s.enabled; });
+    const wrap = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Wrap');
+    if (wrap) wrap.style.opacity = s.enabled ? '1' : '0.55';
+  }
+  function syncWinEditor(inst) {
+    WIN_ROWS.forEach(function (k) { syncWinEditorRow(inst, k); });
+    paintWindowChip(inst);
+  }
+  function setWindowEnabled(pfx, on) {
+    const inst = attach({ pfx: pfx });
+    if (!inst) return;
+    inst.win.enabled = !!on;
+    if (inst.win.enabled) seedWindowState(inst);
+    saveWin(inst);
+    syncWinEditor(inst);
+    if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b RUN WINDOW ' + (inst.win.enabled ? 'ON - engine run ab BB%b ACTIVE line par start & INACTIVE line par stop hogi' : 'OFF - normal BB%b alert gate hi apply hoga'), inst.win.enabled ? 'ok' : 'warn');
+  }
+  function editWinDraft(pfx, k, field, raw) {
+    const inst = instances[pfx];
+    if (!inst) return;
+    const s = inst.win[k];
+    if (!s) return;
+    if (field === 'enabled') s.enabled = !!raw;
+    else if (field === 'cond') s.cond = (raw === CROSS_BELOW) ? CROSS_BELOW : CROSS_ABOVE;
+    else if (field === 'value') {
+      const rawStr = String(raw == null ? '' : raw).trim();
+      if (rawStr === '' || rawStr === '-' || rawStr === '+' || rawStr === '.') return;
+      const v = parseFloat(rawStr);
+      if (isFinite(v)) s.value = Math.min(ALERT_MAX, Math.max(ALERT_MIN, v));
+      else s.value = (k === 'inactive') ? 0.2 : 0.8;
+    }
+    saveWin(inst);
+    syncWinEditor(inst);
+  }
+  function windowReset(pfx) {
+    const inst = instances[pfx];
+    if (!inst) return;
+    if (!inst.win || !inst.win.enabled) return;
+    inst.winState = 'inactive';
+    if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b RUN WINDOW state reset -> INACTIVE (nayi entries tab tak nahi jab tak BB%b ACTIVE line cross na kare)', 'warn');
+    paintWindowChip(inst);
+  }
+  function windowStatus(pfx) {
+    const inst = instances[pfx];
+    if (!inst) return { enabled: false, state: 'inactive' };
+    const state = inst.winState === 'active' ? 'active' : 'inactive';
+    return {
+      enabled: !!inst.win.enabled,
+      state: state,
+      last: (inst.lastPctt == null) ? null : Number(inst.lastPctt),
+      lastText: (inst.lastPctt == null) ? '--' : fmtV(inst.lastPctt),
+      active: { enabled: !!inst.win.active.enabled, cond: inst.win.active.cond, value: Number(inst.win.active.value), valueText: fmtV(inst.win.active.value) },
+      inactive: { enabled: !!inst.win.inactive.enabled, cond: inst.win.inactive.cond, value: Number(inst.win.inactive.value), valueText: fmtV(inst.win.inactive.value) }
+    };
+  }
+  /* Called from feed() with the fresh prev/last sample pair: toggles the window
+     state when the ACTIVE or INACTIVE line is crossed. */
+  function stepWindowState(inst, prev, last) {
+    if (!inst || !inst.win || !inst.win.enabled) return;
+    let next = null;
+    if (winRowCrossed(inst.win.active, prev, last)) next = 'active';
+    if (winRowCrossed(inst.win.inactive, prev, last)) next = 'inactive';
+    if (!next) return;
+    if (next !== inst.winState) {
+      const from = inst.winState;
+      inst.winState = next;
+      const msg = 'NIFTY BB%b RUN ' + (next === 'active' ? 'ACTIVE' : 'INACTIVE') +
+        ' - BB%b ' + winRowSummary(next === 'active' ? 'active' : 'inactive', inst.win[next === 'active' ? 'active' : 'inactive']) +
+        ' -> ' + fmtV(last) + '  [engine run ' + (next === 'active' ? 'start/allow' : 'stop/no new entries') + ']';
+      toastMsg('BB%b ' + (next === 'active' ? 'RUN ACTIVE' : 'RUN INACTIVE'));
+      if (inst.log) inst.log('[BB%b run window] ' + msg, next === 'active' ? 'ok' : 'warn');
+      if (next === 'inactive' && from === 'active') {
+        toastMsg('Engine run INACTIVE - nayi entries band (open trades chalti rahengi). Wapas ACTIVE ke liye BB%b ACTIVE line cross kare.');
+      }
+      paintWindowChip(inst);
+    }
+  }
   function cloneCfg(cfg) {
     const d = defaults();
     const out = { bull: {}, bear: {} };
@@ -109,9 +274,12 @@
       cfgKey: pfx + 'BbpAlertCfg',
       draftKey: pfx + 'BbpAlertDraft',
       enabledKey: pfx + 'BbpEnabled',
+      winKey: pfx + 'BbpWinCfg',
       cfg: null,
       draft: null,
       master: false,
+      win: null,
+      winState: 'inactive',
       prev: null,
       lastPctt: null,
       lastFireAt: { bull: 0, bear: 0 },
@@ -123,10 +291,14 @@
     inst.cfg = loadCfg(inst);
     inst.draft = loadDraft(inst) || cloneCfg(inst.cfg);
     inst.master = loadMaster(inst);
+    inst.win = loadWin(inst);
+    seedWindowState(inst);
     instances[pfx] = inst;
     paint(inst);
     paintMaster(inst);
+    paintWindowChip(inst);
     syncEditor(inst);
+    syncWinEditor(inst);
     syncAlertBtn(inst);
     return inst;
   }
@@ -298,6 +470,9 @@
     if (!inst) return;
     inst.prev = null;
     inst.lastPctt = null;
+    /* A timeframe change restarts the BB%b history: re-arm the run window to
+       dormant/INACTIVE until the ACTIVE line is crossed again on the new TF. */
+    if (inst.win && inst.win.enabled) seedWindowState(inst);
     paintLive(inst);
     if (inst.chart) renderPane(pfx);
   }
@@ -310,12 +485,16 @@
     inst.lastPctt = last;
     paintLive(inst);
     const effTf = (typeof inst.tfGet === 'function') ? inst.tfGet() : '5min';
-    if (inst.chart && inst.series && inst._lastDataTime && (effTf === '1min' || effTf === '5min')) {
+    if (inst.chart && inst.series && inst._lastDataTime && (effTf === '1min' || effTf === '5min' || effTf === '15min')) {
       try { inst.series.update({ time: inst._lastDataTime, value: last }); } catch (e) {}
     }
     const prev = inst.prev;
     inst.prev = last;
     if (prev == null) return;
+    /* Run window: advance the ACTIVE/INACTIVE latch from the same fresh sample
+       pair the BB%b alert rows use. Runs before the per-row alert firing so the
+       window chip/state reflect this tick even when an alert also fires. */
+    stepWindowState(inst, prev, last);
     ROWS.forEach(function (r) {
       const s = inst.cfg[r.key];
       if (!s || !s.enabled) return;
@@ -375,14 +554,14 @@
     const chart = ensureChart(inst);
     if (!chart) return;
     const tf = inst.tfGet();
-    const eff = (tf === '1min' || tf === '5min') ? tf : '5min';
+    const eff = (tf === '1min' || tf === '5min' || tf === '15min') ? tf : '5min';
     const tfEl = el(pfx + 'BbpPaneTf');
     if (tfEl) tfEl.textContent = eff + ' • BB(20,2)';
     const SE = window.StratEngine;
     if (!SE || !SE.fetchCandlesFor) return;
     const paneEl = el(inst.pfx + 'BbpPane');
     try { inst.chart.applyOptions({ width: (paneEl && paneEl.clientWidth) || 600 }); } catch (e) {}
-    const days = eff === '1min' ? 1 : (eff === '5min' ? 3 : 5);
+    const days = eff === '1min' ? 1 : (eff === '5min' ? 3 : (eff === '15min' ? 7 : 5));
     SE.fetchCandlesFor(inst.symbol, eff, days).then(function (candles) {
       if (!Array.isArray(candles) || !candles.length || !inst.chart) {
         if (inst.series) { try { inst.series.setData([]); } catch (e) {} }
@@ -433,6 +612,10 @@
     paneRefresh: paneRefresh,
     isEnabled: isEnabled,
     setEnabled: setEnabled,
-    gateStatus: gateStatus
+    gateStatus: gateStatus,
+    setWindowEnabled: setWindowEnabled,
+    editWinDraft: editWinDraft,
+    windowReset: windowReset,
+    windowStatus: windowStatus
   };
 })();
