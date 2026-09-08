@@ -944,26 +944,32 @@ window.createAISmartTrading = function (suffix) {
     const enabled = (f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || pbrOn(f, 'bull'))) || (f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || pbrOn(f, 'bear')));
     if (!enabled) return [];
     /* "Overall Bullish/Bearish idea" (indicator-filter mode only, toggle default
-       ON): ONLY the pure single-line DIRECTION rows are lifted out of the
-       strict-AND set - Direction upward/downward (the primary line) and its
-       (all) form (one vote per template indicator line), the Pane-all-lines
-       direction row (one vote per pane line), the PB Group-1 mirror rows, the
-       OI Trend direction row and the single-line VWAP facing of the close-vs-
-       VWAP rows. Each selected line becomes ONE vote into a single overall
-       market-direction idea which vetoes the whole entry only on a strongly-
-       opposite scenario (>=3 decided opposite votes, see overallDirBlocks in
-       entryFireAt). Every multi-line / EVENT row is NOT part of the idea and
-       keeps its strict-AND gate exactly as before in filter mode: crossovers
-       (Crossed above/below, Pane crossover, EMA-ladder / Supertrend-twin /
-       close-vs-BB / close-vs-PC / close-vs-ST cross rows), the level/"Meet"
-       rows (pane-pair, Volume Line, EMA-ladder, Supertrend twins, close-vs-BB /
-       close-vs-PC / close-vs-ST / close-vs-VWAP levels), Gap increasing, Greater/
-       Lesser than, the SMF / BBW / ASR level rows, the PB Group-2/3 strength
-       rows, the Multi-Line Momentum Gap (PBG) rows and the Overlay/OBR rows.
-       The close-vs-VWAP CROSS and LEVEL rows are also strict multi-line gates;
-       ONLY their hidden single-line VWAP facing is lifted into the vote set.
-       OFF = the historical behavior returns exactly (every row a strict-AND
-       gate). */
+       ON): the single-line DIRECTION / facing logic is lifted out of the strict-
+       AND set and instead becomes ONE vote per line into a single overall market-
+       direction idea which vetoes the whole entry only on a strongly-opposite
+       scenario (>=3 decided opposite votes, see overallDirBlocks in entryFireAt).
+       The following single-line direction rows feed the vote set:
+         - Direction upward/downward (the primary line) and its (all) form
+           (one vote per template indicator line),
+         - the Pane-all-lines direction row (one vote per pane line),
+         - the PB Group-1 mirror rows and the OI Trend direction row,
+         - the Overlay/OBR line-direction rows (one vote per overlay line),
+         - the hidden single-line FACING carried inside the close-vs-VWAP rows,
+           the EMA-ladder cross/Meet rows (the slow EMA facing), the Supertrend
+           twin cross/Meet rows (the higher-factor ST facing), the close-vs-ST
+           rows (the ST(10,1) facing) and the close-vs-BB / close-vs-PC middle
+           rows (the BB/PC middle-band facing).
+       Every row KEEPS its structural gate strict exactly as before in filter
+       mode (crossovers / levels / comparisons): when a row above is selected its
+       cross/level/compare cond still runs as a strict-AND gate and ONLY its
+       direction/facing sub-cond is lifted into the vote set. All remaining rows
+       that are pure EVENT / structural rows (Pane crossover, pane-pair level,
+       Volume Line, Volume Line Meet, the Overlay Meet-close level rows, PB
+       Group-2/3 strength rows (BBW/ATR/VolOsc etc.), SMF, ASR, Gap increasing,
+       Greater/Lesser than, the Multi-Line Momentum Gap (PBG) rows, the 3-line
+       ADX gauge/+DI/-DI row) are NOT part of the idea and keep their strict-AND
+       gate exactly as before. OFF = the historical behavior returns exactly
+       (every row a strict-AND gate). */
     const dropDir = !!(o && o.filterMode === true) && (state.overallDirIdea !== false);
     const out = [];
     const dropVotes = dropDir ? [] : null;
@@ -1076,45 +1082,55 @@ window.createAISmartTrading = function (suffix) {
        facing the trade direction (bullish = rising, bearish = falling); the
        level Meet rows (EMA-ladder / Supertrend twins / close-vs-ST / close-vs-
        VWAP / close-vs-BB / close-vs-PC) carry the SAME slow/overlay/middle-line
-       facing gate, merged into the existing row (no extra checkbox). Every CROSS
-       row (close crossed above/below a middle band, an EMA ladder / Supertrend
-       twin, the price-guidance ST/VWAP lines) is an EVENT row and every level
-       "Meet Condition" row is a multi-line LEVEL row - neither is part of the
-       "Overall Bullish/Bearish idea": their strict-AND gates stay exactly as
-       before in every mode. Only the SINGLE-LINE VWAP facing is released on the
-       close-vs-VWAP rows (cross and level alike): the row itself stays strict,
-       its hidden VWAP facing feeds one vote into the overall direction idea. */
+       facing gate, merged into the existing row (no extra checkbox). With the
+       "Overall Bullish/Bearish idea" ON (dropVotes) ONLY that single-line
+       slow/overlay/middle-line FACING is released from the strict-AND set and
+       feeds ONE vote into the overall direction idea - on every CROSS row (close
+       crossed above/below a middle band, an EMA ladder / Supertrend twin, the
+       price-guidance ST/VWAP lines) AND on every level "Meet Condition" row
+       alike. The row's own EVENT/LEVEL gate (the close-vs-line cross, the EMA/ST
+       pair comparison, the close-vs-line level) stays strict exactly as before
+       in every mode. OFF = the historical behavior returns exactly (strict gate
+       + strict facing). */
     if (f.bullBbCrossAbove) {
       out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossAbove', expand: true, _emaClose: true }));
-      out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' }));
+      const c = cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bearBbCrossBelow) {
       out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossBelow', expand: true, _emaClose: true }));
-      out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' }));
+      const c = cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bullPcCrossAbove) {
       out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossAbove', _emaClose: true }));
-      out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' }));
+      const c = cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bearPcCrossBelow) {
       out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossBelow', _emaClose: true }));
-      out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' }));
+      const c = cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bullMeetCloseBb) {
       out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossAbove', _emaClose: true }));
-      out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' }));
+      const c = cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bearMeetCloseBb) {
       out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'closeCrossBelow', _emaClose: true }));
-      out.push(cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' }));
+      const c = cond({ indId: 'bb', indSettings: bbMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bullMeetClosePc) {
       out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossAbove', _emaClose: true }));
-      out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' }));
+      const c = cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incUp', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bearMeetClosePc) {
       out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'closeCrossBelow', _emaClose: true }));
-      out.push(cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' }));
+      const c = cond({ indId: 'pc', indSettings: pcMid, valueKey: 'v1', logic: 'incDown', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     /* EMA ladder + Supertrend twin gates: a faster EMA (or a lower-factor
        Supertrend band) must have crossed above/below a slower one. Both series
@@ -1123,63 +1139,86 @@ window.createAISmartTrading = function (suffix) {
     const emaLadder = [[9, 21], [21, 35], [35, 50], [50, 100], [100, 200], [200, 300]];
     emaLadder.forEach(function (pair) {
       const fast = pair[0], slow = pair[1];
-      /* Each EMA cross row ALSO requires the slow/overlay EMA (the line that was
-         crossed) to be facing the trade direction - bullish = the slow EMA is
-         rising, bearish = it is falling. Merged into the same filter row. */
+      /* Each EMA row (cross emitter or the "Meet Condition" LEVEL row) ALSO
+         carries the slow/overlay EMA (the line that was crossed / the level
+         base) facing the trade direction - bullish = the slow EMA is rising,
+         bearish = it is falling. Merged into the same filter row. With the
+         "Overall Bullish/Bearish idea" ON (dropVotes) ONLY that single-line
+         slow-EMA FACING is released from the strict-AND set and feeds ONE vote
+         into the overall direction idea; the cross/level gate of the row itself
+         stays strict exactly as before. OFF = the historical behavior returns
+         exactly (strict cross/level + strict slow-EMA facing). */
       if (f.bullish && f['bullEma' + fast + '_' + slow]) {
         out.push(cond({ indId: 'ema', indSettings: { length: fast, source: 'close' }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'indicator', cmpIndId: 'ema', cmpSettings: { length: slow, source: 'close' }, cmpValueKey: 'v0' }));
-        out.push(cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+        const c = cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
       }
       if (f.bearish && f['bearEma' + fast + '_' + slow]) {
         out.push(cond({ indId: 'ema', indSettings: { length: fast, source: 'close' }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'indicator', cmpIndId: 'ema', cmpSettings: { length: slow, source: 'close' }, cmpValueKey: 'v0' }));
-        out.push(cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+        const c = cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
       }
-      /* The "Meet Condition" EMA-ladder LEVEL rows are multi-line rows - NOT
-         part of the Overall direction idea: their strict gate (level + the
-         merged slow-EMA facing) stays exactly as before in every mode. */
       if (f['bullMeetEma' + fast + '_' + slow]) {
         out.push(cond({ indId: 'ema', indSettings: { length: fast, source: 'close' }, valueKey: 'v0', logic: 'gt', cmpType: 'indicator', cmpIndId: 'ema', cmpSettings: { length: slow, source: 'close' }, cmpValueKey: 'v0' }));
-        out.push(cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+        const c = cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
       }
       if (f['bearMeetEma' + fast + '_' + slow]) {
         out.push(cond({ indId: 'ema', indSettings: { length: fast, source: 'close' }, valueKey: 'v0', logic: 'lt', cmpType: 'indicator', cmpIndId: 'ema', cmpSettings: { length: slow, source: 'close' }, cmpValueKey: 'v0' }));
-        out.push(cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+        const c = cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
       }
     });
     const stTwins = [[1, 2], [2, 3]];
     stTwins.forEach(function (pair) {
       const lo = pair[0], hi = pair[1];
-      /* Supertrend twin cross rows also require the higher-factor (slower) band
-         - the line that was crossed - to face the trade direction. */
+      /* Supertrend twin rows (cross emitter or the "Meet Condition" LEVEL row)
+         also carry the higher-factor (slower) band - the line that was crossed /
+         the level base - facing the trade direction. Merged into the same filter
+         row. With the "Overall Bullish/Bearish idea" ON (dropVotes) ONLY that
+         single-line higher-factor Supertrend FACING is released from the strict-
+         AND set and feeds ONE vote into the overall direction idea; the cross /
+         level gate of the row itself stays strict exactly as before. OFF = the
+         historical behavior returns exactly. */
       if (f.bullish && f['bullSt10_' + lo + '_' + hi]) {
         out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: lo }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'indicator', cmpIndId: 'supertrend', cmpSettings: { atrPeriod: 10, factor: hi }, cmpValueKey: 'v0' }));
-        out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: hi }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+        const c = cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: hi }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
       }
       if (f.bearish && f['bearSt10_' + lo + '_' + hi]) {
         out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: lo }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'indicator', cmpIndId: 'supertrend', cmpSettings: { atrPeriod: 10, factor: hi }, cmpValueKey: 'v0' }));
-        out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: hi }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+        const c = cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: hi }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
       }
       if (f['bullMeetSt10_' + lo + '_' + hi]) {
         out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: lo }, valueKey: 'v0', logic: 'gt', cmpType: 'indicator', cmpIndId: 'supertrend', cmpSettings: { atrPeriod: 10, factor: hi }, cmpValueKey: 'v0' }));
-        out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: hi }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+        const c = cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: hi }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
       }
       if (f['bearMeetSt10_' + lo + '_' + hi]) {
         out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: lo }, valueKey: 'v0', logic: 'lt', cmpType: 'indicator', cmpIndId: 'supertrend', cmpSettings: { atrPeriod: 10, factor: hi }, cmpValueKey: 'v0' }));
-        out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: hi }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+        const c = cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: hi }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
       }
     });
     /* Candle close vs price-guidance line gates: the close must have crossed
        above/below the Supertrend(10,1) band or the VWAP line on this bar (true
        prev->current cross, not a level hold). Bullish = close above the line,
-       bearish = close below it. These rows also require the OVERLAY line itself
-       (Supertrend(10,1) / VWAP) to be facing the trade direction. */
+       bearish = close below it. These rows also carry the OVERLAY line itself
+       (Supertrend(10,1) / VWAP) facing the trade direction. With the "Overall
+       Bullish/Bearish idea" ON (dropVotes) ONLY that single-line OVERLAY facing
+       is released from the strict-AND set and feeds ONE vote into the overall
+       direction idea; the close-vs-overlay cross gate of the row itself stays
+       strict exactly as before. OFF = the historical behavior returns exactly. */
     if (f.bullish && f.bullSt1CloseCrossAbove) {
       out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
-      out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+      const c = cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bearish && f.bearSt1CloseCrossBelow) {
       out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
-      out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+      const c = cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     const vwapDef = { anchor: 'trend' };
     if (f.bullish && f.bullVwapCloseCrossAbove) {
@@ -1194,11 +1233,13 @@ window.createAISmartTrading = function (suffix) {
     }
     if (f.bullMeetCloseSt) {
       out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'lt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
-      out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+      const c = cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bearMeetCloseSt) {
       out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'gt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
-      out.push(cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+      const c = cond({ indId: 'supertrend', indSettings: { atrPeriod: 10, factor: 1 }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
+      if (dropVotes) dropVotes.push(c); else out.push(c);
     }
     if (f.bullMeetCloseVwap) {
       out.push(cond({ indId: 'vwap', indSettings: vwapDef, valueKey: 'v0', logic: 'lt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
@@ -1246,8 +1287,17 @@ window.createAISmartTrading = function (suffix) {
       PB_G2.forEach(id => { const k = 'bearPbr' + pbCap(id) + 'Up'; if (f[k]) out.push(cond({ indId: id, indSettings: PB_DEF_SETTINGS[id], valueKey: 'v0', logic: 'incUp', cmpType: 'number' })); });
     }
     OBR_LIST.forEach(d => {
-      if (f.bullish && f['bullObr' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incUp', cmpType: 'number' }));
-      if (f.bearish && f['bearObr' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incDown', cmpType: 'number' }));
+      /* Overlay line-direction rows (bull = increasing upward, bear = increasing
+         downward). With the "Overall Bullish/Bearish idea" ON (dropVotes) the
+         pure single-line direction row is released from being its own strict-AND
+         gate and instead feeds ONE vote into the overall direction idea (mirror
+         of the OI Trend direction row above); otherwise it stays a strict gate
+         exactly as before. */
+      const bullC = cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incUp', cmpType: 'number' });
+      const bearC = cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incDown', cmpType: 'number' });
+      const tgt = dropVotes || out;
+      if (f.bullish && f['bullObr' + d.tok]) tgt.push(bullC);
+      if (f.bearish && f['bearObr' + d.tok]) tgt.push(bearC);
     });
     MEET_OVL_LIST.forEach(d => {
       if (f['bullMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'lt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
@@ -2459,14 +2509,22 @@ window.createAISmartTrading = function (suffix) {
          directionGuardBlocks engine block for the vote definitions. */
       dirGuard: false,
       /* "Overall Bullish/Bearish idea" (indicator-filter mode only, default ON):
-         when ON the pure single-line DIRECTION rows the user selected are not
-         required as their own strict-AND gates - each becomes ONE vote into a
-         single overall market-direction idea which vetoes the whole filter-mode
-         entry only on a strongly-opposite scenario (>=3 decided opposite votes,
-         see overallDirBlocks). OFF restores the historical behavior exactly
-         (every selected row a strict-AND gate). Multi-line families (EMA ladder,
-         Supertrend, BB/Price Channel, Overlay/OBR, PBG/pane-momentum) are never
-         affected - their strict gates stay either way. */
+         when ON the single-line DIRECTION / FACING logic inside the rows the user
+         selected is not required as its own strict-AND gate - each rising/
+         falling/facing sub-cond becomes ONE vote into a single overall market-
+         direction idea which vetoes the whole filter-mode entry only on a
+         strongly-opposite scenario (>=3 decided opposite votes, see
+         overallDirBlocks). Every row still keeps its structural gate strict:
+         crossovers / level compares stay strict-AND as before, so OFF restores
+         the historical behavior exactly (every selected sub-cond a strict-AND
+         gate). The affected single-line direction/facing families are the
+         Direction rows, pane-all-lines, PB Group-1, OI Trend, OBR line-direction
+         rows and the slow/overlay/middle-line facing carried inside the EMA-
+         ladder, Supertrend-twin, close-vs-ST, close-vs-VWAP, close-vs-BB and
+         close-vs-PC cross/Meet rows. The remaining pure EVENT / structural rows
+         (Pane crossover, pane-pair level, Volume Line, Volume Line Meet, BBW
+         strength, SMF, ASR, Gap, Greater/Lesser, PBG, the 3-line ADX gauge/+DI/
+         -DI row) are never affected - their strict gates stay either way. */
       overallDirIdea: true,
       /* Indicator-filters run mode: when ON the engine trades the selected
          universe (top movers / NIFTY trend / chart symbols) placing a trade
@@ -2843,14 +2901,19 @@ window.createAISmartTrading = function (suffix) {
      timeframe is exactly the AST universal timeframe checkbox(es) the user
      ticked (1 min and/or 5 min) - never the open chart's timeframe. */
 
-  /* All selected Bullish+Bearish indicator filter conditions, built WITHOUT
-     direction matching so every ticked sub-filter becomes a mandatory AND gate
-     (contrast with directionFilterConditions used for normal strategies, which
-     zeroes the opposite section). Built for the Indicator-filters run mode, so
-     buildFilterConditions applies the "Overall Bullish/Bearish idea" (toggle
-     default ON): the pure single-line direction rows are lifted OUT of the
-     strict-AND set and returned on conds._dirDropped as votes for that idea
-     (consumed by overallDirBlocks at the entry point). */
+   /* All selected Bullish+Bearish indicator filter conditions, built WITHOUT
+      direction matching so every ticked sub-filter becomes a mandatory AND gate
+      (contrast with directionFilterConditions used for normal strategies, which
+      zeroes the opposite section). Built for the Indicator-filters run mode, so
+      buildFilterConditions applies the "Overall Bullish/Bearish idea" (toggle
+      default ON): the single-line direction/facing sub-logic (Direction rows,
+      pane-all-lines, PB Group-1, OI Trend, OBR line-direction rows and the slow/
+      overlay/middle-line facing carried inside the EMA-ladder, Supertrend-twin,
+      close-vs-ST, close-vs-VWAP, close-vs-BB and close-vs-PC cross/Meet rows)
+      is lifted OUT of the strict-AND set and returned on conds._dirDropped as
+      votes for that idea (consumed by overallDirBlocks at the entry point);
+      every row keeps its structural cross/level/compare gate strict in conds._p
+      exactly as before. */
   function allSelectedFilterConditions() {
     const tpl = { entry: { indId: 'ema', indSettings: { length: 9, source: 'close' }, valueKey: 'v0' }, entryExtra: [], exit: null, exitExtra: [], candlestick: { enabled: false, entry: [], exit: [] } };
     return buildFilterConditions(tpl, state.filters || {}, { filterMode: true });
@@ -2871,9 +2934,9 @@ window.createAISmartTrading = function (suffix) {
     const conds = allSelectedFilterConditions();
     if (!conds.length) return [];
     /* Rows lifted out of the strict set by the "Overall Bullish/Bearish idea"
-       (pure single-line direction rows) - carried on every synthetic strategy so
-       the entry veto (overallDirBlocks) can read the vote lines on that TF's
-       own chart. */
+       (single-line direction/facing sub-conds) - carried on every synthetic
+       strategy so the entry veto (overallDirBlocks) can read the vote lines on
+       that TF's own chart. */
     const dirDropped = (conds && conds._dirDropped) || [];
     /* AI Brain (analysis/decision mode): instead of requiring EVERY selected
        filter to pass together (strict AND), the whole set becomes one weighted
@@ -5768,29 +5831,31 @@ window.createAISmartTrading = function (suffix) {
        set first completes holding. OFF (default) = pure pass on alignment. */
     const armedOk = armedGateOk(s, i, candles, armedOverride);
     /* "Overall Bullish/Bearish idea" veto (indicator-filter mode only): the
-       selected pure single-line direction rows are no longer strict gates but
-       one aggregate market-direction idea; it vetoes ONLY a strongly-opposite
-       scenario (>=3 decided opposite votes). Never applies outside filter-mode
-       synthetic strategies. */
+       selected single-line direction/facing sub-conds are no longer strict gates
+       but one aggregate market-direction idea; it vetoes ONLY a strongly-
+       opposite scenario (>=3 decided opposite votes). Never applies outside
+       filter-mode synthetic strategies. */
     const dirOk = !overallDirBlocks(s, candles, i);
     return condOk && gapOk && extraOk && patternOk && armedOk && dirOk;
   }
 
-  /* True = the bar `i` entry must be blocked by the "Overall Bullish/Bearish
-     idea" (indicator-filter mode only, state.overallDirIdea default ON; see the
-     buildFilterConditions dropVotes note). Each selected pure single-line
-     DIRECTION row - Direction upward/downward and its (all) form, the Pane-all-
-     lines direction row (one vote per pane line), the PB Group-1 mirror rows,
-     the OI Trend direction row and the VWAP facing of the close-vs-VWAP rows -
-     contributes ONE vote on how that line is facing right now (the same O(1)
-     dirFace read the strict gate used). A bull-side entry is vetoed only when
-     the opposite (down) votes form a clear majority of at least 3 decided
-     votes; a bear-side entry mirrors that. Fewer decided votes (lines still
-     warming up or flat) never blocks - it is a strong-opposite veto, not a new
-     confirmation requirement, so an agreed-direction crossover/level event is
-     not delayed. Duplicate votes for the same line (same indicator + settings +
-     valueKey, e.g. "Direction upward" and "Direction upward (all)" both read
-     the same primary line) count once. */
+   /* True = the bar `i` entry must be blocked by the "Overall Bullish/Bearish
+      idea" (indicator-filter mode only, state.overallDirIdea default ON; see the
+      buildFilterConditions dropVotes note). Each selected single-line DIRECTION /
+      FACING sub-cond - Direction upward/downward and its (all) form, the Pane-
+      all-lines direction row (one vote per pane line), the PB Group-1 mirror
+      rows, the OI Trend direction row, the Overlay/OBR line-direction rows, the
+      VWAP / ST(10,1) / slow-EMA / higher-factor-ST / BB-middle / PC-middle
+      facing carried inside the close-vs-VWAP, close-vs-ST, EMA-ladder, Supertrend
+      twin, close-vs-BB and close-vs-PC cross/Meet rows - contributes ONE vote on
+      how that line is facing right now (the same O(1) dirFace read the strict
+      gate used). A bull-side entry is vetoed only when the opposite (down) votes
+      form a clear majority of at least 3 decided votes; a bear-side entry mirrors
+      that. Fewer decided votes (lines still warming up or flat) never blocks - it
+      is a strong-opposite veto, not a new confirmation requirement, so an agreed-
+      direction crossover/level event is not delayed. Duplicate votes for the same
+      line (same indicator + settings + valueKey, e.g. "Direction upward" and
+      "Direction upward (all)" both read the same primary line) count once. */
   function overallDirBlocks(s, candles, i) {
     if (!s || !s._filterBuilt) return false;
     if (state.overallDirIdea === false) return false;
@@ -9900,8 +9965,8 @@ window.createAISmartTrading = function (suffix) {
     },
     dirGuardEnabled() { return state.dirGuard === true; },
     /* "Overall Bullish/Bearish idea" checkbox (indicator-filter mode only,
-       default ON): when ON the selected pure single-line DIRECTION rows are not
-       strict-AND gates any more - each becomes ONE vote into one overall
+       default ON): when ON the selected single-line DIRECTION / FACING sub-conds
+       are not strict-AND gates any more - each becomes ONE vote into one overall
        market-direction idea which vetoes a filter-mode entry only on a strong
        opposite majority (>=3 decided opposite votes, see overallDirBlocks).
        OFF = the historical strict behavior returns exactly for every row. */
@@ -9911,7 +9976,7 @@ window.createAISmartTrading = function (suffix) {
       _workingCache.clear();
       save();
       log('Overall Bullish/Bearish idea ' + (state.overallDirIdea !== false
-        ? 'ON - pure single-line direction rows (Direction upward/downward & (all), Pane all-lines, PB Group-1 mirror, OI Trend, VWAP facing) vote as ONE overall direction idea that vetoes a filter-mode entry only on a strongly-opposite market; multi-line families (EMA ladder / Supertrend / BB / Price Channel / Overlay / PBG) keep their strict gates untouched'
+        ? 'ON - single-line direction/facing sub-conds (Direction upward/downward & (all), Pane all-lines, PB Group-1 mirror, OI Trend, Overlay/OBR line direction, and the slow-EMA / higher-factor-ST / ST(10,1) / VWAP / BB-middle / PC-middle facing inside the EMA-ladder, Supertrend-twin, close-vs-ST, close-vs-VWAP, close-vs-BB and close-vs-PC cross & Meet rows) vote as ONE overall direction idea that vetoes a filter-mode entry only on a strongly-opposite market; every row keeps its structural crossover/level gate strict and pure EVENT rows keep their gates untouched'
         : 'OFF - every selected row returns to a strict-AND gate (historical behavior)'), state.overallDirIdea !== false ? 'ok' : 'warn');
     },
     overallDirEnabled() { return state.overallDirIdea !== false; },
