@@ -1494,8 +1494,12 @@
        engines read identical chart/pool values. OFF = the old default entry. */
     const allTogether = state.allInOne === true && window.AISmartTrading &&
       typeof window.AISmartTrading.strictEntryOk === 'function';
+    /* This engine's armed-entry flags were removed, so pass an explicit
+       force-false override - the AST strict evaluator reads its own fresh-meet
+       toggle by default and that AST-level restriction must never leak into AE
+       runs. */
     const entryNow = allTogether
-      ? !!window.AISmartTrading.strictEntryOk(r, candles, last)
+      ? !!window.AISmartTrading.strictEntryOk(r, candles, last, { bullish: false, bearish: false })
       : (evalCondAll(r.entry, last, candles) &&
         (r.entryExtra && r.entryExtra.length ? evalCondAll(r.entryExtra, last, candles) : true) &&
         (!r.candlestick || !r.candlestick.entry || !r.candlestick.entry.length ? true : patternHitAt(r.candlestick.entry, last, candles)));
