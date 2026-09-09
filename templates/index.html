@@ -1416,9 +1416,10 @@ window.IST12 = (function () {
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#00d4aa">NIFTY Trend Following:</b></div>
             <button class="btn-action" id="astNiftyTrendToggle" style="width:auto;padding:5px 12px;margin:0 8px 0 0" onclick="AISmartTrading.toggleNiftyTrend()">Trend Follow: OFF</button>
-            <label style="font-size:9px;color:#888;margin-right:8px">F&O daily change min %
-              <input type="number" id="astNiftyTrendPct" value="2.5" min="0.01" step="0.01" title="Pick only F&O stocks whose daily % change is above this value (decimals allowed, e.g. 2.5). NIFTY bullish -> top gainers above +%, NIFTY bearish -> top losers below -%." style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onNiftyTrendInput()">
-            </label>
+            <label style="font-size:9px;color:#888;margin-right:8px;display:flex;align-items:center;gap:3px" title="Pick every F&O stock whose daily % change is above this value (decimals allowed, e.g. 2.5). NIFTY bullish -> top gainers above +%, NIFTY bearish -> top losers below -%. Mutual with the top gainer/loser mode below."><input type="checkbox" id="astNiftyTrendPctOn" checked onclick="AISmartTrading.setTrendMode('pct')" style="accent-color:#ffd700"> F&O daily change min %</label>
+            <input type="number" id="astNiftyTrendPct" value="2.5" min="0.01" step="0.01" title="Pick only F&O stocks whose daily % change is above this value (decimals allowed, e.g. 2.5). NIFTY bullish -> top gainers above +%, NIFTY bearish -> top losers below -%." style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onNiftyTrendInput()">
+            <label style="font-size:9px;color:#888;margin-right:8px;display:flex;align-items:center;gap:3px" title="Auto pick the top N F&O gainers (when NIFTY is bullish) or the top N F&O losers (when NIFTY is bearish) straight from the live daily change% ranking, no threshold needed. Mutual with the F&O daily change min % mode above."><input type="checkbox" id="astNiftyTrendTopN" onclick="AISmartTrading.setTrendMode('topn')" style="accent-color:#00d4aa"> Auto pick top gainer/top loser</label>
+            <input type="number" id="astNiftyTrendTopNCount" value="5" min="1" max="50" step="1" title="How many top gainers (NIFTY bullish) or top losers (NIFTY bearish) F&O stocks to auto pick." style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onNiftyTrendInput()">
             <label style="font-size:9px;color:#888;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astNiftyTrendIndices" onchange="AISmartTrading.onNiftyTrendInput()"> Include indices for trading</label>
             <label style="font-size:9px;color:#888;margin-right:8px">Index
               <select id="astNiftyTrendIndicesSelect" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px;min-width:110px;max-width:160px"></select>
@@ -1442,7 +1443,7 @@ window.IST12 = (function () {
             <div id="astNiftyTrendBearTplList" style="width:100%;margin-top:2px;font-size:9px"></div>
           </div>
           <div id="astNiftyTrendList" style="display:none;margin-top:6px;font-size:9px;color:#ccc;line-height:1.7;background:#12122a;border:1px solid #2d2d50;border-radius:4px;padding:6px 8px"></div>
-          <div style="font-size:8px;color:#666;margin-top:4px">Trend + F&O top gainer/loser scan re-runs every 1 minute; any picked stock falling below the min % is dropped from trading immediately (open positions closed).</div>
+          <div style="font-size:8px;color:#666;margin-top:4px">Trend + F&O top gainer/loser scan re-runs every 1 minute; a picked stock that stops qualifying is dropped from trading immediately (open positions closed).</div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Simulation Chart:</b></div>
             <button class="btn-action" id="astSimToggle" style="width:auto;padding:5px 12px;margin:0 8px 0 0" onclick="AISmartTrading.toggleSim()">Simulation Chart: OFF</button>
@@ -6430,7 +6431,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
  <script src="/static/autoexperiment.v13.js?v=179"></script>
 <script src="/static/indextrend.js?v=4"></script>
 <script src="/static/simulator.js?v=3"></script>
-  <script src="/static/aismart.js?v=213"></script>
+  <script src="/static/aismart.js?v=214"></script>
 <script src="/static/paperrun.js?v=26"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>

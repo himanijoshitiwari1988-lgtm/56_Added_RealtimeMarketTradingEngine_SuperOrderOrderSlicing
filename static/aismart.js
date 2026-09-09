@@ -2490,7 +2490,7 @@ window.createAISmartTrading = function (suffix) {
       groups: GROUP_KEYS.slice(),
       symbols: [],
       movers: { enabled: false, gainers: 5, losers: 5, indices: [], picked: [] },
-      niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] }, // NIFTY trend-following F&O picker (directional gainers/losers above a daily change% threshold + optional indices + per-direction assigned AST engine-settings template cycles)
+      niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] }, // NIFTY trend-following F&O picker (per-direction: F&O stocks above a daily change% threshold OR auto top-N gainers/losers; optional indices + per-direction assigned AST engine-settings template cycles)
       sim: { enabled: false }, // market-off simulation chart: trades the synthetic SIM 900001 stream instead of real strikes
       commodity: { enabled: false, sids: [] }, // MCX commodity futures paper trading: trades each +Add-ed FUTCOM contract directly (spot mode), alongside stocks/F&O
       filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bullGreenCandle: false, bearRedCandle: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullOit: false, bearOit: false, bullEma9_21: false, bearEma9_21: false, bullEma21_35: false, bearEma21_35: false, bullEma35_50: false, bearEma35_50: false, bullEma50_100: false, bearEma50_100: false, bullEma100_200: false, bearEma100_200: false, bullEma200_300: false, bearEma200_300: false, bullSt10_1_2: false, bearSt10_1_2: false, bullSt10_2_3: false, bearSt10_2_3: false, bullSt1CloseCrossAbove: false, bearSt1CloseCrossBelow: false, bullVwapCloseCrossAbove: false, bullMeetEma9_21: false, bullMeetEma21_35: false, bullMeetEma35_50: false, bullMeetEma50_100: false, bullMeetEma100_200: false, bullMeetEma200_300: false, bullMeetSt10_1_2: false, bullMeetSt10_2_3: false, bullMeetCloseSt: false, bullMeetCloseVwap: false, bullMeetPaneCross: false, bullMeetCross: false, bullMeetCloseBb: false, bullMeetClosePc: false, bullMeetVl: false, bearMeetVl: false, bearVwapCloseCrossBelow: false, bearMeetEma9_21: false, bearMeetEma21_35: false, bearMeetEma35_50: false, bearMeetEma50_100: false, bearMeetEma100_200: false, bearMeetEma200_300: false, bearMeetSt10_1_2: false, bearMeetSt10_2_3: false, bearMeetCloseSt: false, bearMeetCloseVwap: false, bearMeetPaneCross: false, bearMeetCross: false, bearMeetCloseBb: false, bearMeetClosePc: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false, bullArmedGate: false, bearArmedGate: false,
@@ -2720,6 +2720,11 @@ window.createAISmartTrading = function (suffix) {
       if (!Number.isFinite(Number(s.niftyTrend.pct)) || Number(s.niftyTrend.pct) <= 0) s.niftyTrend.pct = 2.5;
       if (typeof s.niftyTrend.includeIndices !== 'boolean') s.niftyTrend.includeIndices = false;
       if (!Array.isArray(s.niftyTrend.indices)) s.niftyTrend.indices = [];
+      /* Pick mode: false = F&O daily change% threshold mode (the historical one);
+         true = "auto pick top N gainers / top N losers" (the two modes are
+         mutually exclusive - see the trend UI). */
+      if (typeof s.niftyTrend.useTopN !== 'boolean') s.niftyTrend.useTopN = false;
+      s.niftyTrend.topN = Math.max(1, Math.min(50, Math.round(Number(s.niftyTrend.topN) || 5)));
       /* Per-direction assigned AST engine-settings template ids (order = the
          run-start cycle order). Dead ids (template since deleted) are simply
          ignored everywhere - the live template library is the source of truth. */
@@ -2728,7 +2733,7 @@ window.createAISmartTrading = function (suffix) {
       s.niftyTrend.bullTpls = s.niftyTrend.bullTpls.map(x => String(x)).filter(Boolean);
       s.niftyTrend.bearTpls = s.niftyTrend.bearTpls.map(x => String(x)).filter(Boolean);
     } else if (s) {
-      s.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
+      s.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
     }
     if (s && s.filters) {
       ['bullish', 'bearish', 'incUp', 'incDown', 'gapUp', 'gapDown', 'incUpAll', 'incDownAll', 'crossUp', 'crossDown', 'gtUp', 'ltUp', 'gtDown', 'ltDown'].concat(FILTER_EXTRA_KEYS, STREAM_FLAG_KEYS, FILTER_ARM_KEYS).forEach(k => {
@@ -3265,16 +3270,19 @@ window.createAISmartTrading = function (suffix) {
 
   /* ---- NIFTY trend-following F&O picker ----
      "Trade following NIFTY movement & trend": when enabled, the engine only
-     paper-trades F&O stocks whose DAILY % change is ABOVE the configured
-     threshold, taken from the side the live NIFTY trend points at:
-       - NIFTY bullish -> top-gainer F&O stocks with daily change_pct >= pct
-       - NIFTY bearish -> top-loser F&O stocks with daily change_pct <= -pct
-       - NIFTY unknown/consolidation -> no F&O stock picked (no directional
-         bias); explicitly +Add-ed indices still trade (see below)
+     paper-trades F&O stocks from the side the live NIFTY trend points at, in
+     ONE of two mutually exclusive pick modes (see the trend UI):
+       - F&O daily change% threshold: stocks whose DAILY % change is ABOVE the
+         configured threshold.
+       - Auto top N gainer/loser: the top N gainer / top N loser F&O stocks by
+         daily change% (no threshold).
+       - NIFTY bullish -> gainers (positive %), NIFTY bearish -> losers
+         (negative %); NIFTY unknown/consolidation -> no F&O stock picked (no
+         directional bias); explicitly +Add-ed indices still trade (see below)
      The "Include indices for trading" flag appends the chosen indices (NIFTY,
      SENSEX, MIDCPNIFTY, BANKNIFTY, FINNIFTY) alongside the F&O stocks so they
-     are traded regardless of the change% threshold and even when NIFTY has no
-     confirmed bias. Change% comes straight from the live client quote cache
+     are traded regardless of the pick mode and even when NIFTY has no confirmed
+     bias. Change% comes straight from the live client quote cache
      (clientQuotes[*].change_pct). */
   function niftyTrendSymbols(niftyDir) {
     const dir = niftyDir || _lastNiftyDir;
@@ -3287,6 +3295,8 @@ window.createAISmartTrading = function (suffix) {
     }
     const nt = state.niftyTrend || {};
     const thresh = (Number(nt.pct) > 0) ? Number(nt.pct) : 2.5;
+    const topN = Math.max(1, Math.min(50, Math.round(Number(nt.topN) || 5)));
+    const useTopN = nt.useTopN === true;
     const qm = (typeof clientQuotes !== 'undefined' && clientQuotes) ? clientQuotes : {};
     const list = (typeof SYMBOLS !== 'undefined' && Array.isArray(SYMBOLS)) ? SYMBOLS : [];
     const byId = {};
@@ -3318,10 +3328,22 @@ window.createAISmartTrading = function (suffix) {
       out.push(s);
     };
     if (dir === 'bullish') {
-      quoted.filter(x => x.pct >= thresh).sort((a, b) => b.pct - a.pct).forEach(x => push(x.s));
+      if (useTopN) {
+        /* Auto top-gainer mode: the N top gainer F&O stocks regardless of the
+           daily change% threshold. */
+        quoted.filter(x => x.pct > 0).sort((a, b) => b.pct - a.pct).slice(0, topN).forEach(x => push(x.s));
+      } else {
+        quoted.filter(x => x.pct >= thresh).sort((a, b) => b.pct - a.pct).forEach(x => push(x.s));
+      }
     } else if (dir === 'bearish') {
-      /* Biggest losers first: ascending by % change (most negative on top). */
-      quoted.filter(x => x.pct <= -thresh).sort((a, b) => a.pct - b.pct).forEach(x => push(x.s));
+      if (useTopN) {
+        /* Auto top-loser mode: the N top loser F&O stocks (most negative daily
+           change% first) regardless of the threshold. */
+        quoted.filter(x => x.pct < 0).sort((a, b) => a.pct - b.pct).slice(0, topN).forEach(x => push(x.s));
+      } else {
+        /* Biggest losers first: ascending by % change (most negative on top). */
+        quoted.filter(x => x.pct <= -thresh).sort((a, b) => a.pct - b.pct).forEach(x => push(x.s));
+      }
     } else {
       /* NIFTY flat / direction unknown: no directional bias means no F&O stock
          is picked. Explicitly +Add-ed indices are NOT threshold/direction-gated
@@ -3356,6 +3378,7 @@ window.createAISmartTrading = function (suffix) {
     const nt = state.niftyTrend || {};
     if (!nt.enabled) return syms;
     const thresh = (Number(nt.pct) > 0) ? Number(nt.pct) : 2.5;
+    const useTopN = nt.useTopN === true;
     const qm = (typeof clientQuotes !== 'undefined' && clientQuotes) ? clientQuotes : {};
     const idxSet = {};
     if (nt.includeIndices && Array.isArray(nt.indices)) {
@@ -3369,8 +3392,8 @@ window.createAISmartTrading = function (suffix) {
       if (!q || q.change_pct === undefined) return false;
       const pct = Number(q.change_pct);
       if (isNaN(pct)) return false;
-      if (dir === 'bullish') return pct >= thresh;
-      if (dir === 'bearish') return pct <= -thresh;
+      if (dir === 'bullish') return useTopN ? pct > 0 : pct >= thresh;
+      if (dir === 'bearish') return useTopN ? pct < 0 : pct <= -thresh;
       return false;
     });
     return keep;
@@ -3406,7 +3429,7 @@ window.createAISmartTrading = function (suffix) {
     if (!el || !el.value) { log('Select an index to add', 'warn'); return; }
     let it;
     try { it = JSON.parse(el.value); } catch (e) { return; }
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
     if (!Array.isArray(state.niftyTrend.indices)) state.niftyTrend.indices = [];
     const exists = state.niftyTrend.indices.some(s => String(s.id) === String(it.id) && String(s.exch || '') === String(it.exch || ''));
     if (!exists) {
@@ -3426,7 +3449,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function removeNiftyTrendIndex(id, exch) {
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
     state.niftyTrend.indices = (state.niftyTrend.indices || []).filter(s => !(String(s.id) === String(id) && String(s.exch || '') === String(exch || '')));
     save();
     _resetTrendScan();
@@ -3446,21 +3469,32 @@ window.createAISmartTrading = function (suffix) {
 
   function readNiftyTrendUI() {
     const onEl = $id('astNiftyTrendEnabled'), pctEl = $id('astNiftyTrendPct'), incEl = $id('astNiftyTrendIndices');
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
+    const pctOnEl = $id('astNiftyTrendPctOn'), topNEl = $id('astNiftyTrendTopN'), topNCountEl = $id('astNiftyTrendTopNCount');
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
     state.niftyTrend.enabled = onEl ? onEl.checked : false;
     state.niftyTrend.pct = pctEl ? (Number(pctEl.value) > 0 ? Number(pctEl.value) : 2.5) : 2.5;
     state.niftyTrend.includeIndices = incEl ? incEl.checked : false;
+    /* The two pick modes are mutually exclusive: the dedicated setTrendMode
+       toggle un-checks the sibling before this read runs, so normally exactly
+       one box is checked. Top-N wins only when it is the one checked. */
+    const wantTopN = !!(topNEl && topNEl.checked);
+    const wantPct = !!(pctOnEl && pctOnEl.checked);
+    state.niftyTrend.useTopN = !!wantTopN && !wantPct;
+    state.niftyTrend.topN = Math.max(1, Math.min(50, Math.round(Number(topNCountEl ? topNCountEl.value : 5)) || 5));
     save();
   }
 
   function applyNiftyTrendToUI() {
-    const nt = state.niftyTrend || (state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] });
+    const nt = state.niftyTrend || (state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] });
     if (!Array.isArray(nt.indices)) nt.indices = [];
     const ck = (id, v) => { const el = $id(id); if (el) el.checked = !!v; };
     const set = (id, v) => { const el = $id(id); if (el) el.value = v; };
     ck('astNiftyTrendEnabled', nt.enabled);
     ck('astNiftyTrendIndices', nt.includeIndices);
+    ck('astNiftyTrendPctOn', !nt.useTopN);
+    ck('astNiftyTrendTopN', nt.useTopN);
     set('astNiftyTrendPct', nt.pct);
+    set('astNiftyTrendTopNCount', nt.topN);
     const btn = $id('astNiftyTrendToggle');
     if (btn) {
       btn.textContent = 'Trend Follow: ' + (nt.enabled ? 'ON' : 'OFF');
@@ -3471,11 +3505,23 @@ window.createAISmartTrading = function (suffix) {
     const on = !!nt.enabled;
     const simOn = !!(state.sim && state.sim.enabled);
     const active = on && !simOn;
-    ['astNiftyTrendPct', 'astNiftyTrendIndices', 'astNiftyTrendIndicesSelect', 'astNiftyTrendIndicesAdd',
+    const topNOn = !!nt.useTopN;
+    const setDim = (id, off) => {
+      const el = $id(id);
+      if (el) { el.disabled = !!off; el.style.opacity = off ? '0.5' : '1'; }
+    };
+    ['astNiftyTrendIndices', 'astNiftyTrendIndicesSelect', 'astNiftyTrendIndicesAdd',
      'astNiftyTrendBullTplSel', 'astNiftyTrendBullTplAdd', 'astNiftyTrendBearTplSel', 'astNiftyTrendBearTplAdd'].forEach(id => {
       const el = $id(id);
       if (el) { el.disabled = !active; el.style.opacity = active ? '1' : '0.5'; }
     });
+    /* Pick-mode controls: fully disabled when trend is off / simulation is on.
+       When trend is active, the INACTIVE mode's controls fade out - enabling the
+       other mode re-activates them (mutually exclusive). */
+    setDim('astNiftyTrendPctOn', !active);
+    setDim('astNiftyTrendTopN', !active);
+    setDim('astNiftyTrendPct', !active || topNOn);
+    setDim('astNiftyTrendTopNCount', !active || !topNOn);
     refreshTrendTplSelects();
     renderTrendTplChips();
     const nBtn = $id('astNiftyTrendToggle');
@@ -3488,8 +3534,28 @@ window.createAISmartTrading = function (suffix) {
     applyMoversToUI();
   }
 
+  /* Mutual-exclusivity switch between the two NIFTY trend pick modes. Clicking
+     one mode's checkbox turns ITS mode on and un-checks the other (the engine
+     then uses only that picker). */
+  function setTrendMode(mode) {
+    const pctOnEl = $id('astNiftyTrendPctOn'), topNEl = $id('astNiftyTrendTopN');
+    if (mode === 'topn') {
+      if (pctOnEl) pctOnEl.checked = false;
+      if (topNEl) topNEl.checked = true;
+    } else {
+      if (topNEl) topNEl.checked = false;
+      if (pctOnEl) pctOnEl.checked = true;
+    }
+    readNiftyTrendUI();
+    _resetTrendScan();
+    applyNiftyTrendToUI();
+    log(mode === 'topn'
+      ? 'NIFTY trend picker: AUTO top ' + state.niftyTrend.topN + ' gainer/loser mode ON (daily change% threshold ignored)'
+      : 'NIFTY trend picker: F&O daily change% mode ON', mode === 'topn' ? 'ok' : '');
+  }
+
   function toggleNiftyTrend() {
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
     state.niftyTrend.enabled = !state.niftyTrend.enabled;
     /* Mutually exclusive with Top Gainers / Losers + Indices: enabling trend
        following switches the paper engine into trend mode, so the movers
@@ -3680,7 +3746,7 @@ window.createAISmartTrading = function (suffix) {
     const dir = _lastNiftyDir || null;
     if (!nt.enabled) {
       host.style.display = '';
-      host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend-following is <b style="color:#e67e22">OFF</b> - enable it to auto-pick F&O stocks from the NIFTY trend side with a minimum daily change%.</div>';
+      host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend-following is <b style="color:#e67e22">OFF</b> - enable it to auto-pick F&O stocks from the NIFTY trend side (daily change% threshold or top-N gainer/loser mode).</div>';
       return;
     }
     if (!dir) {
@@ -3709,6 +3775,8 @@ window.createAISmartTrading = function (suffix) {
       if (!id || inst === 'INDEX' || isCommodity({ exch: exch, inst: inst, ocExch: ocExch })) return;
       byId[id] = { name, id, exch, inst, ocId, ocExch, grp };
     });
+    const useTopN = nt.useTopN === true;
+    const topN = Math.max(1, Math.min(50, Math.round(Number(nt.topN) || 5)));
     const rows = [];
     for (const id in byId) {
       const s = byId[id];
@@ -3716,20 +3784,31 @@ window.createAISmartTrading = function (suffix) {
       if (!q || q.change_pct === undefined) continue;
       const pct = Number(q.change_pct);
       if (isNaN(pct)) continue;
-      if (dir === 'bullish' && pct >= thresh) rows.push({ name: displayName(s), pct });
-      else if (dir === 'bearish' && pct <= -thresh) rows.push({ name: displayName(s), pct });
+      if (useTopN) {
+        if (dir === 'bullish' && pct > 0) rows.push({ name: displayName(s), pct });
+        else if (dir === 'bearish' && pct < 0) rows.push({ name: displayName(s), pct });
+      } else {
+        if (dir === 'bullish' && pct >= thresh) rows.push({ name: displayName(s), pct });
+        else if (dir === 'bearish' && pct <= -thresh) rows.push({ name: displayName(s), pct });
+      }
     }
     rows.sort((a, b) => dir === 'bullish' ? b.pct - a.pct : a.pct - b.pct);
+    if (useTopN) rows.splice(topN);
     const col = dir === 'bullish' ? '#00d4aa' : '#ef5350';
     let html = '<div style="color:' + col + ';font-size:9px;margin-bottom:2px">NIFTY ' + (dir === 'bullish' ? 'Bullish' : 'Bearish') +
-      ' &middot; picking F&O stocks with daily change% ' + (dir === 'bullish' ? '&ge; +' : '&le; -') + thresh + '% (' + rows.length + ' match' + (rows.length === 1 ? '' : 'es') + ')</div>';
+      (useTopN
+        ? ' &middot; auto-picking the top <b style="color:#ffd700">' + topN + '</b> ' + (dir === 'bullish' ? 'gainer' : 'loser') + ' F&O stocks by daily change%'
+        : ' &middot; picking F&O stocks with daily change% ' + (dir === 'bullish' ? '&ge; +' : '&le; -') + thresh + '%') +
+      ' (' + rows.length + ' match' + (rows.length === 1 ? '' : 'es') + ')</div>';
     if (rows.length) {
       html += '<div>' + rows.map(r =>
         '<span style="background:#1a1a35;border:1px solid #2d2d50;border-radius:3px;padding:2px 6px;margin:0 4px 4px 0;display:inline-flex;align-items:center;gap:4px">' + r.name +
         ' <b style="color:' + (r.pct >= 0 ? '#00d4aa' : '#ef5350') + '">' + (r.pct >= 0 ? '+' : '') + r.pct.toFixed(2) + '%</b></span>'
       ).join('') + '</div>';
     } else {
-      html += '<div style="color:#888;font-size:9px">No F&O stocks currently qualify. Lower the threshold or wait for stronger daily moves.</div>';
+      html += '<div style="color:#888;font-size:9px">' + (useTopN
+        ? 'No qualifying ' + (dir === 'bullish' ? 'gainer' : 'loser') + ' F&O stock has a quote right now.'
+        : 'No F&O stocks currently qualify. Lower the threshold or wait for stronger daily moves.') + '</div>';
     }
     const idx = (nt.includeIndices && Array.isArray(nt.indices)) ? nt.indices.map(s => displayName(s)) : [];
     if (idx.length) html += '<div style="color:#888;font-size:9px;margin-top:2px">Indices included: ' + idx.join(', ') + '</div>';
@@ -9748,7 +9827,7 @@ window.createAISmartTrading = function (suffix) {
     const t = tplLoad().find(x => String(x.id) === id);
     if (!t) return;
     const key = side === 'bearish' ? 'bearTpls' : 'bullTpls';
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
     if (!Array.isArray(state.niftyTrend[key])) state.niftyTrend[key] = [];
     if (state.niftyTrend[key].indexOf(id) >= 0) {
       log('Template "' + t.name + '" is already assigned to the NIFTY ' + _trendTplSideName(side) + ' side', 'warn');
@@ -10150,6 +10229,7 @@ window.createAISmartTrading = function (suffix) {
     toggleNiftyTrend,
     toggleSim,
     onNiftyTrendInput() { readNiftyTrendUI(); _resetTrendScan(); applyNiftyTrendToUI(); },
+    setTrendMode,
     toggleCommodity,
     addCommodity,
     removeCommodity,
