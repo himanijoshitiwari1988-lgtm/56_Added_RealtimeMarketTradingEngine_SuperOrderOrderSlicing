@@ -1230,12 +1230,22 @@ window.IST12 = (function () {
               <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
                 <input type="checkbox" id="astBbpBullEn" onchange="NiftyBbpAlert.editDraft('ast','bull','enabled',this.checked)" style="width:12px;height:12px;accent-color:#00d4aa">
                 <label style="font-size:10px;font-weight:700;color:#00d4aa;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('astBbpBullEn');c.checked=!c.checked;NiftyBbpAlert.editDraft('ast','bull','enabled',c.checked)">BULL CE</label>
-                <span style="font-size:9px;color:#888;white-space:nowrap">when BB%b</span>
-                <select id="astBbpBullCond" onchange="NiftyBbpAlert.editDraft('ast','bull','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
-                  <option value="crossed_above">crossed above</option>
-                  <option value="crossed_below">crossed below</option>
-                </select>
-                <input type="number" id="astBbpBullVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editDraft('ast','bull','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                <span id="astBbpBullValSeg" style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap">
+                  <span style="font-size:9px;color:#888">when BB%b</span>
+                  <select id="astBbpBullCond" onchange="NiftyBbpAlert.editDraft('ast','bull','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                    <option value="crossed_above">crossed above</option>
+                    <option value="crossed_below">crossed below</option>
+                  </select>
+                  <input type="number" id="astBbpBullVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editDraft('ast','bull','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                </span>
+                <span id="astBbpBullTrendSeg" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;color:#7ee0b8">
+                  <input type="checkbox" id="astBbpBullLogic" onchange="NiftyBbpAlert.editDraft('ast','bull','logic',this.checked?'trend':'value')" style="width:12px;height:12px;accent-color:#00d4aa" title="Use BB%b pane LINE trend instead of the value rule - enable hone par value rule OFF (fade) ho jati hai">
+                  <label for="astBbpBullLogic" style="font-size:9px;cursor:pointer" title="Line trend logic: alert tab fire hota hai jab BB%b line ka direction is dropdown wale side me turn kare">line trend</label>
+                  <select id="astBbpBullTrend" onchange="NiftyBbpAlert.editDraft('ast','bull','trendDir',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                    <option value="bullish">Bullish (line up)</option>
+                    <option value="bearish">Bearish (line down)</option>
+                  </select>
+                </span>
                 <span style="font-size:9px;color:#888">-&gt; trade</span>
                 <select id="astBbpBullSide" onchange="NiftyBbpAlert.editDraft('ast','bull','side',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
                   <option value="CE">BUY Bullish CE</option>
@@ -1247,12 +1257,22 @@ window.IST12 = (function () {
               <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
                 <input type="checkbox" id="astBbpBearEn" onchange="NiftyBbpAlert.editDraft('ast','bear','enabled',this.checked)" style="width:12px;height:12px;accent-color:#ff4d6a">
                 <label style="font-size:10px;font-weight:700;color:#ff4d6a;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('astBbpBearEn');c.checked=!c.checked;NiftyBbpAlert.editDraft('ast','bear','enabled',c.checked)">BEAR PE</label>
-                <span style="font-size:9px;color:#888;white-space:nowrap">when BB%b</span>
-                <select id="astBbpBearCond" onchange="NiftyBbpAlert.editDraft('ast','bear','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
-                  <option value="crossed_above">crossed above</option>
-                  <option value="crossed_below">crossed below</option>
-                </select>
-                <input type="number" id="astBbpBearVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editDraft('ast','bear','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                <span id="astBbpBearValSeg" style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap">
+                  <span style="font-size:9px;color:#888">when BB%b</span>
+                  <select id="astBbpBearCond" onchange="NiftyBbpAlert.editDraft('ast','bear','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                    <option value="crossed_above">crossed above</option>
+                    <option value="crossed_below">crossed below</option>
+                  </select>
+                  <input type="number" id="astBbpBearVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editDraft('ast','bear','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                </span>
+                <span id="astBbpBearTrendSeg" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;color:#ff9aa8">
+                  <input type="checkbox" id="astBbpBearLogic" onchange="NiftyBbpAlert.editDraft('ast','bear','logic',this.checked?'trend':'value')" style="width:12px;height:12px;accent-color:#ff4d6a" title="Use BB%b pane LINE trend instead of the value rule - enable hone par value rule OFF (fade) ho jati hai">
+                  <label for="astBbpBearLogic" style="font-size:9px;cursor:pointer" title="Line trend logic: alert tab fire hota hai jab BB%b line ka direction is dropdown wale side me turn kare">line trend</label>
+                  <select id="astBbpBearTrend" onchange="NiftyBbpAlert.editDraft('ast','bear','trendDir',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                    <option value="bearish">Bearish (line down)</option>
+                    <option value="bullish">Bullish (line up)</option>
+                  </select>
+                </span>
                 <span style="font-size:9px;color:#888">-&gt; trade</span>
                 <select id="astBbpBearSide" onchange="NiftyBbpAlert.editDraft('ast','bear','side',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
                   <option value="PE">BUY Bearish PE</option>
@@ -1266,7 +1286,7 @@ window.IST12 = (function () {
                 <button class="btn-action" onclick="NiftyBbpAlert.arm('ast')" style="padding:3px 10px;font-size:9px;width:auto;margin:0;color:#ffd700">LOCK ALERT &amp; SET</button>
                 <button class="btn-action" onclick="NiftyBbpAlert.clearAlert('ast')" style="padding:3px 10px;font-size:9px;width:auto;margin:0;color:#ff4d6a">REMOVE ALERT</button>
                 <button class="btn-action" onclick="NiftyBbpAlert.closeEditor('ast')" style="padding:3px 10px;font-size:9px;width:auto;margin:0">Close</button>
-                <span style="font-size:8px;color:#666">Enabling a row and pressing SET arms it; fires when BB%b crosses the value on a fresh NIFTY sample.</span>
+                <span style="font-size:8px;color:#666">Enabling a row and pressing SET arms it. Value rule fires when BB%b crosses the value; LINE TREND rule fires when the BB%b pane line turns into the chosen direction (arrow dikhata hai) - dono me signal "met" tab tak rahta hai jab tak condition current ho.</span>
               </div>
             </div>
           </div>
@@ -1282,26 +1302,46 @@ window.IST12 = (function () {
             <div id="astBbpWinActWrap" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;border-left:3px solid #00d4aa;padding-left:5px">
               <input type="checkbox" id="astBbpWinActEn" onchange="NiftyBbpAlert.editWinDraft('ast','active','enabled',this.checked)" style="width:12px;height:12px;accent-color:#00d4aa">
               <label style="font-size:9px;font-weight:700;color:#00d4aa;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('astBbpWinActEn');c.checked=!c.checked;NiftyBbpAlert.editWinDraft('ast','active','enabled',c.checked)">ACTIVE line</label>
-              <span style="font-size:9px;color:#888;white-space:nowrap">engine run ON when BB%b</span>
-              <select id="astBbpWinActCond" onchange="NiftyBbpAlert.editWinDraft('ast','active','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
-                <option value="crossed_above">crossed above</option>
-                <option value="crossed_below">crossed below</option>
-              </select>
-              <input type="number" id="astBbpWinActVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editWinDraft('ast','active','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
-              <span style="font-size:8px;color:#666">ACTIVE par lines ko neeche/upar move karke set karo</span>
+              <span id="astBbpWinActValSeg" style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap">
+                <span style="font-size:9px;color:#888">engine run ON when BB%b</span>
+                <select id="astBbpWinActCond" onchange="NiftyBbpAlert.editWinDraft('ast','active','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="crossed_above">crossed above</option>
+                  <option value="crossed_below">crossed below</option>
+                </select>
+                <input type="number" id="astBbpWinActVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editWinDraft('ast','active','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+                <span style="font-size:8px;color:#666">ACTIVE par lines ko neeche/upar move karke set karo</span>
+              </span>
+              <span id="astBbpWinActTrendSeg" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;color:#7ee0b8">
+                <input type="checkbox" id="astBbpWinActLogic" onchange="NiftyBbpAlert.editWinDraft('ast','active','logic',this.checked?'trend':'value')" style="width:12px;height:12px;accent-color:#00d4aa" title="Engine run ko BB%b VALUE line nahi, pane LINE trend se start karo">
+                <label for="astBbpWinActLogic" style="font-size:9px;cursor:pointer">use line trend</label>
+                <select id="astBbpWinActTrend" onchange="NiftyBbpAlert.editWinDraft('ast','active','trendDir',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="bullish">Bullish (line up)</option>
+                  <option value="bearish">Bearish (line down)</option>
+                </select>
+              </span>
             </div>
             <div id="astBbpWinInaWrap" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;border-left:3px solid #ef5350;padding-left:5px">
               <input type="checkbox" id="astBbpWinInaEn" onchange="NiftyBbpAlert.editWinDraft('ast','inactive','enabled',this.checked)" style="width:12px;height:12px;accent-color:#ef5350">
               <label style="font-size:9px;font-weight:700;color:#ef5350;cursor:pointer;white-space:nowrap" onclick="var c=document.getElementById('astBbpWinInaEn');c.checked=!c.checked;NiftyBbpAlert.editWinDraft('ast','inactive','enabled',c.checked)">INACTIVE line</label>
-              <span style="font-size:9px;color:#888;white-space:nowrap">engine run OFF when BB%b</span>
-              <select id="astBbpWinInaCond" onchange="NiftyBbpAlert.editWinDraft('ast','inactive','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
-                <option value="crossed_above">crossed above</option>
-                <option value="crossed_below">crossed below</option>
-              </select>
-              <input type="number" id="astBbpWinInaVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editWinDraft('ast','inactive','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+              <span id="astBbpWinInaValSeg" style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap">
+                <span style="font-size:9px;color:#888">engine run OFF when BB%b</span>
+                <select id="astBbpWinInaCond" onchange="NiftyBbpAlert.editWinDraft('ast','inactive','cond',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="crossed_above">crossed above</option>
+                  <option value="crossed_below">crossed below</option>
+                </select>
+                <input type="number" id="astBbpWinInaVal" step="0.05" min="-3" max="3" title="BB%b value (-3 to 3)" oninput="NiftyBbpAlert.editWinDraft('ast','inactive','value',this.value)" style="width:52px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:10px">
+              </span>
+              <span id="astBbpWinInaTrendSeg" style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;color:#ff9aa8">
+                <input type="checkbox" id="astBbpWinInaLogic" onchange="NiftyBbpAlert.editWinDraft('ast','inactive','logic',this.checked?'trend':'value')" style="width:12px;height:12px;accent-color:#ef5350" title="Engine run ko BB%b VALUE line nahi, pane LINE trend se stop karo">
+                <label for="astBbpWinInaLogic" style="font-size:9px;cursor:pointer">use line trend</label>
+                <select id="astBbpWinInaTrend" onchange="NiftyBbpAlert.editWinDraft('ast','inactive','trendDir',this.value)" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:1px 4px;font-size:9px">
+                  <option value="bearish">Bearish (line down)</option>
+                  <option value="bullish">Bullish (line up)</option>
+                </select>
+              </span>
             </div>
             <div style="min-width:170px;flex:1">
-              <div style="font-size:8px;color:#666;line-height:1.5">Engine start = first ACTIVE crossing (BB%b ACTIVE line cross). Uske baad engine entries allow karta hai jab tak BB%b INACTIVE line cross na ho jaye - phir &quot;run INACTIVE&quot; (nayi entries band, open trades apne SL/TP/trail par chalti rahengi). Wapas entries ke liye naya ACTIVE crossing chahiye.</div>
+              <div style="font-size:8px;color:#666;line-height:1.5">Engine start = first ACTIVE trigger (value mode: BB%b ACTIVE line cross; line-trend mode: pane line <b style="color:#00d4aa">&quot;use line trend&quot;</b> direction me turn). Uske baad engine entries allow karta hai jab tak INACTIVE trigger na ho - phir &quot;run INACTIVE&quot; (nayi entries band, open trades apne SL/TP/trail par chalti rahengi). Wapas entries ke liye naya ACTIVE trigger chahiye.</div>
             </div>
           </div>
           <div id="astBbpPaneWrap" style="display:none;margin-top:6px;border:1px solid #2d2d50;border-radius:3px;background:#0b0b1a;padding:4px 6px">
@@ -2868,7 +2908,8 @@ window.IST12 = (function () {
 </div>
 
 <script src="/static/vlcore.js?v=8"></script>
-<script src="/static/indicators.js?v=70"></script>
+<script src="/static/rsidiv_core.js?v=1"></script>
+<script src="/static/indicators.js?v=71"></script>
 <script src="/static/oitrend.js?v=4"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
@@ -6455,7 +6496,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
  <script src="/static/autoexperiment.v13.js?v=179"></script>
 <script src="/static/indextrend.js?v=4"></script>
 <script src="/static/simulator.js?v=3"></script>
-  <script src="/static/aismart.js?v=217"></script>
+  <script src="/static/aismart.js?v=223"></script>
 <script src="/static/paperrun.js?v=26"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6463,7 +6504,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=4"></script>
 <script src="/static/smart_ntrader.js?v=66"></script>
-<script src="/static/niftybbp_alert.js?v=12"></script>
+<script src="/static/niftybbp_alert.js?v=13"></script>
 <script src="/static/chart_grid.js?v=10"></script>
 <script src="/static/tradestats.js?v=2"></script>
 <script src="/static/backup.js?v=3"></script>

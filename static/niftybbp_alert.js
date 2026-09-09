@@ -6,13 +6,15 @@
   ];
   const ALERT_MIN = -3, ALERT_MAX = 3;
   const CROSS_ABOVE = 'crossed_above', CROSS_BELOW = 'crossed_below';
+  const TREND_UP = 1, TREND_DOWN = -1, TREND_FLAT = 0;
+  const LOGIC_VALUE = 'value', LOGIC_TREND = 'trend';
 
   const instances = {};
 
   function defaults() {
     return {
-      bull: { enabled: false, cond: CROSS_ABOVE, value: 0.8, side: 'CE' },
-      bear: { enabled: false, cond: CROSS_BELOW, value: 0.2, side: 'PE' }
+      bull: { enabled: false, cond: CROSS_ABOVE, value: 0.8, side: 'CE', logic: LOGIC_VALUE, trendDir: 'bullish' },
+      bear: { enabled: false, cond: CROSS_BELOW, value: 0.2, side: 'PE', logic: LOGIC_VALUE, trendDir: 'bearish' }
     };
   }
   /* Run Window config: an optional second BB%b control that AUTO-STARTS /
@@ -28,8 +30,8 @@
   function defaultsWin() {
     return {
       enabled: false,
-      active: { enabled: true, cond: CROSS_ABOVE, value: 0.8 },
-      inactive: { enabled: true, cond: CROSS_BELOW, value: 0.2 }
+      active: { enabled: true, cond: CROSS_ABOVE, value: 0.8, logic: LOGIC_VALUE, trendDir: 'bullish' },
+      inactive: { enabled: true, cond: CROSS_BELOW, value: 0.2, logic: LOGIC_VALUE, trendDir: 'bearish' }
     };
   }
   function cloneWin(cfg) {
@@ -38,9 +40,12 @@
     WIN_ROWS.forEach(function (k) {
       const s = (cfg && cfg[k]) ? cfg[k] : {};
       const defCond = (k === 'active') ? CROSS_ABOVE : CROSS_BELOW;
+      const defTrend = (k === 'active') ? 'bullish' : 'bearish';
       out[k].enabled = (s.enabled === undefined) ? true : !!s.enabled;
       out[k].cond = (s.cond === CROSS_ABOVE || s.cond === CROSS_BELOW) ? s.cond : defCond;
       out[k].value = (Number(s.value) >= ALERT_MIN && Number(s.value) <= ALERT_MAX) ? Number(s.value) : d[k].value;
+      out[k].logic = (s.logic === LOGIC_TREND) ? LOGIC_TREND : LOGIC_VALUE;
+      out[k].trendDir = (s.trendDir === 'bearish' || s.trendDir === 'bullish') ? s.trendDir : defTrend;
     });
     return out;
   }
@@ -55,32 +60,62 @@
   function saveWin(inst) {
     try { localStorage.setItem(inst.winKey, JSON.stringify(inst.win || {})); } catch (e) {}
   }
-  function winRowMet(s, last) {
+  /* Line-trend mode helpers. Each alert / run-window row can run in one of two
+     LOGICS:
+       - value mode (existing): the row reacts to the BB%b VALUE crossing a
+         configured level (cond + value).
+       - trend mode (new): the row reacts to the direction the BB%b pane LINE is
+         moving. "Bullish" = the recent multi-bar slope points up (line upar ki
+         or), "Bearish" = slope points down. The row fires on the edge that turns
+         the line INTO the chosen direction and stays "met" while it keeps that
+         direction (mirrors how value mode fires on a cross and stays met on the
+         side). */
+  function isTrend(s) { return !!(s && s.logic === LOGIC_TREND); }
+  function trendForDir(d) { return (d === 'bearish') ? TREND_DOWN : TREND_UP; }
+  function trendLabel(t) {
+    if (t === TREND_UP) return 'Bullish (line up)';
+    if (t === TREND_DOWN) return 'Bearish (line down)';
+    return 'Flat';
+  }
+  function rowMetValue(s, last) {
     if (!s || !s.enabled || last == null) return false;
     const v = Number(s.value);
     if (!isFinite(v)) return false;
     return (s.cond === CROSS_BELOW) ? (last <= v) : (last >= v);
   }
-  function winRowCrossed(s, prev, last) {
-    if (!s || !s.enabled || prev == null || last == null) return false;
+  function rowMet(s, last, lastTrend) {
+    if (!s || !s.enabled) return false;
+    if (isTrend(s)) return lastTrend != null && lastTrend === trendForDir(s.trendDir);
+    return rowMetValue(s, last);
+  }
+  function rowCrossed(s, prev, last, prevTrend, lastTrend) {
+    if (!s || !s.enabled) return false;
+    if (isTrend(s)) {
+      if (prevTrend == null || lastTrend == null) return false;
+      const want = trendForDir(s.trendDir);
+      return lastTrend === want && prevTrend !== want;
+    }
     const v = Number(s.value);
-    if (!isFinite(v)) return false;
+    if (!isFinite(v) || prev == null || last == null) return false;
     return (s.cond === CROSS_BELOW) ? (prev > v && last <= v) : (prev < v && last >= v);
+  }
+  function modeRuleText(s) {
+    return isTrend(s) ? 'line ' + (s.trendDir === 'bearish' ? 'Bearish (down)' : 'Bullish (up)') : 'BB%b ' + (s.cond === CROSS_BELOW ? 'below' : 'above') + ' ' + fmtV(s.value);
   }
   function winRowSummary(k, s) {
     const lab = k === 'active' ? 'ACTIVE' : 'INACTIVE';
     if (!s.enabled) return lab + ' off';
-    return lab + ' ' + (s.cond === CROSS_BELOW ? 'crossed below' : 'crossed above') + ' ' + fmtV(s.value);
+    return lab + ' when ' + modeRuleText(s);
   }
   /* Seed the window state from the current sample when the window is switched
-     on (or reset): if BB%b is already beyond the ACTIVE boundary (and not past
-     the INACTIVE one) the run starts ACTIVE immediately, otherwise it stays
-     INACTIVE and waits for the ACTIVE line crossing. */
+     on (or reset): if the ACTIVE boundary is already met (and the INACTIVE one
+     is not) the run starts ACTIVE immediately, otherwise it stays INACTIVE and
+     waits for the ACTIVE trigger. Works for both value and line-trend rows. */
   function seedWindowState(inst) {
     if (inst.lastPctt == null) { inst.winState = 'inactive'; return; }
     const last = Number(inst.lastPctt);
-    const aMet = winRowMet(inst.win.active, last);
-    const iMet = winRowMet(inst.win.inactive, last);
+    const aMet = rowMet(inst.win.active, last, inst.lastTrend);
+    const iMet = rowMet(inst.win.inactive, last, inst.lastTrend);
     inst.winState = (aMet && !iMet) ? 'active' : 'inactive';
   }
   function paintWindowChip(inst) {
@@ -104,17 +139,39 @@
       ? 'Engine run ACTIVE - new entries allowed. BB%b ne ACTIVE line cross kar di hai.'
       : 'Engine run INACTIVE - no new entries until BB%b ACTIVE line cross ho. Open trades chalti rahengi.';
   }
+  /* Fade helper for a VALUE segment: dims + disables its numeric controls when
+     the row runs in trend (line) logic (the old value rule is inactive). The
+     trend segment is faded by its caller WITHOUT disabling its checkbox so the
+     user can always switch the mode. */
+  function setSeg(segEl, on) {
+    if (!segEl) return;
+    segEl.style.opacity = on ? '1' : '0.35';
+    const d = segEl.querySelectorAll('input,select,button');
+    for (let i = 0; i < d.length; i++) d[i].disabled = !on;
+  }
   function syncWinEditorRow(inst, k) {
     const s = inst.win[k];
-    const en = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'En');
-    const cond = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Cond');
-    const val = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Val');
+    const X = (k === 'active' ? 'Act' : 'Ina');
+    const en = el(inst.pfx + 'BbpWin' + X + 'En');
+    const logic = el(inst.pfx + 'BbpWin' + X + 'Logic');
+    const trend = el(inst.pfx + 'BbpWin' + X + 'Trend');
+    const cond = el(inst.pfx + 'BbpWin' + X + 'Cond');
+    const val = el(inst.pfx + 'BbpWin' + X + 'Val');
     if (en) en.checked = !!s.enabled;
+    if (logic) logic.checked = isTrend(s);
+    if (trend) trend.value = s.trendDir;
     if (cond) cond.value = s.cond;
     if (val) val.value = s.value;
-    [cond, val].forEach(function (c) { if (c) c.disabled = !s.enabled; });
-    const wrap = el(inst.pfx + 'BbpWin' + (k === 'active' ? 'Act' : 'Ina') + 'Wrap');
-    if (wrap) wrap.style.opacity = s.enabled ? '1' : '0.55';
+    const on = !!s.enabled;
+    const trendOn = on && isTrend(s);
+    [cond, val].forEach(function (c) { if (c) c.disabled = !(on && !isTrend(s)); });
+    if (logic) logic.disabled = !on;
+    if (trend) trend.disabled = !trendOn;
+    setSeg(el(inst.pfx + 'BbpWin' + X + 'ValSeg'), on && !isTrend(s));
+    const trendSeg = el(inst.pfx + 'BbpWin' + X + 'TrendSeg');
+    if (trendSeg) trendSeg.style.opacity = trendOn ? '1' : '0.35';
+    const wrap = el(inst.pfx + 'BbpWin' + X + 'Wrap');
+    if (wrap) wrap.style.opacity = on ? '1' : '0.55';
   }
   function syncWinEditor(inst) {
     WIN_ROWS.forEach(function (k) { syncWinEditorRow(inst, k); });
@@ -136,6 +193,8 @@
     const s = inst.win[k];
     if (!s) return;
     if (field === 'enabled') s.enabled = !!raw;
+    else if (field === 'logic') s.logic = (raw === LOGIC_TREND) ? LOGIC_TREND : LOGIC_VALUE;
+    else if (field === 'trendDir') s.trendDir = (raw === 'bearish') ? 'bearish' : 'bullish';
     else if (field === 'cond') s.cond = (raw === CROSS_BELOW) ? CROSS_BELOW : CROSS_ABOVE;
     else if (field === 'value') {
       const rawStr = String(raw == null ? '' : raw).trim();
@@ -158,40 +217,59 @@
     if (!inst.master) return;
     if (!inst.win || !inst.win.enabled) return;
     inst.winState = 'inactive';
-    if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b RUN WINDOW state reset -> INACTIVE (nayi entries tab tak nahi jab tak BB%b ACTIVE line cross na kare)', 'warn');
+    if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b RUN WINDOW state reset -> INACTIVE (nayi entries tab tak nahi jab tak BB%b ' + modeRuleText(inst.win.active) + ' trigger na ho)', 'warn');
     paintWindowChip(inst);
   }
   function windowStatus(pfx) {
     const inst = instances[pfx];
     if (!inst) return { enabled: false, state: 'inactive' };
     const state = inst.winState === 'active' ? 'active' : 'inactive';
+    function row(k) {
+      const s = inst.win[k];
+      return {
+        enabled: !!s.enabled,
+        logic: (s.logic === LOGIC_TREND) ? LOGIC_TREND : LOGIC_VALUE,
+        trendDir: (s.trendDir === 'bearish') ? 'bearish' : 'bullish',
+        cond: s.cond,
+        value: Number(s.value),
+        valueText: fmtV(s.value),
+        ruleText: modeRuleText(s)
+      };
+    }
     return {
       enabled: !!inst.win.enabled,
       state: state,
       last: (inst.lastPctt == null) ? null : Number(inst.lastPctt),
       lastText: (inst.lastPctt == null) ? '--' : fmtV(inst.lastPctt),
-      active: { enabled: !!inst.win.active.enabled, cond: inst.win.active.cond, value: Number(inst.win.active.value), valueText: fmtV(inst.win.active.value) },
-      inactive: { enabled: !!inst.win.inactive.enabled, cond: inst.win.inactive.cond, value: Number(inst.win.inactive.value), valueText: fmtV(inst.win.inactive.value) }
+      trend: (inst.lastTrend == null) ? null : inst.lastTrend,
+      trendText: (inst.lastTrend == null) ? 'line trend --' : 'line ' + trendLabel(inst.lastTrend),
+      active: row('active'),
+      inactive: row('inactive')
     };
   }
   /* Called from feed() with the fresh prev/last sample pair: toggles the window
-     state when the ACTIVE or INACTIVE line is crossed. */
+     state when the ACTIVE or INACTIVE boundary is crossed (BB%b value in value
+     mode, or the line turning into the chosen direction in trend mode). */
   function stepWindowState(inst, prev, last) {
     if (!inst || !inst.win || !inst.win.enabled) return;
+    const pTrend = inst.prevTrend, lTrend = inst.lastTrend;
     let next = null;
-    if (winRowCrossed(inst.win.active, prev, last)) next = 'active';
-    if (winRowCrossed(inst.win.inactive, prev, last)) next = 'inactive';
+    if (rowCrossed(inst.win.active, prev, last, pTrend, lTrend)) next = 'active';
+    if (rowCrossed(inst.win.inactive, prev, last, pTrend, lTrend)) next = 'inactive';
     if (!next) return;
     if (next !== inst.winState) {
       const from = inst.winState;
       inst.winState = next;
+      const row = inst.win[next === 'active' ? 'active' : 'inactive'];
+      const why = isTrend(row)
+        ? 'BB%b line ' + (row.trendDir === 'bullish' ? 'Bullish (up)' : 'Bearish (down)') + (isFinite(last) ? ' @ ' + fmtV(last) : '')
+        : 'BB%b ' + winRowSummary(next === 'active' ? 'active' : 'inactive', row) + ' @ ' + fmtV(last);
       const msg = 'NIFTY BB%b RUN ' + (next === 'active' ? 'ACTIVE' : 'INACTIVE') +
-        ' - BB%b ' + winRowSummary(next === 'active' ? 'active' : 'inactive', inst.win[next === 'active' ? 'active' : 'inactive']) +
-        ' -> ' + fmtV(last) + '  [engine run ' + (next === 'active' ? 'start/allow' : 'stop/no new entries') + ']';
+        ' - ' + why + '  [engine run ' + (next === 'active' ? 'start/allow' : 'stop/no new entries') + ']';
       toastMsg('BB%b ' + (next === 'active' ? 'RUN ACTIVE' : 'RUN INACTIVE'));
       if (inst.log) inst.log('[BB%b run window] ' + msg, next === 'active' ? 'ok' : 'warn');
       if (next === 'inactive' && from === 'active') {
-        toastMsg('Engine run INACTIVE - nayi entries band (open trades chalti rahengi). Wapas ACTIVE ke liye BB%b ACTIVE line cross kare.');
+        toastMsg('Engine run INACTIVE - nayi entries band (open trades chalti rahengi). Wapas ACTIVE ke liye ' + winRowSummary('active', inst.win.active) + '.');
       }
       paintWindowChip(inst);
     }
@@ -205,6 +283,8 @@
       out[r.key].cond = (s.cond === CROSS_BELOW) ? CROSS_BELOW : CROSS_ABOVE;
       out[r.key].value = (Number(s.value) >= ALERT_MIN && Number(s.value) <= ALERT_MAX) ? Number(s.value) : d[r.key].value;
       out[r.key].side = (s.side === 'PE' || s.side === 'CE') ? s.side : d[r.key].side;
+      out[r.key].logic = (s.logic === LOGIC_TREND) ? LOGIC_TREND : LOGIC_VALUE;
+      out[r.key].trendDir = (s.trendDir === 'bearish' || s.trendDir === 'bullish') ? s.trendDir : d[r.key].trendDir;
     });
     return out;
   }
@@ -299,6 +379,9 @@
       prev: null,
       lastPctt: null,
       lastFireAt: { bull: 0, bear: 0 },
+      trendBuf: [],
+      prevTrend: null,
+      lastTrend: null,
       chart: null,
       series: null,
       guideLines: [],
@@ -341,11 +424,15 @@
     inst.master = !!on;
     try { localStorage.setItem(inst.enabledKey, inst.master ? '1' : ''); } catch (e) {}
     paintMaster(inst);
-    /* Re-enabling the section: reset the firing baseline and re-seed the run
-       window from the CURRENT sample, so re-enabling mid-move never fires a
-       stale cross and the window chip reflects where BB%b sits right now. */
+    /* Re-enabling the section: reset the firing baseline (value + line trend)
+       and re-seed the run window from the CURRENT sample, so re-enabling
+       mid-move never fires a stale cross/turn and the window chip reflects
+       where BB%b sits right now. */
     if (inst.master) {
       inst.prev = null;
+      inst.trendBuf = [];
+      inst.prevTrend = null;
+      inst.lastTrend = null;
       if (inst.win && inst.win.enabled) seedWindowState(inst);
       paintWindowChip(inst);
     }
@@ -357,17 +444,24 @@
     const last = (inst.lastPctt == null) ? null : Number(inst.lastPctt);
     function row(k) {
       const c = inst.cfg[k];
-      const v = Number(c.value);
-      let met = false;
-      if (last != null && isFinite(v) && c.enabled) {
-        met = (c.cond === CROSS_BELOW) ? (last <= v) : (last >= v);
-      }
-      return { enabled: !!c.enabled, cond: c.cond, value: v, met: met, valueText: fmtV(v) };
+      const met = rowMet(c, last, inst.lastTrend);
+      return {
+        enabled: !!c.enabled,
+        logic: (c.logic === LOGIC_TREND) ? LOGIC_TREND : LOGIC_VALUE,
+        trendDir: (c.trendDir === 'bearish') ? 'bearish' : 'bullish',
+        cond: c.cond,
+        value: Number(c.value),
+        met: met,
+        valueText: fmtV(c.value),
+        ruleText: modeRuleText(c)
+      };
     }
     return {
       master: !!inst.master,
       last: last,
       lastText: (last == null) ? '--' : fmtV(last),
+      trend: (inst.lastTrend == null) ? null : inst.lastTrend,
+      trendText: (inst.lastTrend == null) ? 'line trend --' : 'line ' + trendLabel(inst.lastTrend),
       bull: row('bull'),
       bear: row('bear')
     };
@@ -375,6 +469,7 @@
 
   function rowSummary(row, s) {
     if (!s.enabled) return row.label + ' off';
+    if (isTrend(s)) return row.label + ' line ' + (s.trendDir === 'bearish' ? 'Bearish (down)' : 'Bullish (up)');
     return row.label + ' ' + (s.cond === CROSS_BELOW ? 'below' : 'above') + ' ' + fmtV(s.value);
   }
   function paint(inst) {
@@ -406,17 +501,29 @@
   }
   function syncEditorRow(inst, key) {
     const s = inst.draft[key];
-    const en = el(inst.pfx + 'Bbp' + key[0].toUpperCase() + key.slice(1) + 'En');
-    const cond = el(inst.pfx + 'Bbp' + key[0].toUpperCase() + key.slice(1) + 'Cond');
-    const val = el(inst.pfx + 'Bbp' + key[0].toUpperCase() + key.slice(1) + 'Val');
-    const side = el(inst.pfx + 'Bbp' + key[0].toUpperCase() + key.slice(1) + 'Side');
+    const X = key[0].toUpperCase() + key.slice(1);
+    const en = el(inst.pfx + 'Bbp' + X + 'En');
+    const logic = el(inst.pfx + 'Bbp' + X + 'Logic');
+    const trend = el(inst.pfx + 'Bbp' + X + 'Trend');
+    const cond = el(inst.pfx + 'Bbp' + X + 'Cond');
+    const val = el(inst.pfx + 'Bbp' + X + 'Val');
+    const side = el(inst.pfx + 'Bbp' + X + 'Side');
     if (en) en.checked = !!s.enabled;
+    if (logic) logic.checked = isTrend(s);
+    if (trend) trend.value = s.trendDir;
     if (cond) cond.value = s.cond;
     if (val) val.value = s.value;
     if (side) side.value = s.side;
-    [cond, val, side].forEach(function (c) { if (c) c.disabled = !s.enabled; });
-    const wrap = el(inst.pfx + 'Bbp' + key[0].toUpperCase() + key.slice(1) + 'Wrap');
-    if (wrap) wrap.style.opacity = s.enabled ? '1' : '0.55';
+    const on = !!s.enabled;
+    if (logic) logic.disabled = !on;
+    if (trend) trend.disabled = !(on && isTrend(s));
+    if (side) side.disabled = !on;
+    [cond, val].forEach(function (c) { if (c) c.disabled = !(on && !isTrend(s)); });
+    setSeg(el(inst.pfx + 'Bbp' + X + 'ValSeg'), on && !isTrend(s));
+    const trendSeg = el(inst.pfx + 'Bbp' + X + 'TrendSeg');
+    if (trendSeg) trendSeg.style.opacity = (on && isTrend(s)) ? '1' : '0.35';
+    const wrap = el(inst.pfx + 'Bbp' + X + 'Wrap');
+    if (wrap) wrap.style.opacity = on ? '1' : '0.55';
   }
   function syncEditor(inst) {
     ROWS.forEach(function (r) { syncEditorRow(inst, r.key); });
@@ -429,6 +536,8 @@
     const s = inst.draft[key];
     if (!s) return;
     if (field === 'enabled') s.enabled = !!raw;
+    else if (field === 'logic') s.logic = (raw === LOGIC_TREND) ? LOGIC_TREND : LOGIC_VALUE;
+    else if (field === 'trendDir') s.trendDir = (raw === 'bearish') ? 'bearish' : 'bullish';
     else if (field === 'cond') s.cond = (raw === CROSS_BELOW) ? CROSS_BELOW : CROSS_ABOVE;
     else if (field === 'side') s.side = (raw === 'PE') ? 'PE' : 'CE';
     else if (field === 'value') {
@@ -490,13 +599,80 @@
     btn.textContent = open ? 'hide alerts' : '+ alert';
   }
 
+  /* BB%b LINE TREND engine. The BB%b pane line only "moves" when a fresh
+     sample arrives, so the trend is read from a small ring of the last distinct
+     samples the feed produced (RING_N = 12 => a multi-bar slope over ~12 line
+     points). A least-squares slope over the ring decides the direction; a
+     relative dead-band keeps flat/noise readings from flipping the arrow. The
+     whole step is O(RING_N) and stays far under the 5ms budget. */
+  const RING_N = 12, RING_MIN = 4;
+  function ringTrend(buf) {
+    if (!buf || buf.length < RING_MIN) return null;
+    const n = buf.length;
+    let sx = 0, sy = 0, sxy = 0, sxx = 0, lo = buf[0], hi = buf[0];
+    for (let i = 0; i < n; i++) {
+      const y = buf[i], x = i + 1;
+      sx += x; sy += y; sxy += x * y; sxx += x * x;
+      if (y < lo) lo = y;
+      else if (y > hi) hi = y;
+    }
+    const den = n * sxx - sx * sx;
+    if (!den) return TREND_FLAT;
+    const slope = (n * sxy - sx * sy) / den;
+    const span = (hi - lo) || 0.05;
+    /* Relative dead-band: need a slope clearly larger than the noise floor of
+       the ring so a stationary / micro-wiggling line reads FLAT, not a trend. */
+    const thr = Math.max(0.0015, (span * 0.08) / (n - 1));
+    if (slope > thr) return TREND_UP;
+    if (slope < -thr) return TREND_DOWN;
+    return TREND_FLAT;
+  }
+  /* Push a fresh feed sample into the ring (identical consecutive samples are
+     skipped - the line has not moved - so the ring holds real moves only) and
+     advance the prev/last trend pair used for edge detection. */
+  function ingestTrendSample(inst, v) {
+    const b = inst.trendBuf;
+    if (b.length && b[b.length - 1] === v) return;
+    inst.prevTrend = inst.lastTrend;
+    b.push(v);
+    if (b.length > RING_N) b.shift();
+    inst.lastTrend = ringTrend(b);
+  }
+  /* Compass arrow at the mouth of the BB%b pane line: points up while the line
+     is trending Bullish, down while Bearish, disappears when Flat / unknown. */
+  function applyArrow(inst, dir, time) {
+    if (!inst || !inst.series || time == null) return;
+    let markers = [];
+    if (dir === TREND_UP || dir === TREND_DOWN) {
+      markers = [{
+        time: time,
+        position: dir === TREND_UP ? 'aboveBar' : 'belowBar',
+        shape: dir === TREND_UP ? 'arrowUp' : 'arrowDown',
+        color: dir === TREND_UP ? '#00d4aa' : '#ef5350'
+      }];
+    }
+    try { inst.series.setMarkers(markers); } catch (e) {}
+  }
+  function paintArrowFromData(inst, data) {
+    if (!inst || !inst.series) return;
+    if (!data || data.length < RING_MIN) { try { inst.series.setMarkers([]); } catch (e) {} return; }
+    const from = Math.max(0, data.length - RING_N);
+    const tail = [];
+    for (let i = from; i < data.length; i++) tail.push(Number(data[i].value));
+    const t = ringTrend(tail);
+    applyArrow(inst, t, data[data.length - 1].time);
+  }
+
   function reset(pfx) {
     const inst = instances[pfx];
     if (!inst) return;
     inst.prev = null;
     inst.lastPctt = null;
+    inst.trendBuf = [];
+    inst.prevTrend = null;
+    inst.lastTrend = null;
     /* A timeframe change restarts the BB%b history: re-arm the run window to
-       dormant/INACTIVE until the ACTIVE line is crossed again on the new TF. */
+       dormant/INACTIVE until the ACTIVE trigger happens again on the new TF. */
     if (inst.win && inst.win.enabled) seedWindowState(inst);
     paintLive(inst);
     if (inst.chart) renderPane(pfx);
@@ -509,13 +685,17 @@
     if (!isFinite(last)) return;
     inst.lastPctt = last;
     paintLive(inst);
+    const effTf = (typeof inst.tfGet === 'function') ? inst.tfGet() : '5min';
     /* Section master checkbox OFF = the whole BB%b section is disabled: keep the
        value readout live but fire NO alert / run-window transitions (a disabled
        section must never keep signalling the engine or flipping the window). */
     if (!inst.master) { inst.prev = last; return; }
-    const effTf = (typeof inst.tfGet === 'function') ? inst.tfGet() : '5min';
+    /* Line-trend ring is fed from every gated sample; the pane value + compass
+       arrow follow the same samples. */
+    ingestTrendSample(inst, last);
     if (inst.chart && inst.series && inst._lastDataTime && (effTf === '1min' || effTf === '5min' || effTf === '15min')) {
       try { inst.series.update({ time: inst._lastDataTime, value: last }); } catch (e) {}
+      applyArrow(inst, inst.lastTrend, inst._lastDataTime);
     }
     const prev = inst.prev;
     inst.prev = last;
@@ -527,17 +707,25 @@
     ROWS.forEach(function (r) {
       const s = inst.cfg[r.key];
       if (!s || !s.enabled) return;
-      const v = Number(s.value);
-      if (!isFinite(v)) return;
-      const fired = (s.cond === CROSS_BELOW) ? (prev > v && last <= v) : (prev < v && last >= v);
+      let fired = false;
+      let what = '';
+      if (isTrend(s)) {
+        fired = rowCrossed(s, prev, last, inst.prevTrend, inst.lastTrend);
+        what = 'LINE TURNED ' + trendLabel(inst.lastTrend) + ' (was ' + trendLabel(inst.prevTrend) + ')';
+      } else {
+        const v = Number(s.value);
+        if (!isFinite(v)) return;
+        fired = (s.cond === CROSS_BELOW) ? (prev > v && last <= v) : (prev < v && last >= v);
+        what = (s.cond === CROSS_BELOW ? 'CROSSED BELOW' : 'CROSSED ABOVE') + ' ' + fmtV(v) + ' -> ' + fmtV(last);
+      }
       if (!fired) return;
       if (Date.now() - inst.lastFireAt[r.key] < 5000) return;
       inst.lastFireAt[r.key] = Date.now();
-      const msg = 'NIFTY BB%b ' + (s.cond === CROSS_BELOW ? 'CROSSED BELOW' : 'CROSSED ABOVE') + ' ' + fmtV(v) + ' -> ' + fmtV(last) + '  [' + (r.key === 'bull' ? 'BULLISH' : 'BEARISH') + ']';
+      const msg = 'NIFTY BB%b ' + r.label + ' ' + what + '  [' + (s.trendDir === 'bearish' || r.key === 'bear' ? 'BEARISH' : 'BULLISH') + ']';
       toastMsg(msg);
       if (inst.log) inst.log('[BB%b alert] FIRE ' + msg, 'warn');
       if (inst.onFire) {
-        try { inst.onFire(r.key, cloneCfg({ bull: inst.cfg.bull, bear: inst.cfg.bear })[r.key], { pctb: last }); } catch (e) {}
+        try { inst.onFire(r.key, cloneCfg({ bull: inst.cfg.bull, bear: inst.cfg.bear })[r.key], { pctb: last, trend: inst.lastTrend }); } catch (e) {}
       }
     });
   }
@@ -565,6 +753,9 @@
     ROWS.forEach(function (r) {
       const s = inst.draft[r.key];
       if (!s || !s.enabled) return;
+      /* Trend (line) rows have no numeric level - their signal is the line
+         direction (arrow), so no horizontal value line is drawn for them. */
+      if (isTrend(s)) return;
       try {
         inst.rowLines.push(inst.series.createPriceLine({
           price: Number(s.value),
@@ -589,6 +780,9 @@
     WIN_ROWS.forEach(function (k) {
       const s = inst.win[k];
       if (!s || !s.enabled) return;
+      /* Line-trend window rows react to the BB%b line direction, not a numeric
+         level, so no horizontal window line is drawn for them. */
+      if (isTrend(s)) return;
       try {
         inst.winLines.push(inst.series.createPriceLine({
           price: Number(s.value),
@@ -649,6 +843,8 @@
         if (data.length) inst.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, data.length - 130), to: data.length - 1 });
       } catch (e) {}
       rebuildPaneLines(inst);
+      /* Direction arrow at the line mouth from the rendered series itself. */
+      paintArrowFromData(inst, data);
     });
   }
   function togglePane(pfx) {

@@ -1222,6 +1222,75 @@
       }
     },
 
+    /* RSI Divergence (chart-pane): Wilder RSI in its own pane + regular/hidden
+       bullish/bearish divergence arrows drawn on the MAIN candle series, like
+       TradingView. The math lives in static/rsidiv_core.js (pure module,
+       RsiDivCore) so it is unit-tested under Node; this def is only the render
+       glue. compute() returns the RSI line for the pane (identical Wilder
+       definition to the plain RSI indicator so the two agree when compared);
+       the arrows are produced by def.markers() and applied to the candle
+       series by the engine's marker registry (see applyIndicatorMarkers). */
+    rsidiv: {
+      id: 'rsidiv', name: 'RSI Divergence', fullName: 'RSI Divergence (Regular + Hidden)', cat: 'Momentum', type: 'pane', format: 'percent',
+      inputs: [
+        { key: 'length', label: 'RSI length', def: 14, min: 1, max: 200, step: 1 },
+        { key: 'pivot', label: 'Pivot bars', def: 5, min: 1, max: 50, step: 1 },
+        { key: 'lookback', label: 'Max bars between pivots', def: 200, min: 10, max: 2000, step: 10 }
+      ],
+      style: [
+        { key: 'color', label: 'RSI color', type: 'color', def: '#b39ddb' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 },
+        { key: 'showRegular', label: 'Show regular divergences', type: 'checkbox', def: true },
+        { key: 'showHidden', label: 'Show hidden divergences', type: 'checkbox', def: true },
+        { key: 'bullColor', label: 'Bullish arrow color', type: 'color', def: '#00d4aa' },
+        { key: 'bearColor', label: 'Bearish arrow color', type: 'color', def: '#ff5252' }
+      ],
+      compute(c, o) {
+        const rsiData = [];
+        if (window.RsiDivCore && typeof window.RsiDivCore.rsiWilder === 'function') {
+          const rsi = window.RsiDivCore.rsiWilder(c.map(x => x.close), o.length);
+          for (let i = 0; i < rsi.length; i++) {
+            if (rsi[i] == null || isNaN(rsi[i])) continue;
+            rsiData.push({ time: c[i].time, value: rsi[i] });
+          }
+        }
+        return [{ type: 'line', color: o.color, lineWidth: o.lineWidth, data: rsiData }];
+      },
+      /* Divergence arrows as lightweight-charts series markers on the MAIN
+         candle series (called by applyIndicatorMarkers). position belowBar =
+         under the low (bullish), aboveBar = over the high (bearish); hidden
+         divergences use the circle shape so regular (arrow) and hidden
+         (circle) stay visually distinct while sharing the bull/bear colors. */
+      markers(c, o) {
+        if (!window.RsiDivCore || typeof window.RsiDivCore.divergence !== 'function') return [];
+        const res = window.RsiDivCore.divergence(c, {
+          length: o.length, pivot: o.pivot, lookback: o.lookback
+        });
+        if (!res.signals || !res.signals.length) return [];
+        const mk = [];
+        res.signals.forEach(s => {
+          if (s.hidden && !o.showHidden) return;
+          if (!s.hidden && !o.showRegular) return;
+          const bull = s.kind === 'bull';
+          const base = {
+            time: s.time,
+            color: bull ? (o.bullColor || '#00d4aa') : (o.bearColor || '#ff5252')
+          };
+          if (bull) {
+            base.shape = s.hidden ? 'circle' : 'arrowUp';
+            base.position = 'belowBar';
+            base.text = s.hidden ? 'hidden bull' : 'bull';
+          } else {
+            base.shape = s.hidden ? 'circle' : 'arrowDown';
+            base.position = 'aboveBar';
+            base.text = s.hidden ? 'hidden bear' : 'bear';
+          }
+          mk.push(base);
+        });
+        return mk;
+      }
+    },
+
     uo: {
       id: 'uo', name: 'UO', fullName: 'Ultimate Oscillator', cat: 'Momentum', type: 'pane', format: 'percent',
       inputs: [
@@ -2167,6 +2236,52 @@
     return s;
   }
 
+  /* Candle-marker registry. Markers on the main candle series come from two
+     independent owners and neither may clobber the other:
+       - OI Trend / Levels overlay (oitrend.js) sets its direction arrows via
+         setCandleMarkers -> owner key 'dir'
+       - indicator defs that expose markers() (RSI Divergence arrows) register
+         under 'ind:' + uid via applyIndicatorMarkers()
+     Every write merges all owners into one time-sorted marker array before
+     pushing to the series, so a chart with both features enabled shows both
+     sets of arrows. clearDirOverlay()/setCandles() only clear the owners they
+     own and re-merge, so an indicator rebuild never needs to know about the
+     OI overlay and vice-versa. */
+  const candleMkOwners = {};   /* owner key -> marker array */
+
+  function mergeCandleMarkers() {
+    if (!candleSeries || !candleSeries.setMarkers) return;
+    const all = [];
+    Object.keys(candleMkOwners).forEach(k => {
+      const arr = candleMkOwners[k];
+      if (Array.isArray(arr)) all.push.apply(all, arr);
+    });
+    all.sort((a, b) => (a.time - b.time) || 0);
+    try { candleSeries.setMarkers(all); } catch (e) {}
+  }
+
+  function setOwnerMarkers(owner, mk) {
+    if (mk && mk.length) candleMkOwners[owner] = mk;
+    else delete candleMkOwners[owner];
+    mergeCandleMarkers();
+  }
+
+  /* Recompute candle markers for every deployed indicator whose def exposes a
+     markers() producer (RSI Divergence). Called on render/setData so arrows
+     track symbol/timeframe switches and realtime candle updates. */
+  function applyIndicatorMarkers() {
+    Object.keys(candleMkOwners).forEach(k => {
+      if (k.indexOf('ind:') === 0) delete candleMkOwners[k];
+    });
+    indicators.forEach(ind => {
+      if (!ind.def || typeof ind.def.markers !== 'function') return;
+      let mk = [];
+      try { mk = ind.def.markers(candles, ind.settings) || []; } catch (e) { mk = []; }
+      if (mk && mk.length) candleMkOwners['ind:' + ind.uid] = mk;
+    });
+    mergeCandleMarkers();
+  }
+
   /* Full rebuild: recreate main chart + all pane charts (used on add/remove/settings) */
   function render() {
     const vr = chart ? chart.timeScale().getVisibleRange() : null;
@@ -2212,6 +2327,11 @@
     const saneC = candles.filter(x => x && isFinite(x.open) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close) && isFinite(x.time));
     candleSeries.setData(saneC.map(x => ({ time: x.time, open: x.open, high: x.high, low: x.low, close: x.close })));
     volSeries.setData(saneC.map(x => ({ time: x.time, value: x.volume, color: x.close >= x.open ? '#00d4aa40' : '#ff525240' })));
+    /* New candle series -> all owners (OI arrows + indicator arrows) repaint
+       from scratch: drop every cached owner then recompute the indicator ones.
+       The OI overlay re-paints its own arrow on its next cycle. */
+    Object.keys(candleMkOwners).forEach(k => delete candleMkOwners[k]);
+    applyIndicatorMarkers();
     if (vr) chart.timeScale().setVisibleRange(vr); else fitToRecent();
     updateLegend();
     syncRanges(chart);
@@ -2300,6 +2420,7 @@
       });
       if (ind._alertLines && ind._alertLines.length && ind._series[0]) applyAlertLines(ind._series[0], ind);
     });
+    applyIndicatorMarkers();
     if (r && candleSeries && candles.length && isFinite(r.from) && isFinite(r.to) && r.to >= r.from) {
       const width = r.to - r.from;
       /* Preserve the user's EXACT view (including blank space they panned for
@@ -2400,6 +2521,7 @@
       case 'adx': return [['v0', 'ADX'], ['v1', '+DI'], ['v2', '-DI']];
       case 'macd': return [['v0', 'MACD'], ['v1', 'Signal'], ['v2', 'Histogram']];
       case 'rsi': return [['v0', 'RSI'], ['v1', 'Smoothed']];
+      case 'rsidiv': return [['v0', 'RSI']];
       case 'smiio': return [['v0', 'SMI'], ['v1', 'Signal'], ['v2', 'Histogram']];
       case 'bb': return [['v0', 'Upper'], ['v1', 'Middle'], ['v2', 'Lower']];
       case 'bbpct': return [['v0', 'BB%b']];
@@ -3349,15 +3471,18 @@
       try { dirSeries.setMarkers(mk || []); } catch (e) {}
     },
     /* Trend arrows + labels anchored to the ACTUAL candle bars (the main
-       candle series) so they are always visible next to the candles instead of
-       being drawn on the thin EMA state line where they were easy to miss /
-       clipped at the right edge. Nothing else sets markers on the candle
-       series, so this owns them and rebuilds clear them via clearDirOverlay. */
+       candle series). The OI overlay registers under owner 'dir' in the shared
+       candle-marker registry (see candleMkOwners / mergeCandleMarkers), so it
+       coexists with indicator-produced arrows (RSI Divergence) on the same
+       series instead of clobbering them on every repaint. */
     setCandleMarkers(mk) {
-      try { if (candleSeries && candleSeries.setMarkers) candleSeries.setMarkers(mk || []); } catch (e) {}
+      setOwnerMarkers('dir', mk);
     },
     clearDirOverlay() {
-      try { if (candleSeries && candleSeries.setMarkers) candleSeries.setMarkers([]); } catch (e) {}
+      /* Clear ONLY this overlay's owner from the shared candle-marker registry
+         so RSI Divergence (or any indicator) arrows drawn on the same series
+         survive an OI-overlay disable / symbol change / rebuild. */
+      setOwnerMarkers('dir', null);
       try {
         if (dirSeries) {
           if (chart && chart.removeSeries) chart.removeSeries(dirSeries);

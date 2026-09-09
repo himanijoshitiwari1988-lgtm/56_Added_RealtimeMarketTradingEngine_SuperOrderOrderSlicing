@@ -1085,10 +1085,187 @@ extreme-reversal gate if needed. Full detail in `SESSION.md` / `CHANGELOG.md`.
      reference the old IDs but are NOT loaded by `templates/index.html` (dead
      files).
 
+## Update (2026-09-09) — AST BB%b alert: per-row "use line trend" logic (alert rows + RUN WINDOW)
+
+**User request:** BB%b alert rows (BULL CE / BEAR PE) + RUN WINDOW
+ACTIVE/INACTIVE rows should optionally fire/met on the BB%b pane LINE trend
+(direction) instead of the numeric value, with a per-row checkbox + Bullish/
+Bearish dropdown. Value rule stays per-row default; trend mode fades numeric
+controls. Trend compute must stay <5ms (live feed ring buffer). Commit 56
+master-gate semantics (checkbox OFF = whole section dormant) preserved.
+
+**Design (cleared Q&A):** row FIRE = trend edge turn INTO the row's direction
+(transition + sustained); trend data source = live feed pctb ring, max 12
+distinct samples, least-squares slope + relative+absolute dead-band
+`Math.max(0.0015, span*0.08/(n-1))`; flat/noise = FLAT. Re-enable resets
+baseline (never fires stale turn mid-move); warm-up first flip never fires.
+
+**Shipped (uncommitted, working tree):**
+- `static/niftybbp_alert.js` (new `?v=13` in index.html):
+  - Constants: `TREND_UP=1/TREND_DOWN=-1/TREND_FLAT=0`, `LOGIC_VALUE='value'/
+    LOGIC_TREND='trend'` (removed unused `TREND_DIRS`).
+  - Row cfg/draft/win gain `logic` + `trendDir` (migrated defaults via
+    `cloneCfg`/`cloneWin` sanitize → old saved configs load as value mode,
+    trendDir bull/bear default per row).
+  - Ring engine: `RING_N=12`, `RING_MIN=4`, `ringTrend()` (LS slope over ring,
+    dead-band), `ingestTrendSample()` (identical dupes skipped, advances
+    `prevTrend`/`lastTrend`).
+  - `rowMet()`/`rowCrossed()` logic-aware; value mode falls back to old
+    cross logic; `modeRuleText()`, `trendForDir()`, `trendLabel()`.
+  - Instance fields `trendBuf/prevTrend/lastTrend` cleared on reset +
+    re-enable (`setEnabled(true)` also re-seeds window).
+  - `feed()`: trend ring fed per gated sample; series.update + `applyArrow()`
+    (pane `setMarkers` arrowUp/arrowDown on last point; Flat = no marker);
+    fire path trend edge vs value cross; trend msg e.g.
+    "NIFTY BB%b BULL CE LINE TURNED Bullish (line up) (was Bearish (line down))".
+  - `gateStatus`/`windowStatus` expose `logic`, `trendDir`, `ruleText`,
+    `trend`, `trendText`; run-window step/seed handle trend rows
+    (`stepWindowState` uses rowCrossed w/ prevTrend/lastTrend).
+  - `rebuildRowLines`/`rebuildWinLines`: no numeric price-line for trend rows
+    (arrow is the visual); `paintArrowFromData()` repaints arrow after pane
+    render; draft sync (`syncEditorRow`/`syncWinEditorRow`) fades/disables
+    numeric segments (`ValSeg` opacity .35 + disable) while trend segment stays
+    usable; `setSeg()` helper.
+- `templates/index.html`: AST BULL/BEAR + RUN WINDOW rows now have `ValSeg` +
+  `TrendSeg` spans (`astBbpBullValSeg/astBbpBullTrendSeg`, ...`WinAct/`WinIna`
+  variants); "use line trend" checkbox (`*Logic`, checked ⇒ trend) + Bullish/
+  Bearish dropdown (`*Trend`) added; `niftybbp_alert.js?v=13`,
+  `aismart.js?v=218`.
+- `static/aismart.js`: `bbpGateBlock`/`bbpWindowBlock` produce trend-aware
+  reasons via `row.ruleText`, `row.logic`, `a.trendDir`, `g.trendText`,
+  `w.trendText` (no "cross" wording when trend logic). `node --check` OK.
+
+**Verified:** `node --check` both JS files; DOM-stub harness
+(`/tmp/opencode/domtest.js`) — 41 checks incl trend toggle UI states, bull UP /
+bear DOWN turn fires (single, no double-fire on sustain), value-mode window
+crossover regression intact, window trend active/inactive transitions,
+re-enable no-stale-fire + genuine turn still fires after re-enable — ALL PASS.
+Config migration harness (`/tmp/opencode/migratetest.js`) — old cfg/win/draft
+without `logic`/`trendDir` load as value mode with preserved values/cond +
+default trendDir — ALL PASS. Served page (curl) includes new ids + v13/v218.
+
+**Test artifacts** live in `/tmp/opencode/` (domtest.js, migratest.js) — rerun
+with `node` against `static/niftybbp_alert.js`.
+
+## Update (2026-09-09) — NIFTY trend-following: assigned templates auto-apply LIVE on confirmed flip (permanent fix)
+
+**User report (loss scenario):** while NIFTY trend-following runs, when the
+confirmed trend FLIPS the engine picks the new side's CE/PE strikes immediately,
+but the template ASSIGNED to that side (its run mode / ticked strategies /
+Indicator-filters) only ever applied on a RUN START (`_trendTplRedirect()` was
+only reachable from `toggleAuto`/`runPaper`/`startAiPickRun`). So a live flip
+kept trading the OLD side's settings/filters → wrong-side trades → loss.
+
+**Root cause (confirmed with user):** `refreshConfirmedNifty()` (the poll path
+that flips `_lastNiftyDir`) never called the assigned-template apply; the
+template code path only ran at run start.
+
+**Design (cleared Q&A):** flip → apply the flipped-to side's assigned template to
+the LIVE engine in the SAME poll turn (no run-start wait); OPEN positions are
+deliberately untouched and keep running to their own SL / trail-SL / TP
+(`checkAutoTargetSl`). Indicator-filter Bullish/Bearish lists become mutually
+exclusive only while the trend engine is running on a CONFIRMED side (manual
+dual-side setup stays free when the engine is off / no confirmed side). Run
+buttons/mode + filter checkboxes auto-reflect the applied template.
+
+**Follow-up design (cleared Q&A, supersedes the above "apply whatever the next
+assigned template is" semantics):** a LIVE flip must NEVER change the run the
+user has going — it preserves the engine's CURRENT run mode and hands over ONLY
+to an assigned template SAVED UNDER THAT SAME mode (`normal` / `filter` /
+`aipick`); templates of any other mode are skipped (they still apply on the next
+RUN START through `_trendTplRedirect`, which is the only legal mode-change
+point). When the flipped-to side has NO same-mode template, the current
+settings/manual filters keep running untouched — only the opposite-side
+indicator filters are cleared (single-side rule); no mirror/rotate of manual
+ticked filters. This is the exact fix for the user-reported "Indicator-filters
+checkbox un-ticked on flip" regression: the pre-follow-up code re-applied the
+template's saved runMode onto the live state mid-run.
+
+**Shipped (uncommitted, working tree, `aismart.js?v=220`):**
+- `refreshConfirmedNifty()`: records previous `_lastNiftyDir`; on a change into
+  `bullish`/`bearish` calls `_trendTplApplyLive(side)` (same turn, try/catch).
+- New `_trendCycleNext(side)` (shared cursor advance, extracted from
+  `_trendTplRedirect`), `_trendCycleNextInMode(side, mode)` (same-mode-only next
+  template; cursor advances only on a same-mode apply; null + untouched cursor
+  when none), `_trendLiveMode()` (current running mode: `filter`/`aipick`/
+  `normal` from `state.filterMode`/`state.aiPick`), `_trendTplModeKey(t)` +
+  `_trendModeLabel(mode)` (raw saved mode key / display label; `_trendTplRunMode`
+  refactored onto them).
+- `_trendTplApplyLive(side)` (guarded by `state.enabled===true`, `nt.enabled`,
+  `_insideTemplateRun`, 8s same-side re-entrancy guard via
+  `_liveTplAt/_liveTplSide/_liveTplId` — armed on BOTH the apply and the
+  no-match branch so a single flip detected by tick body + status poll logs
+  once): computes `mode = _trendLiveMode()` and applies only a `_trendCycleNextInMode`
+  match — `applyEngineSettings` + `ensureTickedDefs`, then re-asserts the
+  PRESERVED mode flags (`filter`/`aiPick` per `mode`, never from template),
+  sets `runIntent`, `applyModeToUI` + `applyRunModeUI` + `applyFiltersToUI`,
+  `trendLiveSingleSide()`, `_workingCache.clear()`. No match → warn log
+  ("no assigned <mode> template ... running-mode preserved") + single-side
+  clear only. Logs "applied LIVE ... running-mode preserved, open trades keep
+  running to their own SL/trail/TP".
+- New `filterKeyFromId()`, `applyFiltersToUI()` (state → static DOM checkboxes
+  incl masters/opacity), `trendLiveSingleSide()` (opposite-side master+keys
+  cleared). Hooked into `onFiltersInput`, `onFilterMaster` (opposite "(select
+  all)" blocked while live-confirmed), `onMirrorFilters`, `_trendTplApplyLive`,
+  `runTemplateByIdInner` + `openTemplate` (DOM filters now mirror template).
+- `toggleNiftyTrend()`: enabling trend on an ALREADY-running engine with a
+  confirmed side applies that side's template immediately.
+- `tickBody()`: NIFTY bias + `refreshConfirmedNifty` moved BEFORE strategy-set
+  resolution and `filterMode` captured after refresh → a same-turn flip apply
+  (settings/filters/ticked strategies swap; run mode preserved) is already
+  reflected in this tick's strategy list (never one poll on stale side).
+- `refreshNiftyStatus()`: confirms before painting the status (avoids a blank
+  flash when the live apply re-renders internally).
+- `_trendTplRedirect` refactored onto `_trendCycleNext` (behaviour unchanged —
+  run-start still rotates to the next assigned template of ANY mode).
+
+**Verified:** `node --check static/aismart.js` OK; served `/static/aismart.js`
+on 8081 matches the working tree (byte-identical). Live browser smoke against a
+real feed (flip → watch AST log line + run-mode/filter UI switch, open trades
+kept) still pending (needs broker creds / market hours).
+
+**Follow-up (2026-09-09, `aismart.js?v=221`):** template-save must capture the
+Indicator-filters mode faithfully. Root cause found: `captureEngineSettings()`
+derived `runMode` from `state.runIntent.mode`, which goes STALE whenever the
+user toggles the Normal ↔ Indicator-filters run-mode checkboxes while the
+engine is running (the toggle switches `state.filterMode` — and therefore the
+live engine — but never updated `runIntent`). Saving at that moment stamped the
+wrong mode into the template, so an assigned/run template did not re-enter
+Indicator-filters mode. Fix: (1) `runMode` now derives from the authoritative
+mode state (`state.filterMode`→`filter`, else `state.aiPick`→`aipick`, else
+`normal`) — whatever mode the UI shows at save time is exactly what the
+template stores and re-applies; (2) `onRunModeToggle()` now syncs
+`runIntent.mode` when the engine is running so boot auto-resume + runIntent
+readers match the live toggle. User workflow this enables: keep the
+Indicator-filters mode ON in a template and assign it to a NIFTY trend side —
+its saved mode (strict-AND filter run) is honoured at the next run start /
+trend assignment without any runtime forcing.
+
+**Follow-up (2026-09-09, `aismart.js?v=222`):** "Save Template" double-creates
+entries — one press produced two identical templates. Fix is defensive &
+root-cause independent (single inline `onclick`, but a double-fired dispatch
+could not be excluded): `saveTemplate()` is now idempotent — (1) a 400ms
+re-entrancy guard drops a repeated invocation, and (2) a template fingerprint
+(`name + direction + JSON(settings)`) sweep removes any pre-existing twin and
+prevents the new entry from duplicating an identical one. Verified by Node
+simulation (`/tmp/opencode/tpltest*.js`): double-fired press → 1 entry;
+separate presses → each saved once; already-piled-up twins cleaned on next save.
+
+**Follow-up (2026-09-09, `aismart.js?v=223`):** opening/applying a saved
+template did not restore the Indicator-filters mode / "All together (strict
+AND)" checkboxes even though the template's settings carried them. `applyEngineSettings`
+updated `state.filterMode`/`state.allInOne`, but nothing pushed them back to the
+`astFilterModeCb` / `astAllInOne` DOM controls. Fix: new `applyTemplateModeUI(st)`
+restores `filterMode`/`aiPick` + `applyModeToUI`/`applyRunModeUI`/
+`applyAllInOneToUI` and is called from `openTemplate`; `applyAllInOneToUI()` is
+also called in `runTemplateByIdInner` and `_trendTplApplyLive`. Now opening a
+template saved with Indicator-filters mode + strict AND ON visibly re-checks
+those boxes (engine off or running).
+
 ## Server / preview state
 
 - Flask app: `app.py`, runs on port **8081**.
-- Current preview URL: https://8081-51e722efc35890b9.monkeycode-ai.live
+- Current preview URL: https://8081-88d9cbf47d1d28ac.monkeycode-ai.live
   (preview URL may be regenerated by the platform in a new session — call
   `request_preview` on port 8081 again if needed).
 - Start command: `cd <repo> && python3 app.py` (use background terminal).
@@ -1099,19 +1276,30 @@ extreme-reversal gate if needed. Full detail in `SESSION.md` / `CHANGELOG.md`.
 
 ## Last commit
 
-Uncommitted working-tree change: `static/autoexperiment.v13.js` — split run-in /
-trade-in backtest (backtest trades execute on the selected-strike option premium
-chart for F&O stocks and indices). Docs updated: `CHANGELOG.md`, `.ai-ready/
-MEMORY.md`. Committed history is through `7690422` (direction-aware premium
-strike pick + buy-only execution).
+Uncommitted working-tree changes: (1) `static/niftybbp_alert.js` +
+`static/aismart.js` + `templates/index.html` — AST BB%b alert "use line trend"
+per-row logic (see 2026-09-09 update above); (2) `static/aismart.js` +
+`templates/index.html` (`aismart.js?v=220`) — NIFTY trend-following LIVE
+assigned-template auto-apply on confirmed flip with RUN-MODE PRESERVATION +
+single-side filter exclusivity while live (see 2026-09-09 update above). Docs
+updated: `.ai-ready/MEMORY.md`.
+Committed history is through `7690422` (direction-aware premium strike pick +
+buy-only execution).
 
 ## Likely next steps (from the user)
 
+- Live browser smoke of the trend-flip live template apply: run the engine with
+  trend-following ON + templates assigned per side, force/observe a confirmed
+  flip, confirm (a) AST log line "applied LIVE", (b) run-mode buttons stay on
+  the CURRENT mode + Bullish/Bearish filter checkboxes switch to the template,
+  (c) open trades keep running (no forced exits), (d) opposite-side "(select
+  all)"/sub-toggles are blocked/cleared while running, (e) REGRESSION: with the
+  engine in Indicator-filters mode and a normal-mode template assigned on the
+  flipped-to side, the Indicator-filters checkbox must stay ticked and the
+  "no assigned indicator-filters template ... running-mode preserved" warn must
+  log (never a silent mode switch to strategies).
+- (Pending old task) Backup & Restore Trade stats/PnL capture fix.
 - Verify the split backtest against live market data once broker credentials are
-  provided: run an experiment on an F&O stock (result row should show
-  `optionStrike/optionType` tags and backtest trade prices matching the
-  selected-strike premium chart, not the spot chart) and on an index (spot +
-  premium dual-confirm signals, premium-only execution).
+  provided.
 - Verify the independent trade-in execution against live market data once broker
   credentials are provided.
-- Any follow-up tuning of trade-in vs run-in chart handling.
