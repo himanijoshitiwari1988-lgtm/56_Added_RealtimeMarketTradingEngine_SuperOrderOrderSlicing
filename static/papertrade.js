@@ -981,7 +981,22 @@ window.createPaperTrade = function (suffix) {
     const p = state.position;
     if (!p) return;
     const q = currentQuote();
-    const cur = (q && q.live && q.ltp) ? Number(q.ltp) : null;
+    let cur = (q && q.live && q.ltp) ? Number(q.ltp) : null;
+    /* Same canonical-price rule as checkAutoTargetSl: when the chart symbol's
+       live tick is momentarily absent the manual position is evaluated on the
+       SAME display mark (live quote first, else chart/candle close) so the SL /
+       trailing-SL cut level always equals the level shown on the chart and in
+       the Running list - never a stale-only live cutoff. */
+    if (cur === null && typeof window.positionMarkPrice === 'function') {
+      try {
+        const ref = {
+          symbolId: (p.symbolId != null) ? p.symbolId : ((typeof selectedSymbol !== 'undefined' && selectedSymbol && selectedSymbol.id != null) ? selectedSymbol.id : null),
+          symbolExch: (p.symbolExch != null) ? p.symbolExch : ((typeof selectedSymbol !== 'undefined' && selectedSymbol && selectedSymbol.exch != null) ? selectedSymbol.exch : null)
+        };
+        const m = window.positionMarkPrice(ref);
+        if (m != null && m > 0) cur = Number(m);
+      } catch (e) {}
+    }
     if (cur === null) return;
     if (p.side === 'BUY') {
       if (p.peakPrice == null || cur > p.peakPrice) p.peakPrice = cur;
@@ -1545,12 +1560,30 @@ window.createPaperTrade = function (suffix) {
       const p = state.autoPositions[key];
       if (!p) continue;
       const q = quoteFor({ id: p.symbolId, exch: p.symbolExch });
-      const cur = (q && q.ltp) ? Number(q.ltp) : null;
-      /* Only LIVE feed quotes can close a position. Backfill / seeded quotes
-         (no live flag) are stale or engine-seeded approximations and must never
-         trigger a stop-loss / trail-TP / take-profit, or trades would close
-         "suddenly" on a frozen or mismatched price. */
-      if (cur === null || !q.live) continue;
+      let cur = (q && q.ltp) ? Number(q.ltp) : null;
+      /* The engine's SL / trailing-SL / trail-TP price must be the SAME number
+         the chart P&L label and Running Trades list show (positionMarkPrice:
+         live feed quote first, else the symbol's current chart/candle close).
+         Before this, the engine only ever scanned a LIVE tick: an open option /
+         strike whose live subscription had dropped (off-chart, sparse ticks) was
+         skipped entirely - its peak never ratcheted and its trail never armed,
+         while the display (chart/candle fallback) kept showing the run-up as
+         profit. When a live tick finally returned at a low price the position
+         closed at the STALE entry-based SL = a full loss after a displayed
+         profit, and the drawn SL/trail line never matched the running P&L. Now
+         the engine falls back to the same canonical mark the display uses, so
+         the level that is drawn / shown is always the level that actually cuts.
+         Backfill-only quotes with no candle behind them still yield null and
+         the position is skipped, preserving the no-seeded-close rule. */
+      if (cur === null || !(q && q.live)) {
+        try {
+          if (typeof window.positionMarkPrice === 'function') {
+            const m = window.positionMarkPrice(p);
+            if (m != null && m > 0) cur = Number(m);
+          }
+        } catch (e) {}
+      }
+      if (cur === null || !(cur > 0)) continue;
       const trailPct = p.targetPct || 0;
       if (p.side === 'BUY') {
         /* Trailing stop-loss: as the peak rises, the SL ratchets UP behind it
@@ -1584,7 +1617,7 @@ window.createPaperTrade = function (suffix) {
         // when the price falls to that level, capping the loss on a losing
         // trade. Only active when a positive SL % was set at entry. When a
         // trailing SL is active the level is the ratcheted (peak - trail%) one.
-        if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur <= p.stopLoss) { try { if (window.__ptDiag !== false) fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ptDiag', msg: 'CLOSE ' + key + ' reason=' + (p.slTrailed ? 'TrailingSL' : 'StopLoss') + ' trailPct=' + (p.slTrailPct || 0) + ' slPct=' + (p.slPct || 0) + ' armed=' + (!!p.slTrailed) + ' entry=' + p.entryPrice + ' peak=' + p.peakPrice + ' stop=' + p.stopLoss + ' cur=' + cur }] }) }).catch(() => {}); } catch (e) {} closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
+        if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur <= p.stopLoss) { try { if (window.__ptDiag !== false) fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ptDiag', msg: 'CLOSE ' + key + ' reason=' + (p.slTrailed ? 'TrailingSL' : 'StopLoss') + ' trailPct=' + (p.slTrailPct || 0) + ' slPct=' + (p.slPct || 0) + ' armed=' + (!!p.slTrailed) + ' entry=' + p.entryPrice + ' peak=' + p.peakPrice + ' stop=' + p.stopLoss + ' cur=' + cur + ' src=' + (q && q.live ? 'live' : 'mark') }] }) }).catch(() => {}); } catch (e) {} closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
         // Profit-taking exits close a trade:
         //  - Trailing take-profit banks the profit: it is a % of the running
         //    profit (peak - entry). As the peak profit grows the trail auto-
@@ -1625,7 +1658,7 @@ window.createPaperTrade = function (suffix) {
         }
         // Stop-loss protection for SELL positions: closes when the price rises
         // to the SL % (above entry) level, capping the loss.
-        if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur >= p.stopLoss) { try { if (window.__ptDiag !== false) fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ptDiag', msg: 'CLOSE ' + key + ' reason=' + (p.slTrailed ? 'TrailingSL' : 'StopLoss') + ' trailPct=' + (p.slTrailPct || 0) + ' slPct=' + (p.slPct || 0) + ' armed=' + (!!p.slTrailed) + ' entry=' + p.entryPrice + ' peak=' + p.peakPrice + ' stop=' + p.stopLoss + ' cur=' + cur }] }) }).catch(() => {}); } catch (e) {} closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
+        if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur >= p.stopLoss) { try { if (window.__ptDiag !== false) fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ptDiag', msg: 'CLOSE ' + key + ' reason=' + (p.slTrailed ? 'TrailingSL' : 'StopLoss') + ' trailPct=' + (p.slTrailPct || 0) + ' slPct=' + (p.slPct || 0) + ' armed=' + (!!p.slTrailed) + ' entry=' + p.entryPrice + ' peak=' + p.peakPrice + ' stop=' + p.stopLoss + ' cur=' + cur + ' src=' + (q && q.live ? 'live' : 'mark') }] }) }).catch(() => {}); } catch (e) {} closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
         if (p.tpPct > 0 && cur <= p.tpPrice) { closeAutoPosition(key, 'Take profit hit', p.tpPrice, silent); continue; }
         if (trailPct > 0) {
           const peakProfit = p.entryPrice - p.peakPrice;
