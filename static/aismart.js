@@ -5339,6 +5339,70 @@ window.createAISmartTrading = function (suffix) {
     const minute = now.getUTCHours() * 60 + now.getUTCMinutes();
     return minute >= 555 && minute < 930; // 09:15 .. 15:30 IST
   }
+  /* ---------------- market-open auto reset (no stale pre-open picks) ----------------
+     While the exchange is CLOSED the quote cache is frozen at the last session's
+     close, yet the whole engine keeps running: NIFTY trend confirmation, the
+     gainer/loser universe, option-strike resolution and the "Picked Strikes"
+     panel all keep resolving off that dead data (this is exactly the "NIFTY has
+     already picked strikes after hours" the user sees). If that state simply
+     carried into the 09:15 open, the first ticks of the day would trade
+     YESTERDAY's picks (wrong side / wrong leaders) until the fresh live feed
+     propagated - a real conflict. So the first engine poll that observes the
+     market TRANSITIONING closed -> open on a fresh IST session day resets the
+     auto-pick state ONCE and refuses NEW entries for a short fresh-data warm-up:
+       - clears the picked-strikes map (and schedules its persisted snapshot to
+         be overwritten empty, so a reload can never resurrect them)
+       - clears the NIFTY trend scan cache + last confirmed direction + the whole
+         TrendConfirm machine + NIFTY bias/htf caches, so the direction layer
+         re-builds ONLY from today's fresh candles
+       - open positions are NEVER touched - they keep being managed to their
+         SL / TP / trail
+     A page simply loaded / reloaded mid-session never triggers this: the closed
+     -> open transition must be observed by this page's own tick loop (a mid-
+     session load has already built its picks on live data). */
+  let _sawMarketClosed = false;
+  let _mktOpenTick = false;
+  let _marketOpenResetDay = '';
+  let _marketOpenWarmUntil = 0;
+  const _MARKET_OPEN_WARM_MS = 60 * 1000;
+  /* Epoch ms of TODAY's NSE session start (09:15:00 IST). Records stamped before
+     this were resolved on pre-open / previous-day frozen quotes and must not be
+     traded once the market is open. */
+  function todaySessionOpenMs() {
+    const d = new Date(Date.now() + 5.5 * 3600 * 1000);
+    return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 9, 15, 0, 0) - 5.5 * 3600 * 1000;
+  }
+  function marketWarmingUp() {
+    return _marketOpenWarmUntil > 0 && Date.now() < _marketOpenWarmUntil;
+  }
+  /* true only once the market is open AND any post-open warm-up has elapsed. */
+  function marketEntryOpen() {
+    return marketSessionOpen() && !marketWarmingUp();
+  }
+  function ensureMarketOpenReset() {
+    const open = marketSessionOpen();
+    if (!open) { _sawMarketClosed = true; _mktOpenTick = false; return; }
+    if (_mktOpenTick) return;                 /* was already open on the last check */
+    _mktOpenTick = true;
+    if (!_sawMarketClosed) return;            /* page loaded mid-session: picks were built on live data */
+    const day = istDay();
+    if (_marketOpenResetDay === day) return;  /* already reset for this session day */
+    _marketOpenResetDay = day;
+    _marketOpenWarmUntil = Date.now() + _MARKET_OPEN_WARM_MS;
+    const hadPicks = _pickedStrikes.size;
+    _pickedStrikes.clear();
+    if (hadPicks) _schedulePickedPersist();
+    const hadDir = _lastNiftyDir;
+    _resetTrendScan();
+    _lastNiftyDir = null;
+    _niftyConf = null;
+    _niftyHtfCache = null;
+    Object.keys(_niftyBiasCache).forEach(t => delete _niftyBiasCache[t]);
+    _trendDropLogAt = {};
+    log((hadPicks ? ('Market opened: cleared ' + hadPicks + ' stale pre-open picked strike record(s)') : 'Market opened: pre-open auto-pick state reset')
+      + (hadDir ? (' (NIFTY bias "' + hadDir + '" discarded)') : '')
+      + ' - trend/picks will rebuild only from fresh live data; new entries held ~' + Math.round(_MARKET_OPEN_WARM_MS / 1000) + 's warm-up', 'warn');
+  }
   /* One-shot "auto square off" gate: true only the first time the live IST clock
      reaches the configured square-off time on any given session day. The engine
      cuts every open position once, so a browser reload / long-running session
@@ -5421,7 +5485,7 @@ window.createAISmartTrading = function (suffix) {
   function allowedTradesFor(s, instr, candles) {
     const u = state.universal;
     if (!liveTimeGateOk()) return 0;
-    if (!marketSessionOpen()) return 0;
+    if (!marketEntryOpen()) return 0;
     if (u && u.aiTrades) {
       const r = { key: s.id, optionSid: instr.kind === 'option' ? instr.sid : null, symbol: instr.symbol };
       aiTradesDecisionFor(candles, liveOICtx(r));
@@ -5476,15 +5540,18 @@ window.createAISmartTrading = function (suffix) {
      return dir === 'bullish' ? 'CE' : (dir === 'bearish' ? 'PE' : null);
    }
 
-  /* Reconcile the picked-strikes map against the CURRENT run every tick: the
-     "Picked Strikes" panel and the HFT scanner must only show / trade what the
-     engine would resolve right now, never stale strikes accumulated since page
-     load. Deletes entries whose symbol is no longer in the live universe (top
-     movers / NIFTY trend-following / manual selection) and, whenever a side is
-     currently known, entries still holding the OPPOSITE option leg (e.g. old CE
-     picks left over from a bullish NIFTY phase after it flipped bearish). The
-     next poll re-resolves only the matching side for surviving symbols. Open
-     positions are never touched - they keep being managed to their SL/TP. */
+   /* Reconcile the picked-strikes map against the CURRENT run every tick: the
+      "Picked Strikes" panel and the HFT scanner must only show / trade what the
+      engine would resolve right now, never stale strikes accumulated since page
+      load. Deletes entries whose symbol is no longer in the live universe (top
+      movers / NIFTY trend-following / manual selection), entries that were
+      resolved BEFORE today's session opened at 09:15 IST (pre-open / previous-
+      day frozen-quote strikes - the "already picked after hours" conflict) and,
+      whenever a side is currently known, entries still holding the OPPOSITE
+      option leg (e.g. old CE picks left over from a bullish NIFTY phase after
+      it flipped bearish). The next poll re-resolves only the matching side for
+      surviving symbols. Open positions are never touched - they keep being
+      managed to their SL/TP. */
   function reconcilePickedStrikes() {
     const cur = experimentSymbols();
     const curKeys = new Set();
@@ -5496,12 +5563,24 @@ window.createAISmartTrading = function (suffix) {
        judged stale by a side the resolve itself never produces (the filterMode
        ticked-filter bias vs auto NIFTY side mismatch). */
     const forcedSide = runInForcedSide();
+    /* Only prune by session age once the session is actually open (09:15-15:30):
+       while the market is closed the engine legitimately keeps resolving picks
+       off the frozen cache for the panel, and pruning them there would just make
+       the very next tick re-resolve them - infinite drop/recreate churn. The
+       instant the session opens (or a page loads into it) every record stamped
+       before today's 09:15:00 IST is stale and is dropped once. */
+    const sessionStart = marketSessionOpen() ? todaySessionOpenMs() : 0;
     const stale = [];
     let legs = 0;
     _pickedStrikes.forEach((rec, k) => {
       if (!rec || !rec.symbol || !Array.isArray(rec.contracts) || !rec.contracts.length) {
         stale.push(k);
         if (rec && rec.contracts && rec.contracts.length) legs += rec.contracts.length;
+        return;
+      }
+      if (sessionStart > 0 && (rec.at || 0) < sessionStart) {
+        stale.push(k);
+        legs += rec.contracts.length;
         return;
       }
       if (!curKeys.has(k)) {
@@ -5688,11 +5767,12 @@ window.createAISmartTrading = function (suffix) {
     const SE = window.StratEngine;
     if (!pt || !SE) return;
     resetTradeCountsIfNewDay();
+    ensureMarketOpenReset();
     const ptState = pt.getState ? pt.getState() : null;
     const autoPositions = (ptState && ptState.autoPositions) || {};
     if (!(u && u.hft)) return;
       if (!liveTimeGateOk()) return;
-      if (!marketSessionOpen()) return;
+      if (!marketEntryOpen()) return;
       const strategies = activeStrategies();
       if (!strategies.length) return;
       const instruments = hftInstruments();
@@ -6507,6 +6587,15 @@ window.createAISmartTrading = function (suffix) {
       const paper = (window.AutoExperiment && AutoExperiment.paper) ? AutoExperiment.paper : null;
       const u = state.universal;
 
+      /* Market-open auto reset: the first poll observing the closed -> open
+         transition on a fresh session day wipes the pre-open auto-pick state
+         (picked strikes / NIFTY trend bias + scan cache / TrendConfirm machine)
+         so today's opening is traded on FRESH picks, never the strikes that were
+         resolved off last session's frozen quotes. New entries then wait out a
+         short fresh-data warm-up (see marketEntryOpen). Open positions are
+         untouched - they keep being managed to their SL / TP. */
+      ensureMarketOpenReset();
+
       if (!(u && u.aiTp !== false)) { updateAiTpStatus(''); updateAiTPStatus(''); }
       if (!(u && u.rrEnabled === true)) updateRrStatus('');
       if (!(u && u.aiSl !== false)) updateAiSlStatus('');
@@ -6746,7 +6835,12 @@ window.createAISmartTrading = function (suffix) {
           }
           if (anyOpen) { prog(s.id, 50, 'Managing open position'); continue; }
 
-          if (!marketSessionOpen()) { prog(s.id, 53, 'Blocked: NSE market closed (09:15-15:30 IST) - no new entries'); continue; }
+          if (!marketEntryOpen()) {
+            prog(s.id, 53, marketWarmingUp()
+              ? 'Blocked: NSE market just opened - warming up on fresh live data, no new entries for ~' + Math.max(1, Math.ceil((_marketOpenWarmUntil - Date.now()) / 1000)) + 's'
+              : 'Blocked: NSE market closed (09:15-15:30 IST) - no new entries');
+            continue;
+          }
 
           const allowed = allowedTradesFor(s, instr, candles);
           if (allowed != null && (state.tradeCounts[s.id] || 0) >= allowed) { prog(s.id, 60, 'Blocked: trade limit reached'); bump(instr, 'limit'); continue; }
