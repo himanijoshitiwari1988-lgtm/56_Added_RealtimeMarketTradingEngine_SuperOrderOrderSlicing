@@ -8132,17 +8132,15 @@ window.createAutoExperiment = function (suffix) {
     onFiltersInput() {
       readFiltersUI();
     },
-    /* AI Brain (shared with the AST engine): 3-mode weighted confluence analyst
-       - 'analysis' turns the selected indicator filters into soft confluence
-       signals gated by a threshold, 'decision' keeps strategy conditions strict
-       and lets the brain veto only clear conflicts, 'off' restores the strict
-       filter gates. Both engines' strict filter entries evaluate through the
-       AST engine, so this selector mirrors onto it (setBrainMode) and the
-       toolbar reflects its saved state. */
+    /* AI Brain (shared with the AST engine): the old 3-mode selector was
+       merged into ONE 'auto' mode ('off' restores the strict filter gates).
+       Both engines' strict filter entries evaluate through the AST engine, so
+       this selector mirrors onto it (setBrainMode) and the toolbar reflects
+       its saved state. */
     onBrainMode() {
       const el = $id('aeBrainMode');
       let m = el ? el.value : 'off';
-      if (m !== 'analysis' && m !== 'decision') m = 'off';
+      if (m !== 'auto') m = 'off';
       const tEl = $id('aeBrainThreshold');
       const th = tEl ? Number(tEl.value) : 65;
       if (window.AISmartTrading && typeof window.AISmartTrading.setBrainMode === 'function') {
@@ -8153,7 +8151,7 @@ window.createAutoExperiment = function (suffix) {
     },
     onBrainThreshold() {
       const el = $id('aeBrainMode');
-      const m = (el && (el.value === 'analysis' || el.value === 'decision')) ? el.value
+      const m = (el && el.value === 'auto') ? 'auto'
         : (window.AISmartTrading && typeof window.AISmartTrading.brainMode === 'function') ? window.AISmartTrading.brainMode() : 'off';
       const tEl = $id('aeBrainThreshold');
       const th = tEl ? Number(tEl.value) : 65;

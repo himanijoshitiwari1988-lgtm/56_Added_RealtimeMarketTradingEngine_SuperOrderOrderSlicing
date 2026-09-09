@@ -248,8 +248,8 @@ window.createAISmartTrading = function (suffix) {
     if (k === 'bearPbgVortex') return 'Vortex VI- holds above VI+ with VI- direction upward & VI+ direction downward (gap widening, level)';
     if (k === 'bullPbgAdx') return 'ADX direction upward, +DI above -DI, +DI direction upward & -DI direction downward, +DI/-DI gap widening (level)';
     if (k === 'bearPbgAdx') return 'ADX direction downward, +DI below -DI, +DI direction downward & -DI direction upward, +DI/-DI gap widening (level)';
-    if (k === 'bullPbgSmiio') return 'SMI & Signal above Histogram, both direction upward (level - OR of widening / histogram rising)';
-    if (k === 'bearPbgSmiio') return 'SMI & Signal below Histogram, both direction downward (level - OR of widening / histogram falling)';
+    if (k === 'bullPbgSmiio') return 'SMI & Signal below Histogram, both direction downward & histogram falling (level)';
+    if (k === 'bearPbgSmiio') return 'SMI & Signal above Histogram, both direction upward & histogram rising (level)';
     if (k === 'bullPbgAroon') return 'Aroon Up above Aroon Down (level - line direction not required, gap holding/widening)';
     if (k === 'bearPbgAroon') return 'Aroon Up below Aroon Down (level - line direction not required, gap holding/widening)';
     if (k === 'bullPbgMacd') return 'MACD main line crossed above signal line (level holding - no gap logic)';
@@ -1610,21 +1610,17 @@ window.createAISmartTrading = function (suffix) {
       BULL_FILTER_KEYS.forEach(k => delete f[k]);
     }
     const fc = buildFilterConditions(copy, f);
-    /* AI Brain (analysis/decision mode): the direction-matched filters are NOT
+    /* AI Brain (single merged AUTO mode): the direction-matched filters are NOT
        appended as strict mandatory gates. One single "brain" condition
        replaces them - it turns the direction-matched set into a weighted
-       confluence score on the live bar and applies the active mode (ANALYSIS:
-       pass when score >= the tunable threshold; DECISION: run the strategy
-       strict and veto only a genuine opposite-direction conflict - for which it
-       also carries the opposite-direction filter set when the strategy side has
-       no matching filters of its own). The strategy's own conditions stay hard
+       confluence score on the live bar and the brain itself decides between
+       the two merged rules (AUTO = threshold score gate AND opposite-direction
+       conflict veto, so the opposite-direction filter set is always carried
+       for conflict detection). The strategy's own conditions stay hard
        (N-of-M / all-together path unchanged below). OFF (no brain) keeps the
        strict filter gates. */
     if (brainModeOn()) {
-      const bm = brainModeName();
-      const opp = (bm === 'decision')
-        ? directionFilterConditions(copy, side === 'bullish' ? 'bearish' : 'bullish')
-        : [];
+      const opp = directionFilterConditions(copy, side === 'bullish' ? 'bearish' : 'bullish');
       if (fc.length || opp.length) {
         copy.entryExtra = (copy.entryExtra || []).concat([brainCondFor(fc, opp)]);
         const ownNeed0 = (copy.entryThreshold != null && copy.entryThreshold >= 1)
@@ -1677,15 +1673,13 @@ window.createAISmartTrading = function (suffix) {
     const side = (copy.cat === 'bearish') ? 'bearish' : 'bullish';
     const extra = (copy.entryExtra || []).slice();
     const fc = directionFilterConditions(copy);
-    /* AI Brain (analysis/decision mode): the direction-matched filters collapse
+    /* AI Brain (single merged AUTO mode): the direction-matched filters collapse
        into ONE confluence condition instead of every filter being a strict AND
-       gate (see brainCondFor). DECISION mode also carries the opposite-direction
+       gate (see brainCondFor). AUTO mode always carries the opposite-direction
        filter set (built even when the strategy side has no matching filters) so
        the brain can veto a genuine conflict. OFF keeps the strict gates. */
     if (brainModeOn()) {
-      const opp = (brainModeName() === 'decision')
-        ? directionFilterConditions(copy, side === 'bullish' ? 'bearish' : 'bullish')
-        : [];
+      const opp = directionFilterConditions(copy, side === 'bullish' ? 'bearish' : 'bullish');
       if (fc.length || opp.length) extra.push(brainCondFor(fc, opp));
     } else if (fc.length) {
       extra.push.apply(extra, fc);
@@ -1997,28 +1991,27 @@ window.createAISmartTrading = function (suffix) {
       const v = m[i], s0 = s[i], vp = m[i - 1], s1 = s[i - 1];
       if (v == null || s0 == null || vp == null || s1 == null) return false;
       if (cond.pair) {
-        /* SMI special "pair vs Histogram" mode: the SMI filter was redesigned
-           as an OR of the two bullish variants the user described (bearish is
-           the exact mirror). base = SMI & Signal both on the bullish side of
-           the Histogram line (hist = SMI - Signal, so this pins the oscillator
-           pair in its positive zone); variant-1 = base + both lines rising and
-           pulling further away from the histogram; variant-2 = base + both
-           lines rising and the histogram itself rising (acceleration). A bar
-           passes when either variant holds. */
+        /* SMI special "pair vs Histogram" mode: ONE combined variant per side
+           (the old OR-of-two-variants with the separation-widening variant was
+           removed - see change request). hist = SMI - Signal. USER-CONFIRMED
+           SWAP: the bullish-list row (bullPbgSmiio) fires only when ALL of SMI
+           & Signal sit BELOW the Histogram line, both lines are pointing
+           DOWNWARD (falling) AND the Histogram itself is FALLING; the bearish-
+           list row (bearPbgSmiio) is the exact opposite - SMI & Signal ABOVE
+           the Histogram, both lines rising AND the Histogram rising. No
+           separation/gap-widening alternative remains. */
         const h = alignedSeries(cond.indId, cond.indSettings, cond.pair, candles);
         if (!h) return false;
         const hh = h[i], hp = h[i - 1];
         if (hh == null || hp == null) return false;
         if (wantBull) {
-          if (v <= hh || s0 <= hh) return false;
-          if (v < vp || s0 < s1) return false;
-          const widen = (v - hh) >= (vp - hp) && (s0 - hh) >= (s1 - hp);
-          if (!widen && !(hh >= hp)) return false;
-        } else {
           if (v >= hh || s0 >= hh) return false;
-          if (v > vp || s0 > s1) return false;
-          const widen = (hh - v) >= (hp - vp) && (hh - s0) >= (hp - s1);
-          if (!widen && !(hh <= hp)) return false;
+          if (v >= vp || s0 >= s1) return false;
+          if (!(hh < hp)) return false;
+        } else {
+          if (v <= hh || s0 <= hh) return false;
+          if (v <= vp || s0 <= s1) return false;
+          if (!(hh > hp)) return false;
         }
         return true;
       }
@@ -2092,19 +2085,19 @@ window.createAISmartTrading = function (suffix) {
      tens of microseconds - orders of magnitude inside the 5 ms live budget.
 
      Modes (shared setting between the AST and AE toolbars):
-       off      -> filters keep their historical STRICT AND gating; nothing
-                   about the entry changes.
-       analysis -> the strategy's OWN conditions stay HARD; the selected
-                   filters are no longer strict gates - an entry is POSSIBLE
-                   when the confluence score >= the tunable threshold (5-100,
-                   default 65).
-       decision -> the strategy's OWN conditions stay HARD and run strict; the
-                   filters are never gates. The brain only acts as an analyst
-                   that VETOES a clear CONFLICT: opposite-direction filters
-                   holding strongly while the strategy's own filters are weak.
-     In NO mode are the strategy's own conditions softened. A filter the chart
-     cannot evaluate raises no evidence (it is not counted), and an empty
-     selection means no evidence -> the brain never gates and never vetoes.
+       off  -> filters keep their historical STRICT AND gating; nothing
+               about the entry changes.
+       auto -> SINGLE merged mode (the old 'analysis' and 'decision' options
+               were merged). The brain itself decides on every bar between the
+               two rules: an entry is POSSIBLE when the confluence score of the
+               strategy-direction filters >= the tunable threshold (5-100,
+               default 65) AND is VETOED whenever the opposite-direction filter
+               set holds at/above the conflict floor while the trade side is
+               below it. The strategy's OWN conditions stay HARD and run strict
+               in every mode - never softened.
+     In every mode a filter the chart cannot evaluate raises no evidence (it is
+     not counted), and an empty selection means no evidence -> the brain never
+     gates and never vetoes.
      The per-component verdicts feed the live "AI Brain" analysis readout. */
   function isBrainCond(c) {
     return !!(c && (c.logic === 'brainEntry' || c.logic === 'brainAll'));
@@ -2113,10 +2106,13 @@ window.createAISmartTrading = function (suffix) {
   function brainModeName() {
     const f = state.filters || {};
     const m = f.aiBrainMode;
-    if (m !== 'off' && m !== 'analysis' && m !== 'decision') {
-      return (f.aiBrain === true) ? 'analysis' : 'off'; /* legacy saved toggle */
-    }
-    return m;
+    /* Single merged mode (USER REQUEST): the old 'analysis' and 'decision'
+       dropdown options were merged into one 'auto' mode in which the brain
+       itself decides - it uses BOTH the weighted-confluence threshold gate
+       AND the opposite-direction conflict veto. Any saved legacy
+       'analysis'/'decision' value is honoured as this same 'auto' mode. */
+    if (m && m !== 'off') return 'auto';
+    return (f.aiBrain === true) ? 'auto' : 'off'; /* legacy saved toggle */
   }
 
   function brainModeOn() {
@@ -2132,7 +2128,7 @@ window.createAISmartTrading = function (suffix) {
 
   /* How far back (in bars) the brain looks to measure a filter's freshness. */
   const BRAIN_AGE_MAX = 6;
-  /* Decision-mode conflict floor: a strategy-side confluence score below this
+  /* AUTO-mode conflict floor: a strategy-side confluence score below this
      while opposite-side evidence is at/above it reads as a real conflict. */
   const BRAIN_CONFLICT_FLOOR = 30;
 
@@ -2265,27 +2261,35 @@ window.createAISmartTrading = function (suffix) {
   }
 
   /* Entry-time verdict for a brain condition (see the engine comment block for
-     the mode semantics). No judgeable/selected evidence => never a veto. */
+     the mode semantics). Single merged AUTO mode: the brain applies BOTH rules
+     and picks whichever is decisive on the bar - a strong opposite-direction
+     conflict VETOES the entry, otherwise the weighted confluence of the
+     direction-matched filters must clear the tunable threshold. No
+     judgeable/selected evidence => never a veto and never a threshold block. */
   function brainGateOk(cond, i, candles) {
     const list = cond && cond._brain;
     const mode = brainModeName();
     const res = (list && list.length) ? brainAnalyze(list, i, candles) : null;
+    const gate = brainThresholdPct();
+    const conflict = !cond._weakGate && brainConflict(cond, res, i, candles);
     let ok = true;
-    let gate = BRAIN_CONFLICT_FLOOR;
+    let vetoed = false;
     if (cond._weakGate) {
-      /* Filter-mode synthetic strategies: the filter set IS the strategy, so in
-         decision mode the pass bar is the conflict floor (nothing below a clear
-         conflict trades); analysis mode keeps the tunable threshold. */
-      gate = (mode === 'decision') ? BRAIN_CONFLICT_FLOOR : brainThresholdPct();
+      /* Filter-mode synthetic strategies: the filter set IS the strategy, so
+         the merged AUTO bar is the tunable confluence threshold. */
       ok = !res || res.score == null || res.score >= gate;
-    } else if (mode === 'analysis') {
-      gate = brainThresholdPct();
-      ok = !res || res.score == null || res.score >= gate;
-    } else if (mode === 'decision') {
-      gate = BRAIN_CONFLICT_FLOOR;
-      ok = !(brainConflict(cond, res, i, candles));
+    } else if (conflict) {
+      ok = false;
+      vetoed = true;
+    } else if (res && res.score != null && res.score < gate) {
+      ok = false;
     }
     if (i === (candles ? candles.length - 1 : -1)) {
+      let oppScore = null;
+      if (!cond._weakGate && cond._opp && cond._opp.length) {
+        const o = brainAnalyze(cond._opp, i, candles);
+        oppScore = o ? o.score : null;
+      }
       _brainLive = {
         mode,
         score: res ? res.score : null,
@@ -2294,9 +2298,8 @@ window.createAISmartTrading = function (suffix) {
         total: res ? res.total : 0,
         gate,
         verdict: ok,
-        oppScore: (mode === 'decision' && !cond._weakGate && cond._opp && cond._opp.length)
-          ? (function () { const o = brainAnalyze(cond._opp, i, candles); return o ? o.score : null; })()
-          : null,
+        vetoed,
+        oppScore,
         parts: res ? res.parts : []
       };
     }
@@ -2306,7 +2309,9 @@ window.createAISmartTrading = function (suffix) {
   /* Mode + threshold setter used by the AST and AE toolbars. Persisted with the
      filter state so a reload restores the same analysis behaviour. */
   function brainSetMode(mode, th) {
-    const m = (mode === 'analysis' || mode === 'decision') ? mode : 'off';
+    /* Merged single mode (USER REQUEST): the old 'analysis'/'decision' select
+       values are normalised to one 'auto' mode; only 'off' stays distinct. */
+    const m = (mode === 'auto' || mode === 'analysis' || mode === 'decision') ? 'auto' : 'off';
     if (!state.filters) state.filters = Object.assign({}, defaultState().filters);
     state.filters.aiBrainMode = m;
     state.filters.aiBrain = m !== 'off'; /* legacy boolean kept in sync */
@@ -2325,10 +2330,8 @@ window.createAISmartTrading = function (suffix) {
     const aeBtEl = $id('aeBrainThreshold');
     if (aeBtEl) aeBtEl.value = brainThresholdPct();
     renderBrainSummary();
-    if (m === 'analysis') {
-      log('AI Brain ANALYSIS ON - filters become weighted-confluence signals: entry needs score >= ' + brainThresholdPct() + '% while the strategy\'s own conditions stay mandatory', 'ok');
-    } else if (m === 'decision') {
-      log('AI Brain DECISION ON - filters are advisory only (strategy conditions stay strict); the brain vetoes entries only on a clear opposite-direction conflict (score < ' + BRAIN_CONFLICT_FLOOR + '%)', 'ok');
+    if (m === 'auto') {
+      log('AI Brain AUTO ON - the two old modes are merged: entry clears when the confluence score >= ' + brainThresholdPct() + '% (tunable threshold) unless a clear opposite-direction conflict (opp score >= ' + BRAIN_CONFLICT_FLOOR + '% while the trade side is below it) vetoes it first. OFF keeps strict filter gates', 'ok');
     } else {
       log('AI Brain OFF - strict indicator-filter gating restored', 'warn');
     }
@@ -2349,14 +2352,15 @@ window.createAISmartTrading = function (suffix) {
       txt = '<span style="color:#666">AI Brain [' + m + '] - no live analysis yet (select direction-matched filters)</span>';
     } else {
       const L = _brainLive;
-      const stat = (m === 'analysis')
-        ? (L.verdict
-          ? '<span style="color:#00d4aa">score ' + L.score + '% &ge; ' + L.gate + '% - POSSIBLE</span>'
-          : '<span style="color:#ff7043">score ' + L.score + '% &lt; ' + L.gate + '% - not possible yet</span>')
-        : (L.verdict
-          ? '<span style="color:#00d4aa">no conflict (score ' + L.score + '%, opp ' + (L.oppScore == null ? '--' : L.oppScore + '%') + ') - clear to run</span>'
-          : '<span style="color:#ff7043">CONFLICT VETO - score ' + L.score + '% vs opp ' + (L.oppScore == null ? '--' : L.oppScore + '%') + '</span>');
-      txt = 'AI Brain [' + m + '] ' + L.held + '/' + L.judged + ' filters hold | ' + stat;
+      let stat;
+      if (L.verdict) {
+        stat = '<span style="color:#00d4aa">clear - score ' + L.score + '% &ge; ' + L.gate + '%' + (L.oppScore == null ? '' : ' | opp ' + L.oppScore + '%') + '</span>';
+      } else if (L.vetoed) {
+        stat = '<span style="color:#ff7043">CONFLICT VETO - score ' + L.score + '% vs opp ' + (L.oppScore == null ? '--' : L.oppScore + '%') + '</span>';
+      } else {
+        stat = '<span style="color:#ff7043">score ' + L.score + '% &lt; ' + L.gate + '% - not possible yet</span>';
+      }
+      txt = 'AI Brain [auto] ' + L.held + '/' + L.judged + ' filters hold | ' + stat;
     }
     if (txt === _brainSummaryText) return;
     _brainSummaryText = txt;
@@ -2486,17 +2490,16 @@ window.createAISmartTrading = function (suffix) {
       groups: GROUP_KEYS.slice(),
       symbols: [],
       movers: { enabled: false, gainers: 5, losers: 5, indices: [], picked: [] },
-      niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [] }, // NIFTY trend-following F&O picker (directional gainers/losers above a daily change% threshold + optional indices)
+      niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] }, // NIFTY trend-following F&O picker (directional gainers/losers above a daily change% threshold + optional indices + per-direction assigned AST engine-settings template cycles)
       sim: { enabled: false }, // market-off simulation chart: trades the synthetic SIM 900001 stream instead of real strikes
       commodity: { enabled: false, sids: [] }, // MCX commodity futures paper trading: trades each +Add-ed FUTCOM contract directly (spot mode), alongside stocks/F&O
-      showPickedStrikes: false,
       filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bullGreenCandle: false, bearRedCandle: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullOit: false, bearOit: false, bullEma9_21: false, bearEma9_21: false, bullEma21_35: false, bearEma21_35: false, bullEma35_50: false, bearEma35_50: false, bullEma50_100: false, bearEma50_100: false, bullEma100_200: false, bearEma100_200: false, bullEma200_300: false, bearEma200_300: false, bullSt10_1_2: false, bearSt10_1_2: false, bullSt10_2_3: false, bearSt10_2_3: false, bullSt1CloseCrossAbove: false, bearSt1CloseCrossBelow: false, bullVwapCloseCrossAbove: false, bullMeetEma9_21: false, bullMeetEma21_35: false, bullMeetEma35_50: false, bullMeetEma50_100: false, bullMeetEma100_200: false, bullMeetEma200_300: false, bullMeetSt10_1_2: false, bullMeetSt10_2_3: false, bullMeetCloseSt: false, bullMeetCloseVwap: false, bullMeetPaneCross: false, bullMeetCross: false, bullMeetCloseBb: false, bullMeetClosePc: false, bullMeetVl: false, bearMeetVl: false, bearVwapCloseCrossBelow: false, bearMeetEma9_21: false, bearMeetEma21_35: false, bearMeetEma35_50: false, bearMeetEma50_100: false, bearMeetEma100_200: false, bearMeetEma200_300: false, bearMeetSt10_1_2: false, bearMeetSt10_2_3: false, bearMeetCloseSt: false, bearMeetCloseVwap: false, bearMeetPaneCross: false, bearMeetCross: false, bearMeetCloseBb: false, bearMeetClosePc: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false, bullArmedGate: false, bearArmedGate: false,
-      /* AI Brain (3-mode weighted confluence analyst, see the engine block):
-         'off' = filters stay strict AND gates; 'analysis' = filters become
-         weighted-confluence signals gated by the tunable threshold; 'decision'
-         = filters advisory, strategy runs strict, brain vetoes only a clear
-         opposite-direction conflict. aiBrain is kept in sync as a legacy
-         boolean for older saved states. */
+      /* AI Brain (single merged AUTO confluence analyst, see the engine block):
+         'off' = filters stay strict AND gates; 'auto' (also saved legacy
+         'analysis'/'decision') = the brain merges both old rules - weighted-
+         confluence score gated by the tunable threshold PLUS opposite-direction
+         conflict veto. aiBrain is kept in sync as a legacy boolean for older
+         saved states. */
       aiBrain: false,
       aiBrainMode: 'off',
       brainThreshold: 65 },
@@ -2717,8 +2720,15 @@ window.createAISmartTrading = function (suffix) {
       if (!Number.isFinite(Number(s.niftyTrend.pct)) || Number(s.niftyTrend.pct) <= 0) s.niftyTrend.pct = 2.5;
       if (typeof s.niftyTrend.includeIndices !== 'boolean') s.niftyTrend.includeIndices = false;
       if (!Array.isArray(s.niftyTrend.indices)) s.niftyTrend.indices = [];
+      /* Per-direction assigned AST engine-settings template ids (order = the
+         run-start cycle order). Dead ids (template since deleted) are simply
+         ignored everywhere - the live template library is the source of truth. */
+      if (!Array.isArray(s.niftyTrend.bullTpls)) s.niftyTrend.bullTpls = [];
+      if (!Array.isArray(s.niftyTrend.bearTpls)) s.niftyTrend.bearTpls = [];
+      s.niftyTrend.bullTpls = s.niftyTrend.bullTpls.map(x => String(x)).filter(Boolean);
+      s.niftyTrend.bearTpls = s.niftyTrend.bearTpls.map(x => String(x)).filter(Boolean);
     } else if (s) {
-      s.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [] };
+      s.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
     }
     if (s && s.filters) {
       ['bullish', 'bearish', 'incUp', 'incDown', 'gapUp', 'gapDown', 'incUpAll', 'incDownAll', 'crossUp', 'crossDown', 'gtUp', 'ltUp', 'gtDown', 'ltDown'].concat(FILTER_EXTRA_KEYS, STREAM_FLAG_KEYS, FILTER_ARM_KEYS).forEach(k => {
@@ -2789,7 +2799,6 @@ window.createAISmartTrading = function (suffix) {
         aiPickBull: state.aiPickBull, aiPickBear: state.aiPickBear,
         runStrategyIn: state.runStrategyIn,
         niftyTrend: state.niftyTrend,
-        showPickedStrikes: state.showPickedStrikes,
         settingsSnapshots: state.settingsSnapshots,
         filterMode: state.filterMode,
         freshMeet: state.freshMeet === true,
@@ -2948,12 +2957,10 @@ window.createAISmartTrading = function (suffix) {
        strategy so the entry veto (overallDirBlocks) can read the vote lines on
        that TF's own chart. */
     const dirDropped = (conds && conds._dirDropped) || [];
-    /* AI Brain (analysis/decision mode): instead of requiring EVERY selected
+    /* AI Brain (single merged AUTO mode): instead of requiring EVERY selected
        filter to pass together (strict AND), the whole set becomes one weighted
-       confluence condition - entry is possible once the score clears the bar.
-       In DECISION mode there is no separate "own strategy" to run strict here
-       (the filter set IS the strategy), so the pass bar drops to the conflict
-       floor (no clear conflict). OFF keeps the strict all-together entry. */
+       confluence condition - entry is possible once the score clears the
+       tunable threshold. OFF keeps the strict all-together entry. */
     const brainSoft = brainModeOn() && conds.length;
     const brainConds = brainSoft ? [brainCondFor(conds)] : null;
     if (brainConds) brainConds[0]._weakGate = true;
@@ -3399,7 +3406,7 @@ window.createAISmartTrading = function (suffix) {
     if (!el || !el.value) { log('Select an index to add', 'warn'); return; }
     let it;
     try { it = JSON.parse(el.value); } catch (e) { return; }
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
     if (!Array.isArray(state.niftyTrend.indices)) state.niftyTrend.indices = [];
     const exists = state.niftyTrend.indices.some(s => String(s.id) === String(it.id) && String(s.exch || '') === String(it.exch || ''));
     if (!exists) {
@@ -3419,7 +3426,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function removeNiftyTrendIndex(id, exch) {
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
     state.niftyTrend.indices = (state.niftyTrend.indices || []).filter(s => !(String(s.id) === String(id) && String(s.exch || '') === String(exch || '')));
     save();
     _resetTrendScan();
@@ -3439,7 +3446,7 @@ window.createAISmartTrading = function (suffix) {
 
   function readNiftyTrendUI() {
     const onEl = $id('astNiftyTrendEnabled'), pctEl = $id('astNiftyTrendPct'), incEl = $id('astNiftyTrendIndices');
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
     state.niftyTrend.enabled = onEl ? onEl.checked : false;
     state.niftyTrend.pct = pctEl ? (Number(pctEl.value) > 0 ? Number(pctEl.value) : 2.5) : 2.5;
     state.niftyTrend.includeIndices = incEl ? incEl.checked : false;
@@ -3447,7 +3454,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function applyNiftyTrendToUI() {
-    const nt = state.niftyTrend || (state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [] });
+    const nt = state.niftyTrend || (state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] });
     if (!Array.isArray(nt.indices)) nt.indices = [];
     const ck = (id, v) => { const el = $id(id); if (el) el.checked = !!v; };
     const set = (id, v) => { const el = $id(id); if (el) el.value = v; };
@@ -3464,10 +3471,13 @@ window.createAISmartTrading = function (suffix) {
     const on = !!nt.enabled;
     const simOn = !!(state.sim && state.sim.enabled);
     const active = on && !simOn;
-    ['astNiftyTrendPct', 'astNiftyTrendIndices', 'astNiftyTrendIndicesSelect', 'astNiftyTrendIndicesAdd'].forEach(id => {
+    ['astNiftyTrendPct', 'astNiftyTrendIndices', 'astNiftyTrendIndicesSelect', 'astNiftyTrendIndicesAdd',
+     'astNiftyTrendBullTplSel', 'astNiftyTrendBullTplAdd', 'astNiftyTrendBearTplSel', 'astNiftyTrendBearTplAdd'].forEach(id => {
       const el = $id(id);
       if (el) { el.disabled = !active; el.style.opacity = active ? '1' : '0.5'; }
     });
+    refreshTrendTplSelects();
+    renderTrendTplChips();
     const nBtn = $id('astNiftyTrendToggle');
     if (nBtn && simOn) {
       nBtn.textContent = 'Trend Follow: OFF - Simulation on';
@@ -3479,7 +3489,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function toggleNiftyTrend() {
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
     state.niftyTrend.enabled = !state.niftyTrend.enabled;
     /* Mutually exclusive with Top Gainers / Losers + Indices: enabling trend
        following switches the paper engine into trend mode, so the movers
@@ -3492,6 +3502,7 @@ window.createAISmartTrading = function (suffix) {
     applyMoversToUI();
     applySimToUI();
     applyCommodityToUI();
+    renderPickedStrikes();
     log('NIFTY trend-following trading ' + (state.niftyTrend.enabled ? 'enabled' : 'disabled'), state.niftyTrend.enabled ? 'ok' : 'warn');
   }
 
@@ -3517,6 +3528,7 @@ window.createAISmartTrading = function (suffix) {
     applyNiftyTrendToUI();
     applyMoversToUI();
     applyCommodityToUI();
+    renderPickedStrikes();
     log('Simulation chart trading ' + (state.sim.enabled ? 'enabled' : 'disabled'), state.sim.enabled ? 'ok' : 'warn');
   }
 
@@ -3680,9 +3692,9 @@ window.createAISmartTrading = function (suffix) {
       if (nb && nb.overall && nb.current) {
         const o = nb.overall === 'BULL' ? 'Bullish' : nb.overall === 'BEAR' ? 'Bearish' : 'Range';
         const c = nb.current === 'BULL' ? 'Bullish' : nb.current === 'BEAR' ? 'Bearish' : 'Flat';
-        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend is <b style="color:#e67e22">' + o + ' (overall) / ' + c + ' (current)</b> - the two layers do NOT agree, so there is <b style="color:#e67e22">no directional bias</b> right now (waiting for overall + current to agree) - no directional F&O stocks picked' + idxNote + '.</div>';
+        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend is <b style="color:#e67e22">' + o + ' (overall) / ' + c + ' (current)</b> - the two layers do NOT agree, so there is <b style="color:#e67e22">no directional bias</b> right now (waiting for overall + current to agree) - no directional F&O stocks picked' + idxNote + '.</div>' + trendTplStatusHtml();
       } else {
-        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend unknown yet (waiting for the live feed) - no directional F&O stocks picked' + idxNote + '.</div>';
+        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend unknown yet (waiting for the live feed) - no directional F&O stocks picked' + idxNote + '.</div>' + trendTplStatusHtml();
       }
       return;
     }
@@ -3722,7 +3734,7 @@ window.createAISmartTrading = function (suffix) {
     const idx = (nt.includeIndices && Array.isArray(nt.indices)) ? nt.indices.map(s => displayName(s)) : [];
     if (idx.length) html += '<div style="color:#888;font-size:9px;margin-top:2px">Indices included: ' + idx.join(', ') + '</div>';
     host.style.display = '';
-    host.innerHTML = html;
+    host.innerHTML = html + trendTplStatusHtml();
   }
 
 
@@ -5941,22 +5953,26 @@ window.createAISmartTrading = function (suffix) {
     const tstr = (window.IST12 && IST12.fmtCandle) ? IST12.fmtCandle(c && c.time ? c.time : 0) : String((c && c.time ? c.time : 0));
     const parts = [];
     /* AI Brain diagnostic line (one per brain pseudo-condition found): the live
-       weighted confluence score / opposite evidence vs the mode's bar, so a
-       soft entry that is waiting is explainable. */
+       weighted confluence score / opposite evidence vs the merged AUTO bar, so
+       a soft entry that is waiting is explainable. */
     const brainDiag = (bc) => {
       if (!bc) return;
       const mode = brainModeName();
       const res = brainAnalyze(bc._brain, i, candles);
       const sc = (res && res.score != null) ? res.score : null;
-      if (mode === 'decision' && !bc._weakGate) {
-        const o = (bc._opp && bc._opp.length) ? brainAnalyze(bc._opp, i, candles) : null;
-        const conflict = brainConflict(bc, res, i, candles);
-        parts.push((conflict ? 'FAIL' : 'PASS') + ' AI-Brain decision score=' + (sc == null ? '--' : sc + '%') +
-          ' opp=' + (o && o.score != null ? o.score + '%' : '--') + ' conflict<' + BRAIN_CONFLICT_FLOOR + '%');
-      } else {
-        const need = (mode === 'decision') ? BRAIN_CONFLICT_FLOOR : brainThresholdPct();
+      const o = (bc._opp && bc._opp.length) ? brainAnalyze(bc._opp, i, candles) : null;
+      const osc = (o && o.score != null) ? o.score : null;
+      const conflict = !bc._weakGate && brainConflict(bc, res, i, candles);
+      if (conflict) {
+        parts.push('FAIL AI-Brain auto CONFLICT-VETO score=' + (sc == null ? '--' : sc + '%') + ' opp=' + (osc == null ? '--' : osc + '%') + ' floor>=' + BRAIN_CONFLICT_FLOOR + '%');
+      } else if (bc._weakGate) {
+        const need = brainThresholdPct();
         const pass = sc != null && sc >= need;
-        parts.push((pass ? 'PASS' : 'FAIL') + ' AI-Brain [' + mode + '] confluence=' + (sc == null ? '--' : sc + '%') + ' need>=' + need + '%');
+        parts.push((pass ? 'PASS' : 'FAIL') + ' AI-Brain auto confluence=' + (sc == null ? '--' : sc + '%') + ' need>=' + need + '%');
+      } else {
+        const need = brainThresholdPct();
+        const pass = sc != null && sc >= need;
+        parts.push((pass ? 'PASS' : 'FAIL') + ' AI-Brain auto confluence=' + (sc == null ? '--' : sc + '%') + ' need>=' + need + '% opp=' + (osc == null ? '--' : osc + '%'));
       }
     };
     if (s.entry && !isComplexCond(s.entry)) {
@@ -7155,7 +7171,7 @@ window.createAISmartTrading = function (suffix) {
 
   function startPoll() {
     if (_pollTimer) clearInterval(_pollTimer);
-    _pollTimer = setInterval(() => { tick(); refreshNiftyStatus(); renderMoversList(); renderNiftyTrendList(); renderPickedStrikes(); if (state.dataPool) poolScan(); syncFastDataUI(); renderBrainSummary(); }, POLL_MS);
+    _pollTimer = setInterval(() => { tick(); refreshNiftyStatus(); renderMoversList(); renderNiftyTrendList(); renderPickedStrikes(); if (state.dataPool) poolScan(); syncFastDataUI(); renderBrainSummary(); refreshTrendTplSelects(); renderTrendTplChips(); }, POLL_MS);
   }
   function stopPoll() {
     if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
@@ -7756,13 +7772,28 @@ window.createAISmartTrading = function (suffix) {
     host.innerHTML = html;
   }
 
+  /* Auto-visible Picked Strikes section: shown by default whenever one of the
+     engine's auto-picking sources is running - the daily Top Movers universe
+     (top gainers / top losers) or the NIFTY trend-following universe. The old
+     manual "Picked Strikes: ON/OFF" toggle button was removed, so visibility is
+     now derived from these modes instead of a saved user preference. */
+  function strikesSourceOn() {
+    return !!((state.movers && state.movers.enabled) || (state.niftyTrend && state.niftyTrend.enabled));
+  }
+
   /* Live list of the option strikes the engine picked up to execute paper trade
      / backtest. Each symbol shows its resolved CE / PE strikes with the live
      premium, exactly as contractsFor() resolved them for the current run. */
   function renderPickedStrikes() {
     const host = $id('astStrikesList');
+    const sec = $id('astStrikesSection');
     if (!host) return;
-    if (!state.showPickedStrikes) { host.style.display = 'none'; return; }
+    if (!strikesSourceOn()) {
+      if (sec) sec.style.display = 'none';
+      host.style.display = 'none';
+      return;
+    }
+    if (sec) sec.style.display = '';
     host.style.display = '';
     if (!_pickedStrikes.size) {
       host.innerHTML = '<span style="color:#888">No strikes picked up yet - run paper trading / backtest to resolve the option strikes.</span>';
@@ -7786,18 +7817,6 @@ window.createAISmartTrading = function (suffix) {
     });
     if (!html) html = '<span style="color:#888">No strikes picked up yet - run paper trading / backtest to resolve the option strikes.</span>';
     host.innerHTML = html;
-  }
-
-  function toggleStrikes() {
-    state.showPickedStrikes = !state.showPickedStrikes;
-    save();
-    const btn = $id('astStrikesToggle');
-    if (btn) {
-      btn.textContent = 'Picked Strikes: ' + (state.showPickedStrikes ? 'ON' : 'OFF');
-      btn.style.background = state.showPickedStrikes ? '#00d4aa' : '#e67e22';
-    }
-    renderPickedStrikes();
-    log('Picked strikes list ' + (state.showPickedStrikes ? 'enabled' : 'disabled'), state.showPickedStrikes ? 'ok' : 'warn');
   }
 
   /* ---------------- UI sync ---------------- */
@@ -7902,11 +7921,6 @@ window.createAISmartTrading = function (suffix) {
     applyNiftyTrendToUI();
     applySimToUI();
     applyModeToUI();
-    const stBtn = $id('astStrikesToggle');
-    if (stBtn) {
-      stBtn.textContent = 'Picked Strikes: ' + (state.showPickedStrikes ? 'ON' : 'OFF');
-      stBtn.style.background = state.showPickedStrikes ? '#00d4aa' : '#e67e22';
-    }
     renderPickedStrikes();
     const t = $id('astAutoToggle');
     if (t) { t.textContent = 'AI Smart Trading: ' + (state.enabled ? 'ON' : 'OFF'); t.style.background = state.enabled ? '#00d4aa' : '#e67e22'; }
@@ -9080,6 +9094,11 @@ window.createAISmartTrading = function (suffix) {
 
   /* ---------------- actions ---------------- */
   function toggleAuto() {
+    const turningOn = !state.enabled;
+    /* Enabling auto-trading on a NIFTY trend side that has assigned templates
+       also rotates to the next assigned template (same run-start cycle as the
+       explicit Run buttons). */
+    if (turningOn && _trendTplRedirect()) return;
     state.enabled = !state.enabled;
     if (state.enabled) {
       state.runIntent = { active: true, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
@@ -9110,6 +9129,7 @@ window.createAISmartTrading = function (suffix) {
     applySimToUI();
     applyCommodityToUI();
     renderMoversList();
+    renderPickedStrikes();
     log('Daily top gainers/losers + indices AI Smart Trading ' + (state.movers.enabled ? 'enabled' : 'disabled'), state.movers.enabled ? 'ok' : 'warn');
   }
 
@@ -9157,6 +9177,10 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function runPaper() {
+    /* NIFTY trend side with assigned templates: this run start rotates to the
+       next template of the confirmed side and starts under ITS settings instead
+       of the manual ones (see _trendTplRedirect). */
+    if (_trendTplRedirect()) return;
     readUniversal();
     // "Run Paper Trading" runs the strategies the user ticked. Turn off the
     // dynamic "Smart AI trader picked" auto-picker (which re-picks top-N every
@@ -9184,6 +9208,10 @@ window.createAISmartTrading = function (suffix) {
      trail TP / fixed TP / lots / margin / AI risk / time gates) apply exactly
      like the normal Run Paper Trading mode. */
   function runFilterPaper() {
+    /* NIFTY trend side with assigned templates: this run start rotates to the
+       next template of the confirmed side and starts under ITS settings instead
+       of the manual ones (see _trendTplRedirect). */
+    if (_trendTplRedirect()) return;
     readUniversal();
     state.filterMode = true;
     state.aiPick = false;
@@ -9568,6 +9596,10 @@ window.createAISmartTrading = function (suffix) {
     el.innerHTML = '<option value="">-- none --</option>' + tplLoad().map(t =>
       '<option value="' + esc(t.id) + '">' + esc(t.name) + ' (' + esc(t.mode) + ')</option>').join('');
     refreshQuickRunSelects();
+    /* A template save/delete changes what the NIFTY trend assign dropdowns can
+       pick, so refresh them together with the quick-run selects. */
+    refreshTrendTplSelects();
+    renderTrendTplChips();
   }
 
   /* Fill one "AST saved templates quick run" <select> with every saved engine
@@ -9649,6 +9681,173 @@ window.createAISmartTrading = function (suffix) {
       return '<option value="' + esc(String(t.id)) + '">' + esc(String(t.name)) + ' (' + esc(t.mode || '') + ') · ' + modeLabel(rm) + (n ? ' · ' + n + ' strat' : '') + '</option>';
     }).join('');
     if (cur && el.querySelector('option[value="' + cur + '"]')) el.value = cur;
+  }
+
+  /* ---------------- NIFTY trend-following: assign saved engine templates ----------------
+     Pick saved AST engine-settings templates (algodhan_ast_templates_v1) per
+     NIFTY direction and assign them to that side. While NIFTY trend-following is
+     ON, the operative side's assigned templates drive the run: each run start
+     applies the NEXT template in that side's cycle (its saved settings, ticked
+     strategies and saved run mode - normal / Indicator-filters / AI auto-pick)
+     instead of the manual settings, and advances the cycle one template per run
+     start (first ever run -> the first assigned template). The engine's own
+     trend CE/PE symbol picking keeps running untouched - the template only
+     configures HOW that side trades. When no template is assigned to the
+     operative side, the manual settings path is exactly unchanged. */
+
+  function _trendAssignArr(side) {
+    const nt = state.niftyTrend || {};
+    const arr = side === 'bearish' ? nt.bearTpls : nt.bullTpls;
+    return Array.isArray(arr) ? arr : [];
+  }
+  function _trendTplSideName(side) { return side === 'bearish' ? 'Bearish' : 'Bullish'; }
+
+  /* Every assigned template id that still exists in the saved-template library
+     (ids of templates deleted since the assignment are skipped everywhere). */
+  function _trendAssignedTpls(side) {
+    const lib = tplLoad();
+    return _trendAssignArr(side).map(id => lib.find(t => String(t.id) === String(id))).filter(Boolean);
+  }
+  function _trendTplRunMode(t) {
+    const st = (t.settings && typeof t.settings === 'object') ? t.settings : {};
+    const rm = st.runMode || (st.filterMode === true ? 'filter' : (st.aiPick === true ? 'aipick' : 'normal'));
+    return rm === 'filter' ? 'Indicator-filters' : (rm === 'aipick' ? 'AI auto-pick' : 'strategies');
+  }
+
+  /* Fill one side's "assign template" <select> with every saved engine template.
+     Repopulation is skipped when the template set + assigned flags did not
+     change (dataset.tplIds cache), so a template saved in the Template bar
+     shows up here on the next UI refresh. */
+  function fillTrendTplSelect(side) {
+    const el = $id(side === 'bearish' ? 'astNiftyTrendBearTplSel' : 'astNiftyTrendBullTplSel');
+    if (!el) return;
+    const list = tplLoad();
+    const assigned = _trendAssignArr(side).map(x => String(x));
+    const rows = list.map(t => ({
+      id: String(t.id),
+      label: esc(String(t.name)) + ' (' + esc(t.mode || '') + ') · ' + _trendTplRunMode(t) +
+        (assigned.indexOf(String(t.id)) >= 0 ? ' · assigned' : '')
+    }));
+    const sig = rows.map(r => r.id + '~' + r.label).join('|');
+    if (el.dataset.tplIds === sig) return;
+    el.dataset.tplIds = sig;
+    const cur = el.value;
+    if (!rows.length) { el.innerHTML = '<option value="">-- no saved templates --</option>'; return; }
+    el.innerHTML = '<option value="">-- select template --</option>' + rows.map(r =>
+      '<option value="' + r.id + '">' + r.label + '</option>').join('');
+    if (cur && el.querySelector('option[value="' + esc(cur) + '"]')) el.value = cur;
+  }
+  function refreshTrendTplSelects() { fillTrendTplSelect('bullish'); fillTrendTplSelect('bearish'); }
+
+  /* +Assign the template picked in one side's dropdown to that NIFTY direction
+     (dedup; order = the run-start cycle). */
+  function assignTrendTemplate(side) {
+    const sel = $id(side === 'bearish' ? 'astNiftyTrendBearTplSel' : 'astNiftyTrendBullTplSel');
+    const id = sel ? String(sel.value || '') : '';
+    if (!id) { log('Pick a saved engine-settings template to assign to the NIFTY ' + _trendTplSideName(side) + ' side first', 'warn'); return; }
+    const t = tplLoad().find(x => String(x.id) === id);
+    if (!t) return;
+    const key = side === 'bearish' ? 'bearTpls' : 'bullTpls';
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], bullTpls: [], bearTpls: [] };
+    if (!Array.isArray(state.niftyTrend[key])) state.niftyTrend[key] = [];
+    if (state.niftyTrend[key].indexOf(id) >= 0) {
+      log('Template "' + t.name + '" is already assigned to the NIFTY ' + _trendTplSideName(side) + ' side', 'warn');
+      return;
+    }
+    state.niftyTrend[key].push(id);
+    save();
+    refreshTrendTplSelects();
+    renderTrendTplChips();
+    log('Template "' + t.name + '" (' + t.mode + ') assigned to NIFTY ' + _trendTplSideName(side) + ' side - it drives the next NIFTY ' + _trendTplSideName(side).toLowerCase() + ' run start (cycle position ' + state.niftyTrend[key].length + ')', 'ok');
+  }
+
+  /* Remove one assigned template (chip &times;) from a NIFTY direction. */
+  function removeTrendTemplate(side, id) {
+    const key = side === 'bearish' ? 'bearTpls' : 'bullTpls';
+    if (!state.niftyTrend || !Array.isArray(state.niftyTrend[key])) return;
+    const before = state.niftyTrend[key].length;
+    state.niftyTrend[key] = state.niftyTrend[key].filter(x => String(x) !== String(id));
+    save();
+    refreshTrendTplSelects();
+    renderTrendTplChips();
+    if (state.niftyTrend[key].length !== before) log('Template removed from the NIFTY ' + _trendTplSideName(side) + ' side assignments', '');
+  }
+
+  /* Chip rows for each side's assigned templates (name · saved run mode) with a
+     per-chip &times; remove, mirroring the trend indices chips. */
+  function renderTrendTplChips() {
+    ['bullish', 'bearish'].forEach(side => {
+      const el = $id(side === 'bearish' ? 'astNiftyTrendBearTplList' : 'astNiftyTrendBullTplList');
+      if (!el) return;
+      const tpls = _trendAssignedTpls(side);
+      el.innerHTML = tpls.length
+        ? tpls.map(t => '<span style="display:inline-flex;align-items:center;gap:4px;background:#1a1a35;border:1px solid #2d2d50;color:#ffd700;border-radius:3px;padding:2px 6px;font-size:9px;margin:1px">' + esc(String(t.name)) + ' (' + esc(t.mode || '') + ') <b style="color:#00d4aa">' + _trendTplRunMode(t) + '</b>' +
+          ' <a href="javascript:void(0)" style="color:#ef5350;font-weight:700;text-decoration:none;font-size:11px" title="Remove from ' + _trendTplSideName(side) + ' assignments" onclick="AISmartTrading.removeTrendTemplate(\'' + side + '\', \'' + String(t.id) + '\')">&times;</a></span>').join('')
+        : '<span style="color:#666">none assigned - manual engine settings run as usual</span>';
+    });
+  }
+
+  /* Status line appended to the NIFTY trend live preview: the per-direction
+     assigned template cycle and which side currently drives the next run start. */
+  function trendTplStatusHtml() {
+    const nt = state.niftyTrend || {};
+    if (!nt.enabled) return '';
+    const activeSide = _lastNiftyDir === 'bullish' ? 'bullish' : (_lastNiftyDir === 'bearish' ? 'bearish' : null);
+    const parts = [];
+    ['bullish', 'bearish'].forEach(s => {
+      const tpls = _trendAssignedTpls(s);
+      if (!tpls.length) return;
+      /* The template the NEXT run start of this side would apply (mirror of the
+         redirect cursor math, so the preview always matches the actual cycle). */
+      const nt = state.niftyTrend || {};
+      const last = nt.tplCursor && nt.tplCursor[s];
+      let li = -1;
+      if (last) li = tpls.findIndex(t => String(t.id) === String(last));
+      const nextTpl = tpls[(li + 1) % tpls.length];
+      const mark = activeSide === s ? ' <b style="color:#00d4aa">- this side now: next run applies "' + esc(String(nextTpl.name)) + '"</b>' : '';
+      parts.push('<b style="color:#00d4aa">' + _trendTplSideName(s) + ':</b> ' + tpls.map(t =>
+        esc(String(t.name)) + ' <span style="color:#888">(' + _trendTplRunMode(t) + ')</span>').join(' &middot; ') + mark);
+    });
+    if (!parts.length) return '';
+    return '<div style="border-top:1px dashed #2d2d50;margin-top:4px;padding-top:3px"><span style="color:#b39ddb;font-weight:700">Assigned AST templates:</span> ' + parts.join(' &nbsp;|&nbsp; ') +
+      ' <div style="color:#666;margin-top:2px">Each NIFTY run start applies the next assigned template of the confirmed side (its saved settings + ticked strategies + run mode); trend CE/PE picking stays automatic. No template on a side = manual engine settings.</div></div>';
+  }
+
+  /* ---------------- run-start template cycle for the NIFTY trend side ----------------
+     While NIFTY trend-following is ON with a confirmed direction, starting the
+     engine (Run Paper Trading / Indicator-filters / AI auto-pick) rotates to the
+     NEXT assigned template of that side (round-robin, one per run start). The
+     redirect never fires when the run originates from an explicit template run
+     (quick-run dropdown / runTemplateById) - that always keeps the user's chosen
+     template. */
+  let _insideTemplateRun = false;
+
+  function _trendOperativeSide() {
+    const nt = state.niftyTrend || {};
+    if (!nt.enabled) return null;
+    if (_lastNiftyDir === 'bullish') return 'bullish';
+    if (_lastNiftyDir === 'bearish') return 'bearish';
+    return null;
+  }
+
+  function _trendTplRedirect() {
+    if (_insideTemplateRun) return false;
+    const side = _trendOperativeSide();
+    if (!side) return false;
+    const list = _trendAssignedTpls(side);
+    if (!list.length) return false;
+    /* Cursor = the id used by the last trend-side run start; the next run start
+       moves one template forward in the cycle. */
+    const last = state.niftyTrend.tplCursor && state.niftyTrend.tplCursor[side];
+    let i = -1;
+    if (last) i = list.findIndex(t => String(t.id) === String(last));
+    const next = list[(i + 1) % list.length];
+    if (!state.niftyTrend.tplCursor) state.niftyTrend.tplCursor = {};
+    state.niftyTrend.tplCursor[side] = String(next.id);
+    save();
+    log('NIFTY trend ' + _trendTplSideName(side).toLowerCase() + ': run start applies assigned template "' + next.name + '" (' + next.mode + ') - next in the assigned cycle', 'ok');
+    runTemplateById(next.id);
+    return true;
   }
 
   /* Deep copies of every strategy currently TICKED (state.selected[id] true)
@@ -9814,6 +10013,10 @@ window.createAISmartTrading = function (suffix) {
      variant of runPaper - keeps aiPick ON so activeStrategies() re-picks the
      top-N strategies every tick instead of only running manual ticks). */
   function startAiPickRun() {
+    /* NIFTY trend side with assigned templates: this run start rotates to the
+       next template of the confirmed side and starts under ITS settings instead
+       of the manual ones (see _trendTplRedirect). */
+    if (_trendTplRedirect()) return;
     readUniversal();
     state.filterMode = false;
     state.aiPick = true;
@@ -9861,9 +10064,23 @@ window.createAISmartTrading = function (suffix) {
     return restored;
   }
 
+  /* runTemplateById wrapper: while a template run is being started (explicit
+     quick-run OR a NIFTY trend-side cycle start) _insideTemplateRun is set, so
+     the run starters never re-redirect into the trend cycle and an explicit
+     template choice is always honoured. */
+  function runTemplateById(id) {
+    const prev = _insideTemplateRun;
+    _insideTemplateRun = true;
+    try {
+      return runTemplateByIdInner(id);
+    } finally {
+      _insideTemplateRun = prev;
+    }
+  }
+
   /* Apply a saved engine template and start the engine running it. Shared by
      the quick-run control (runTemplateById(id)) and reusable programmatically. */
-  function runTemplateById(id) {
+  function runTemplateByIdInner(id) {
     const t = tplLoad().find(x => String(x.id) === String(id));
     if (!t) {
       log('Template not found - save it again from the AI Smart Template bar', 'warn');
@@ -9940,6 +10157,8 @@ window.createAISmartTrading = function (suffix) {
     addNiftyTrendIndex,
     removeNiftyTrendIndex,
     renderNiftyTrendList,
+    assignTrendTemplate,
+    removeTrendTemplate,
     onFiltersInput() { readFiltersUI(); },
     /* "All indicators & filters together" mode: ON = the strategy's entry fires
        only when every selected indicator/filter AND its own conditions pass
@@ -9990,12 +10209,12 @@ window.createAISmartTrading = function (suffix) {
         : 'OFF - every selected row returns to a strict-AND gate (historical behavior)'), state.overallDirIdea !== false ? 'ok' : 'warn');
     },
     overallDirEnabled() { return state.overallDirIdea !== false; },
-    /* AI Brain mode select (off / analysis / decision) - see brainSetMode for
-       the meaning of each mode. */
+    /* AI Brain mode select (off / auto - the old 'analysis' and 'decision'
+       options were merged into one 'auto' mode; see brainSetMode). */
     onBrainMode() {
       const el = $id('astBrainMode');
       let m = el ? el.value : 'off';
-      if (m !== 'analysis' && m !== 'decision') m = 'off';
+      if (m !== 'auto') m = 'off';
       const tEl = $id('astBrainThreshold');
       brainSetMode(m, tEl ? Number(tEl.value) : 65);
     },
@@ -10011,7 +10230,7 @@ window.createAISmartTrading = function (suffix) {
     brainMode() { return brainModeName(); },
     brainThreshold() { return brainThresholdPct(); },
     /* Legacy boolean shims (kept so any old toolbar markup still works). */
-    setBrain(en, th) { return brainSetMode(en === true ? 'analysis' : 'off', th); },
+    setBrain(en, th) { return brainSetMode(en === true ? 'auto' : 'off', th); },
     brainEnabled() { return brainModeOn(); },
     /* Direction-matched filter conditions built for a strategy template (also
        exposed for the Auto Experiment engine). */
@@ -10044,7 +10263,6 @@ window.createAISmartTrading = function (suffix) {
     removePickedMover,
     renderMoversList,
     renderPickedStrikes,
-    toggleStrikes,
     onStrategyCheck,
     onGlobalRunInInput,
     /* Current auto-selected CE/PE side for the Run Strategy In override of a

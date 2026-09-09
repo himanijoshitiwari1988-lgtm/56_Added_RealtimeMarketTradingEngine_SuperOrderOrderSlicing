@@ -1426,6 +1426,21 @@ window.IST12 = (function () {
             <button class="btn-action" id="astNiftyTrendIndicesAdd" style="width:auto;padding:3px 10px;margin:0 6px 0 4px" onclick="AISmartTrading.addNiftyTrendIndex()">Add</button>
             <span id="astNiftyTrendIndicesList" style="font-size:9px;color:#ccc;display:flex;flex-wrap:wrap;gap:4px;align-items:center"></span>
           </div>
+          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
+            <div style="font-size:9px;color:#b39ddb;margin-right:10px" title="Assign saved AST engine-settings templates to each NIFTY direction. While NIFTY Trend Following is ON, every run start on a confirmed side applies the NEXT assigned template of that side (its saved settings + ticked strategies + saved run mode - strategies / Indicator-filters / AI auto-pick) instead of the manual settings; trend CE/PE picking stays automatic. No template assigned to a side = manual engine settings run as usual."><b style="color:#b39ddb">Assign AST Template to direction:</b></div>
+            <label style="font-size:9px;color:#00d4aa;margin-right:6px">NIFTY bullish &rarr; template
+              <select id="astNiftyTrendBullTplSel" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px;min-width:150px;max-width:230px"><option value="">-- no saved templates --</option></select>
+            </label>
+            <button class="btn-action" id="astNiftyTrendBullTplAdd" style="width:auto;padding:3px 10px;margin:0 6px 0 4px" onclick="AISmartTrading.assignTrendTemplate('bullish')">Assign</button>
+            <div id="astNiftyTrendBullTplList" style="width:100%;margin-top:2px;font-size:9px"></div>
+          </div>
+          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:4px;align-items:center">
+            <label style="font-size:9px;color:#ef5350;margin-right:6px">NIFTY bearish &rarr; template
+              <select id="astNiftyTrendBearTplSel" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px;min-width:150px;max-width:230px"><option value="">-- no saved templates --</option></select>
+            </label>
+            <button class="btn-action" id="astNiftyTrendBearTplAdd" style="width:auto;padding:3px 10px;margin:0 6px 0 4px" onclick="AISmartTrading.assignTrendTemplate('bearish')">Assign</button>
+            <div id="astNiftyTrendBearTplList" style="width:100%;margin-top:2px;font-size:9px"></div>
+          </div>
           <div id="astNiftyTrendList" style="display:none;margin-top:6px;font-size:9px;color:#ccc;line-height:1.7;background:#12122a;border:1px solid #2d2d50;border-radius:4px;padding:6px 8px"></div>
           <div style="font-size:8px;color:#666;margin-top:4px">Trend + F&O top gainer/loser scan re-runs every 1 minute; any picked stock falling below the min % is dropped from trading immediately (open positions closed).</div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
@@ -1445,19 +1460,18 @@ window.IST12 = (function () {
             <span id="astCommodityStatus" style="font-size:9px;color:#888">Add MCX commodity futures to paper-trade them directly (spot mode), alongside stocks / F&O.</span>
             <div id="astCommodityList" style="width:100%;margin-top:4px"></div>
           </div>
-          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
+          <div id="astStrikesSection" class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center;display:none">
             <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Picked Strikes:</b></div>
-            <button class="btn-action" id="astStrikesToggle" style="width:auto;padding:5px 12px;margin:0 8px 0 0" onclick="AISmartTrading.toggleStrikes()">Picked Strikes: OFF</button>
-            <span style="font-size:8px;color:#666">Option strikes the engine picked up to execute paper trade / backtest</span>
+            <span style="font-size:8px;color:#666">Option strikes the engine picked up to execute paper trade / backtest (auto-shown while Top Movers / NIFTY Trend Follow is ON)</span>
           </div>
-          <div id="astStrikesList" style="display:none;margin-top:6px;font-size:9px;color:#ccc;line-height:1.7;background:#0e1626;border:1px solid #2d2d50;border-radius:4px;padding:6px 8px"></div>
+          <div id="astStrikesList" style="display:none;margin-top:0;font-size:9px;color:#ccc;line-height:1.7;background:#0e1626;border:1px solid #2d2d50;border-radius:4px;padding:6px 8px"></div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:flex-start">
             <div style="font-size:9px;color:#888;margin-right:10px;padding-top:4px"><b style="color:#ffd700">Indicator filters:</b></div>
             <label style="font-size:9px;color:#ffd700;margin-right:10px;padding-top:4px;display:flex;align-items:center;gap:3px" title="ON: the strategy's entry fires ONLY when every selected indicator/filter AND the strategy's own conditions pass together on the same bar (strict AND - no partial N-of-M). OFF: the old default entry behavior (N-of-M threshold)."><input type="checkbox" id="astAllInOne" onchange="AISmartTrading.onAllInOne()" style="accent-color:#ffd700"> All together (strict AND)</label>
             <label style="font-size:9px;color:#8fceff;margin-right:10px;padding-top:4px;display:flex;align-items:center;gap:3px" title="ON: an entry fires ONLY on the bar where the whole condition set FIRST completes holding together (it holds now but did NOT hold on the previous bar) - a stale alignment that has already been holding for many bars never triggers a late entry; the next trade waits until the set breaks and meets freshly again. OFF (default): level-based - an entry fires as soon as the set holds on the current bar."><input type="checkbox" id="astFreshMeet" onchange="AISmartTrading.onFreshMeet()" style="accent-color:#8fceff"> Fresh-meet bar entry</label>
             <label style="font-size:9px;color:#80deea;margin-right:10px;padding-top:4px;display:flex;align-items:center;gap:3px" title="Direction Guard (AST only): NO trade while the live market direction on the strategy's own chart is opposite - even if every own condition / filter just crossed and is met. Direction is measured by price action + the EMA9/21 stack + Supertrend(10,3) votes; blocked only on a clear opposite majority (>=3 opposite votes)."><input type="checkbox" id="astDirGuard" onchange="AISmartTrading.onDirGuard()" style="accent-color:#80deea"> Direction Guard (no trade on opposite)</label>
             <label style="font-size:9px;color:#ffe0b2;margin-right:10px;padding-top:4px;display:flex;align-items:center;gap:3px" title="Overall Bullish/Bearish idea (indicator-filter mode only, ON by default): the single-line DIRECTION / FACING logic inside the rows you select (Direction upward/downward and (all), Pane all-lines direction, PB Group-1 mirror, OI Trend direction, Overlay/OBR line direction, and the rising/falling FACING of the slow EMA in the EMA-ladder cross & Meet rows, the higher-factor Supertrend in the Supertrend twin cross & Meet rows, the ST(10,1)/VWAP line in the close-vs-ST / close-vs-VWAP cross & Meet rows, the BB/PC middle band in the close-vs-BB / close-vs-PC cross & Meet rows) is no longer its own strict-AND gate - each becomes ONE vote into a single overall direction idea that vetoes a filter-mode entry ONLY on a strongly-opposite market (>=3 decided opposite votes). Every row still keeps its structural gate strict: the crossover / level / comparison of the row itself runs as a strict-AND gate exactly as before (only its direction/facing sub-cond votes). Pure EVENT / structural rows (Pane crossover, pane-pair level, Volume Line, Volume Line Meet, BBW strength, SMF, ASR, Gap, Greater/Lesser, PBG, the 3-line ADX row) keep their strict gates untouched. OFF = every selected row returns to a strict-AND gate (historical behavior exactly)."><input type="checkbox" id="astOverallDir" checked onchange="AISmartTrading.onOverallDir()" style="accent-color:#ffe0b2"> Overall Bullish/Bearish idea</label>
-            <label style="font-size:9px;color:#f8bbd0;margin-right:6px;padding-top:4px;display:flex;align-items:center;gap:3px" title="AI Brain mode (3 modes, shared with the Auto Experiment toolbar). OFF = filters stay strict AND gates (default, historical). ANALYSIS = filters become soft weighted-confluence signals: an entry is POSSIBLE when the confluence score (weighted by freshness of each holding filter) is >= the threshold on the right; the strategy's own conditions stay mandatory. DECISION = the strategy's conditions run strict; filters are advisory only and the brain VETOES an entry only on a clear opposite-direction conflict. Evaluated in tens of microseconds per bar.">AI Brain <select id="astBrainMode" onchange="AISmartTrading.onBrainMode()" style="background:#1a1a35;border:1px solid #2d2d50;color:#f8bbd0;border-radius:3px;padding:1px 3px;font-size:9px"><option value="off">OFF</option><option value="analysis">Analysis (score)</option><option value="decision">Decision (veto)</option></select></label>
+            <label style="font-size:9px;color:#f8bbd0;margin-right:6px;padding-top:4px;display:flex;align-items:center;gap:3px" title="AI Brain mode (shared with the Auto Experiment toolbar). OFF = filters stay strict AND gates (default, historical). AUTO = the old Analysis and Decision modes are merged into ONE mode and the brain itself decides: an entry is POSSIBLE when the confluence score (weighted by freshness of each holding filter) is >= the threshold on the right, and it VETOES an entry when opposite-direction filters hold strongly (a clear conflict). The strategy's own conditions stay mandatory. Evaluated in tens of microseconds per bar.">AI Brain <select id="astBrainMode" onchange="AISmartTrading.onBrainMode()" style="background:#1a1a35;border:1px solid #2d2d50;color:#f8bbd0;border-radius:3px;padding:1px 3px;font-size:9px"><option value="off">OFF</option><option value="auto">Auto (score + conflict veto)</option></select></label>
             <label style="font-size:9px;color:#f8bbd0;margin-right:10px;padding-top:4px;display:flex;align-items:center;gap:3px" title="Confluence threshold in AI Brain ANALYSIS mode (5-100%). The engine treats an entry as possible when the weighted confluence score of the selected filters is >= this %. Lower = more possible entries, higher = stricter. In DECISION mode this field is ignored (the conflict floor is fixed at 30%).">threshold <input type="number" id="astBrainThreshold" min="5" max="100" step="1" value="65" onchange="AISmartTrading.onBrainThreshold()" style="width:44px;background:#1a1a35;border:1px solid #2d2d50;color:#f8bbd0;border-radius:3px;padding:1px 3px;font-size:9px">%</label>
             <div id="astBrainSummary" style="flex-basis:100%;font-size:9px;color:#b39ddb;margin-top:3px;line-height:1.5"></div>
             <div id="astFilterSectionBullish" style="border:1px solid #1f4a35;border-radius:4px;padding:4px 8px;margin-right:10px;background:#0e231a">
@@ -1500,7 +1514,7 @@ window.IST12 = (function () {
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAd" onchange="AISmartTrading.onFiltersInput()"> Detect bullish trend (A/D line)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrSmf" onchange="AISmartTrading.onFiltersInput()"> Detect bullish trend (SMF line)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line direction upward (bands expanding)</label>
+                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line direction upward (bands expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrAtrUp" onchange="AISmartTrading.onFiltersInput()"> ATR line direction upward (wide candles)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullPbrVoloscUp" onchange="AISmartTrading.onFiltersInput()"> VolOsc line direction upward (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
@@ -1573,7 +1587,7 @@ window.IST12 = (function () {
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAd" onchange="AISmartTrading.onFiltersInput()"> Detect bearish trend (A/D line)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrSmf" onchange="AISmartTrading.onFiltersInput()"> Detect bearish trend (SMF line)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Pane Indicator Behaviour - Group 2 & 3 (strength / participation - same in both lists)</div>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line direction upward (bands expanding)</label>
+                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrBbwUp" onchange="AISmartTrading.onFiltersInput()"> BBW line direction upward (bands expanding)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrAtrUp" onchange="AISmartTrading.onFiltersInput()"> ATR line direction upward (wide candles)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearPbrVoloscUp" onchange="AISmartTrading.onFiltersInput()"> VolOsc line direction upward (volume picking up)</label>
                 <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">Meet Condition (level - active while relationship holds, cross not required)</div>
@@ -1916,7 +1930,7 @@ window.IST12 = (function () {
             <label style="font-size:10px;color:#66ccff;display:flex;align-items:center;gap:4px;margin:0 8px 0 0" title="Enforced: SELL/short orders have been removed from all engines"><input type="checkbox" id="aeBuyOnly" checked disabled> Buy Only (Long Only) — ENFORCED</label>
             <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px"><input type="checkbox" id="aeRunManualToggle" onchange="AutoExperiment.toggleRunManual()"> Run auto experiment on manually saved strategies</label>
             <label style="font-size:10px;color:#ffd700;display:flex;align-items:center;gap:4px;margin:0 0 0 10px" title="ON: a strategy's entry fires ONLY when its own conditions AND every selected AST indicator filter pass together (strict AND). OFF: the old default entry behavior."><input type="checkbox" id="aeAllInOne" onchange="AutoExperiment.onAllInOne()" style="accent-color:#ffd700"> All indicators/filters together (strict AND)</label>
-            <label style="font-size:10px;color:#f8bbd0;display:flex;align-items:center;gap:4px;margin:0 0 0 10px" title="AI Brain mode (3 modes, shared with the AST engine). OFF = filters stay strict AND gates. ANALYSIS = filters become soft weighted-confluence signals gated by the threshold; strategy conditions stay mandatory. DECISION = strategy conditions run strict; filters advisory; the brain vetoes only a clear opposite-direction conflict.">AI Brain <select id="aeBrainMode" onchange="AutoExperiment.onBrainMode()" style="background:#1a1a35;border:1px solid #2d2d50;color:#f8bbd0;border-radius:3px;padding:1px 3px;font-size:10px"><option value="off">OFF</option><option value="analysis">Analysis (score)</option><option value="decision">Decision (veto)</option></select></label>
+            <label style="font-size:10px;color:#f8bbd0;display:flex;align-items:center;gap:4px;margin:0 0 0 10px" title="AI Brain mode (shared with the AST engine). OFF = filters stay strict AND gates. AUTO = the old Analysis and Decision modes are merged into ONE mode and the brain itself decides: entry possible when the weighted confluence score clears the threshold on the right, vetoed only on a clear opposite-direction conflict; strategy conditions stay strict.">AI Brain <select id="aeBrainMode" onchange="AutoExperiment.onBrainMode()" style="background:#1a1a35;border:1px solid #2d2d50;color:#f8bbd0;border-radius:3px;padding:1px 3px;font-size:10px"><option value="off">OFF</option><option value="auto">Auto (score + conflict veto)</option></select></label>
             <label style="font-size:10px;color:#f8bbd0;display:flex;align-items:center;gap:4px;margin:0 0 0 6px" title="Confluence threshold in AI Brain ANALYSIS mode (5-100%).">threshold <input type="number" id="aeBrainThreshold" min="5" max="100" step="1" value="65" onchange="AutoExperiment.onBrainThreshold()" style="width:44px;background:#1a1a35;border:1px solid #2d2d50;color:#f8bbd0;border-radius:3px;padding:1px 2px;font-size:10px">%</label>
             <div id="aeBrainSummary" style="flex-basis:100%;font-size:9px;color:#b39ddb;margin-top:3px;line-height:1.5"></div>
           </div>
@@ -5907,8 +5921,7 @@ const PaperTabs = {
     astAutoToggle: function(){ if(typeof AISmartTrading !== "undefined" && AISmartTrading.toggleAuto) AISmartTrading.toggleAuto(); },
     astMoversToggle: function(){ if(typeof AISmartTrading !== "undefined" && AISmartTrading.toggleMovers) AISmartTrading.toggleMovers(); },
     astNiftyTrendToggle: function(){ if(typeof AISmartTrading !== "undefined" && AISmartTrading.toggleNiftyTrend) AISmartTrading.toggleNiftyTrend(); },
-    astSimToggle: function(){ if(typeof AISmartTrading !== "undefined" && AISmartTrading.toggleSim) AISmartTrading.toggleSim(); },
-    astStrikesToggle: function(){ if(typeof AISmartTrading !== "undefined" && AISmartTrading.toggleStrikes) AISmartTrading.toggleStrikes(); }
+    astSimToggle: function(){ if(typeof AISmartTrading !== "undefined" && AISmartTrading.toggleSim) AISmartTrading.toggleSim(); }
   },
   _mirrorToggle(el, base){
     const orig = document.getElementById(base);
@@ -6414,10 +6427,10 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/trendconfirm.js?v=1"></script>
 <script src="/static/papertrade.js?v=67"></script>
 <script src="/static/strategy_container.js?v=16"></script>
- <script src="/static/autoexperiment.v13.js?v=178"></script>
+ <script src="/static/autoexperiment.v13.js?v=179"></script>
 <script src="/static/indextrend.js?v=4"></script>
 <script src="/static/simulator.js?v=3"></script>
-  <script src="/static/aismart.js?v=207"></script>
+  <script src="/static/aismart.js?v=213"></script>
 <script src="/static/paperrun.js?v=26"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6498,9 +6511,15 @@ window.__addNewIndicatorFilterRows = function () {
       pbg.forEach(function (p) {
         var lbl;
         if (p[0] === 'Smiio') {
-          lbl = side === 'Bullish'
-            ? p[1] + ' & Signal above Histogram, both direction upward (level - OR of widening / histogram rising)'
-            : p[1] + ' & Signal below Histogram, both direction downward (level - OR of widening / histogram falling)';
+          if (prefix === 'ast') {
+            lbl = side === 'Bullish'
+              ? p[1] + ' & Signal below Histogram, both direction downward & histogram falling (level)'
+              : p[1] + ' & Signal above Histogram, both direction upward & histogram rising (level)';
+          } else {
+            lbl = side === 'Bullish'
+              ? p[1] + ' & Signal above Histogram, both direction upward (level - OR of widening / histogram rising)'
+              : p[1] + ' & Signal below Histogram, both direction downward (level - OR of widening / histogram falling)';
+          }
         } else if (p[0] === 'Vortex') {
           lbl = side === 'Bullish'
             ? 'Vortex VI+ above VI-, VI+ direction upward & VI- direction downward, gap widening (level)'
