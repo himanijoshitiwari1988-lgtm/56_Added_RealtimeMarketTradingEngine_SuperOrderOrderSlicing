@@ -3896,11 +3896,11 @@ function liveQuoteForSymbol(symbolId, symbolExch){
   return (q && q.live && q.ltp != null) ? Number(q.ltp) : null;
 }
 
-/* THE single source of truth for a position's current price, shared by BOTH
-   the chart's running P&L label and the Running Trades list — chart/candle
-   based only, never the delayed live feed. When the position's symbol IS the
+/* chart/candle-close component of the canonical position current price:
+   chart/candle based only, never the delayed live feed. Used by positionMarkPrice
+   (below) as its no-live-feed fallback. When the position's symbol IS the
    chart currently on screen, its price is that chart's last candle close, so
-   Running Trades always equals exactly what the chart shows (including "no
+   the shared consumers always equal exactly what the chart shows (including "no
    candles yet" -> null, so an empty chart can never disagree). For off-chart
    positions it uses the shared candle cache (StratEngine). */
 function tradeChartPrice(pos){
@@ -3927,6 +3927,29 @@ function tradeChartPrice(pos){
     }
   }
   return best;
+}
+
+/* THE single canonical current-price for an open paper position's running P&L,
+   shared by EVERY consumer (the chart's live-P&L line label AND the AST
+   Running Trades rows / P&L summaries). Prefers the live feed quote; falls back
+   to the chart/candle close when no live tick exists yet. Because both the
+   chart and the Running Trades list call THIS exact function, their P&L can
+   never drift apart again. */
+function positionMarkPrice(p){
+  let lq = null;
+  if(p && p.symbolId != null && typeof liveQuoteForSymbol === 'function'){
+    try { lq = liveQuoteForSymbol(Number(p.symbolId), p.symbolExch); } catch(e){ lq = null; }
+  }
+  if(lq != null && lq > 0) return lq;
+  return tradeChartPrice(p);
+}
+/* Money P&L of a position at a given mark price. Single formula used by both
+   the chart running-P&L label and the Running Trades list so a trade is always
+   worth exactly the same number in both places. */
+function positionMoneyPnl(p, mark){
+  if(!p || p.entryPrice == null || !(mark > 0)) return null;
+  const qty = p.qty || 0;
+  return (p.side === 'BUY' ? (mark - p.entryPrice) : (p.entryPrice - mark)) * qty;
 }
 
 /* Trail-SL display guard. A BUY stop must always sit BELOW the market: the
@@ -3977,11 +4000,13 @@ function trailArmed(p, liveLtp){
 function liveLineTitle(p, ltp){
   if(!p || p.entryPrice == null || !(ltp > 0)) return null;
   const qty = p.qty || 0;
-  const pnl = p.side === 'BUY' ? (ltp - p.entryPrice) * qty : (p.entryPrice - ltp) * qty;
-  const pct = p.entryPrice > 0 ? (p.side === 'BUY' ? (ltp / p.entryPrice - 1) : (p.entryPrice / ltp - 1)) * 100 : 0;
-  let label = 'CHART ' + ltp.toFixed(2) + ' · ' + (pnl >= 0 ? '+' : '-') + '₹' + Math.abs(Math.round(pnl)).toLocaleString('en-IN') + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
+  const pnl = positionMoneyPnl(p, ltp);
+  /* Same money-based percent as the Running Trades list (pnl on entry notional)
+     so the chart line label and the table show identical %, too. */
+  const pct = (pnl != null && p.entryPrice > 0) ? (pnl / (p.entryPrice * qty)) * 100 : 0;
+  let label = 'CHART ' + ltp.toFixed(2) + ' \u00B7 ' + (pnl >= 0 ? '+' : '-') + '\u20B9' + Math.abs(Math.round(pnl)).toLocaleString('en-IN') + ' (' + (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%)';
   if(p.slTrailPct > 0 && p.stopLoss != null && p.stopLoss > 0){
-    label += ' · CUT@' + p.stopLoss.toFixed(2) + ' (trail ' + p.slTrailPct + '%)';
+    label += ' \u00B7 CUT@' + p.stopLoss.toFixed(2) + ' (trail ' + p.slTrailPct + '%)';
   }
   return label;
 }
@@ -4009,11 +4034,10 @@ function syncTradeChartLines(){
     add(base, subKey+":entry", p.entryPrice, p.side === "BUY" ? "#00d4aa" : "#ff5252", "ENTRY " + (p.symbol||"").slice(0,14), 0);
     const liveLtp = liveQuoteForSymbol(p.symbolId, p.symbolExch);
     const slLvl = trailSlDisplayLevel(p, liveLtp);
-    /* The chart's running-P&L label must use the SAME current price the Running
-       Trades list shows (live feed quote first, chart/candle close as the
-       fallback) - previously the label used only the chart close while Running
-       Trades used the live feed, so the two P&L figures drifted apart. */
-    const chartLtp = (liveLtp != null && liveLtp > 0) ? liveLtp : tradeChartPrice(p);
+    /* The chart's running-P&L label uses the SAME canonical current price as
+       the Running Trades list (positionMarkPrice: live feed quote first, chart/
+       candle close fallback) so the two P&L figures can never drift apart. */
+    const chartLtp = positionMarkPrice(p);
     const liveTitle = chartLtp != null ? liveLineTitle(p, chartLtp) : null;
     if(liveTitle) add(base, subKey+":live", chartLtp, "#00e5ff", liveTitle, 1);
     if(slLvl != null){
@@ -4042,7 +4066,7 @@ function syncTradeChartLines(){
     add(base, "manual:entry", p.entryPrice, "#00d4aa", "ENTRY", 0);
     const mpLive = liveQuoteForSymbol(p.symbolId != null ? p.symbolId : (selectedSymbol ? selectedSymbol.id : null),
                                       p.symbolExch != null ? p.symbolExch : (selectedSymbol ? selectedSymbol.exch : null));
-    const mpChartLtp = tradeChartPrice(p);
+    const mpChartLtp = positionMarkPrice(p);
     const mpLiveTitle = mpChartLtp != null ? liveLineTitle(p, mpChartLtp) : null;
     if(mpLiveTitle) add(base, "manual:live", mpChartLtp, "#00e5ff", mpLiveTitle, 1);
     const mpSlLvl = trailSlDisplayLevel(p, mpLive);
@@ -6426,12 +6450,12 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/aitrades.js?v=2"></script>
 <script src="/static/strategies.js?v=72"></script>
 <script src="/static/trendconfirm.js?v=1"></script>
-<script src="/static/papertrade.js?v=67"></script>
+<script src="/static/papertrade.js?v=68"></script>
 <script src="/static/strategy_container.js?v=16"></script>
  <script src="/static/autoexperiment.v13.js?v=179"></script>
 <script src="/static/indextrend.js?v=4"></script>
 <script src="/static/simulator.js?v=3"></script>
-  <script src="/static/aismart.js?v=215"></script>
+  <script src="/static/aismart.js?v=217"></script>
 <script src="/static/paperrun.js?v=26"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6439,7 +6463,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/hft_runner.js?v=9"></script>
 <script src="/static/final_strategy.js?v=4"></script>
 <script src="/static/smart_ntrader.js?v=66"></script>
-<script src="/static/niftybbp_alert.js?v=9"></script>
+<script src="/static/niftybbp_alert.js?v=12"></script>
 <script src="/static/chart_grid.js?v=10"></script>
 <script src="/static/tradestats.js?v=2"></script>
 <script src="/static/backup.js?v=3"></script>

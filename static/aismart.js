@@ -2962,15 +2962,18 @@ window.createAISmartTrading = function (suffix) {
        strategy so the entry veto (overallDirBlocks) can read the vote lines on
        that TF's own chart. */
     const dirDropped = (conds && conds._dirDropped) || [];
-    /* AI Brain (single merged AUTO mode): instead of requiring EVERY selected
-       filter to pass together (strict AND), the whole set becomes one weighted
-       confluence condition - entry is possible once the score clears the
-       tunable threshold. OFF keeps the strict all-together entry. */
-    const brainSoft = brainModeOn() && conds.length;
-    const brainConds = brainSoft ? [brainCondFor(conds)] : null;
-    if (brainConds) brainConds[0]._weakGate = true;
-    const entryConds = brainSoft ? brainConds : conds;
-    const entryNeed = brainSoft ? 1 : conds.length;
+    /* AI Brain AUTO is NOT applied to the Indicator-filters synthetic run: that
+       mode's contract is "all together (strict AND)" - every ticked Bullish /
+       Bearish filter must pass on the chart. Softening the whole set into one
+       weighted confluence condition (need >= threshold) is exactly what left the
+       "all my conditions pass but no trade" situation (confluence read 17/54%
+       < 65%), so the synthetic run gates on the filters STRICTLY no matter what
+       the shared AI Brain toolbar select says. AI Brain AUTO still applies to
+       real strategy runs (Strategies / Auto Experiment) as before. */
+    const brainSoft = false;
+    const brainConds = null;
+    const entryConds = conds;
+    const entryNeed = conds.length;
     const tfs = (state.universal && state.universal.tfs) || { '1min': true, '5min': true };
     const enabled = ALL_TIMEFRAMES.filter(t => tfs[t] !== false);
     const tfsLive = enabled.length ? enabled : ['5min'];
@@ -4495,18 +4498,25 @@ window.createAISmartTrading = function (suffix) {
     return rowWait(needBear ? 'bear' : 'bull', row.met, row.valueText);
   }
 
-  /* BB%b RUN WINDOW (AST engine run window): when the "Run Win" switch is ON
-     the whole engine run (both normal poll and HFT scanner) only allows NEW
-     entries between the two window lines:
-       - BB%b crosses ACTIVE line  -> run window ACTIVE  (entries allowed).
-       - BB%b crosses INACTIVE line -> run window INACTIVE (no new entries;
-         open trades keep running to their SL/TP/trail).
-     The window is a separate, higher-level pause/resume latch layered above the
-     BB%b alert gate: when the window is INACTIVE no entry passes regardless of
-     the BB%b gate state; when ACTIVE the BB%b gate still applies as usual.
-     Returns null when the window is off / active, else a human reason. */
+   /* BB%b RUN WINDOW (AST engine run window): when the "Run Win" switch is ON
+      the whole engine run (both normal poll and HFT scanner) only allows NEW
+      entries between the two window lines:
+        - BB%b crosses ACTIVE line  -> run window ACTIVE  (entries allowed).
+        - BB%b crosses INACTIVE line -> run window INACTIVE (no new entries;
+          open trades keep running to their SL/TP/trail).
+      The window is a separate, higher-level pause/resume latch layered above the
+      BB%b alert gate: when the window is INACTIVE no entry passes regardless of
+      the BB%b gate state; when ACTIVE the BB%b gate still applies as usual.
+      The WHOLE BB%b section is master-gated by its "Gate" checkbox: when that
+      checkbox is OFF the section is fully disabled, so the run window must NOT
+      keep the engine dormant either (a stale Run-Win state can otherwise keep
+      blocking every new entry even though the user turned the BB%b section off).
+      Returns null when the section is off / the window is off or active, else a
+      human reason. */
   function bbpWindowBlock() {
     if (!window.NiftyBbpAlert) return null;
+    const g = NiftyBbpAlert.gateStatus('ast');
+    if (!g || !g.master) return null;
     const w = NiftyBbpAlert.windowStatus('ast');
     if (!w || !w.enabled) return null;
     if (w.state === 'active') return null;
@@ -5027,7 +5037,30 @@ window.createAISmartTrading = function (suffix) {
      Positions P&L now always matches the chart's own price, never a delayed
      feed tick. */
   function positionCurrentPrice(p) {
+    /* Delegate to the SINGLE canonical shared price (index.html positionMarkPrice)
+       so the Running Trades P&L is computed from the exact same live-feed-first /
+       chart-close-fallback value the chart's running-P&L line label uses. Falls
+       back to the local chain below only when that helper is unavailable. */
+    if (typeof window.positionMarkPrice === 'function') {
+      try {
+        const m = window.positionMarkPrice(p);
+        if (m != null && m > 0) return m;
+      } catch (e) {}
+    }
     return positionPremiumLastClose(p);
+  }
+  /* Canonical money P&L (index.html positionMoneyPnl), guarded so a missing
+     helper can never blank a row. */
+  function positionMoneyPnlSafe(p, mark) {
+    if (typeof window.positionMoneyPnl === 'function') {
+      try {
+        const m = window.positionMoneyPnl(p, mark);
+        if (m != null) return m;
+      } catch (e) {}
+    }
+    if (!p || p.entryPrice == null || !(mark > 0)) return null;
+    const qty = p.qty || 0;
+    return (p.side === 'BUY' ? (mark - p.entryPrice) : (p.entryPrice - mark)) * qty;
   }
   /* Execution targets per the "Trade should be executed in" setting: the
      underlying/spot chart ('spot'), the selected-strike option premium chart
@@ -9095,28 +9128,41 @@ window.createAISmartTrading = function (suffix) {
        temporarily missing/foreign after a reload/reconnect) - those keep
        rendering so Running Trades does not blink trades out. */
     const pt2 = basePaper();
-    const openPositions = Object.keys(state.positions)
+    const ap = (pt2 && pt2.getState && pt2.getState().autoPositions) ? pt2.getState().autoPositions : {};
+    const openMirror = Object.keys(state.positions)
       .filter(k => {
-        if (!!astOwnedLive(pt2 ? pt2.getState().autoPositions : null, k)) return true;
+        if (astOwnedLive(ap, k)) return true;
         return !_reconcileGraceExpired(k);
-      })
-      .map(k => state.positions[k]);
-    if (!openPositions.length) {
+      });
+    if (!openMirror.length) {
       host.innerHTML = '<tr><td colspan="8" style="color:#666;font-size:10px;padding:6px 8px">No AI Smart positions open. Tick at least one saved strategy and toggle AI Smart Trading ON.</td></tr>';
       return;
     }
     /* Render each position defensively: a malformed record must not blank the
-       whole running list (which is what makes P&L/LTP show as "--"). */
+       whole running list (which is what makes P&L/LTP show as "--"). The P&L is
+       computed from the LIVE authoritative engine bucket (the same object the
+       chart's running-P&L line label draws) whenever one is owned, so Running
+       Trades can never disagree with the chart - the mirror is only used while
+       its bucket is inside the soft-close grace window. */
     const rows = [];
-    for (const p of openPositions) {
-      try { rows.push(runningRowHTML(p)); } catch (e) {}
+    for (const k of openMirror) {
+      try {
+        const p = state.positions[k];
+        if (!p) continue;
+        const live = astOwnedLive(ap, k) ? ap[k] : null;
+        const eff = live ? Object.assign({}, p, live) : p;
+        rows.push(runningRowHTML(eff));
+      } catch (e) {}
     }
     host.innerHTML = rows.join('') || '<tr><td colspan="9" style="color:#666;font-size:10px;padding:6px 8px">No AI Smart positions open.</td></tr>';
   }
 
   function runningRowHTML(p) {
       const cur = positionCurrentPrice(p);
-      const pnl = cur != null ? (p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty) : null;
+      /* Money P&L comes from the SAME canonical formula used by the chart's
+         running-P&L line label (positionMoneyPnl), on the same current price, so
+         Running Trades shows exactly what the chart shows. */
+      const pnl = cur != null ? positionMoneyPnlSafe(p, cur) : null;
       /* Running Trades shows GROSS P&L only — no broker-charge deduction while
          the trade is open. Charges (entry + exit round-trip) are applied ONCE
          when the trade CLOSES and are shown net in Closed Positions. */
@@ -9217,13 +9263,19 @@ window.createAISmartTrading = function (suffix) {
     let unreal = 0;
     /* Live P&L is GROSS: running trades never deduct broker charges — charges
        (entry + exit round-trip) are applied once at close and show in the
-       realized P&L. */
+       realized P&L. Each open position is valued on the SAME canonical
+       engine-bucket price + formula the chart line label and the Running Trades
+       rows use, so the summary card always equals the sum of its own rows. */
+    const pt3 = basePaper();
+    const ap3 = (pt3 && pt3.getState && pt3.getState().autoPositions) ? pt3.getState().autoPositions : {};
     for (const k in state.positions) {
       const p = state.positions[k];
-      const cur = positionCurrentPrice(p);
-      if (cur != null) {
-        unreal += p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty;
-      }
+      if (!p) continue;
+      const live = astOwnedLive(ap3, k) ? ap3[k] : null;
+      const eff = live ? Object.assign({}, p, live) : p;
+      const cur = positionCurrentPrice(eff);
+      const pnl = cur != null ? positionMoneyPnlSafe(eff, cur) : null;
+      if (pnl != null) unreal += pnl;
     }
     const live = realized + unreal;
     const total = closedList.length;
@@ -9258,7 +9310,9 @@ window.createAISmartTrading = function (suffix) {
 
   /* Fresh-run arming of the BB%b run window: when the window switch is ON, a
      new engine run always starts dormant/INACTIVE and only allows entries once
-     BB%b crosses the ACTIVE line (windowReset no-ops when the window is off). */
+     BB%b crosses the ACTIVE line. windowReset no-ops when the window is off OR
+     when the whole BB%b section gate checkbox is OFF (section fully inactive -
+     it must never reset/log a dormant window while disabled). */
   function bbpWindowArmRun() {
     if (window.NiftyBbpAlert && typeof NiftyBbpAlert.windowReset === 'function') {
       try { NiftyBbpAlert.windowReset('ast'); } catch (e) {}
@@ -9270,8 +9324,10 @@ window.createAISmartTrading = function (suffix) {
     const turningOn = !state.enabled;
     /* Enabling auto-trading on a NIFTY trend side that has assigned templates
        also rotates to the next assigned template (same run-start cycle as the
-       explicit Run buttons). */
-    if (turningOn && _trendTplRedirect()) return;
+       explicit Run buttons) - EXCEPT when the user has the Indicator-filters
+       mode explicitly selected: that mode is an explicit choice and must start
+       as itself, never be silently replaced by a template. */
+    if (turningOn && state.filterMode !== true && _trendTplRedirect()) return;
     state.enabled = !state.enabled;
     if (state.enabled) {
       state.runIntent = { active: true, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
@@ -9381,10 +9437,13 @@ window.createAISmartTrading = function (suffix) {
      trail TP / fixed TP / lots / margin / AI risk / time gates) apply exactly
      like the normal Run Paper Trading mode. */
   function runFilterPaper() {
-    /* NIFTY trend side with assigned templates: this run start rotates to the
-       next template of the confirmed side and starts under ITS settings instead
-       of the manual ones (see _trendTplRedirect). */
-    if (_trendTplRedirect()) return;
+    /* The Indicator-filters run button is an EXPLICIT mode choice: it always
+       starts Indicator-filters mode on the current universe. Unlike the generic
+       Run Paper Trading button it is NEVER redirected into the NIFTY trend-side
+       assigned-template cycle (a template could carry a different saved run mode
+       and would silently un-tick this mode / change the run the user asked for).
+       Trend template rotation still happens on the normal Run Paper Trading
+       start, and filter-mode templates stay reachable through that cycle. */
     readUniversal();
     state.filterMode = true;
     state.aiPick = false;
@@ -9856,17 +9915,22 @@ window.createAISmartTrading = function (suffix) {
     if (cur && el.querySelector('option[value="' + cur + '"]')) el.value = cur;
   }
 
-  /* ---------------- NIFTY trend-following: assign saved engine templates ----------------
-     Pick saved AST engine-settings templates (algodhan_ast_templates_v1) per
-     NIFTY direction and assign them to that side. While NIFTY trend-following is
-     ON, the operative side's assigned templates drive the run: each run start
-     applies the NEXT template in that side's cycle (its saved settings, ticked
-     strategies and saved run mode - normal / Indicator-filters / AI auto-pick)
-     instead of the manual settings, and advances the cycle one template per run
-     start (first ever run -> the first assigned template). The engine's own
-     trend CE/PE symbol picking keeps running untouched - the template only
-     configures HOW that side trades. When no template is assigned to the
-     operative side, the manual settings path is exactly unchanged. */
+   /* ---------------- NIFTY trend-following: assign saved engine templates ----------------
+      Pick saved AST engine-settings templates (algodhan_ast_templates_v1) per
+      NIFTY direction and assign them to that side. While NIFTY trend-following is
+      ON, the operative side's assigned templates drive the run: each GENERIC run
+      start (Run Paper Trading / AI auto-pick / the Auto toggle while a normal run
+      mode is selected) applies the NEXT template in that side's cycle (its saved
+      settings, ticked strategies and saved run mode - normal / Indicator-filters
+      / AI auto-pick) instead of the manual settings, and advances the cycle one
+      template per run start (first ever run -> the first assigned template). Two
+      starts are intentionally exempt so an explicit user choice is never lost:
+      the Indicator-filters run button always starts Indicator-filters mode on the
+      current universe, and a page-reload auto-resume re-arms exactly the mode
+      that was running (it is not a new run start, so it never rotates the cycle).
+      The engine's own trend CE/PE symbol picking keeps running untouched - the
+      template only configures HOW that side trades. When no template is assigned
+      to the operative side, the manual settings path is exactly unchanged. */
 
   function _trendAssignArr(side) {
     const nt = state.niftyTrend || {};
@@ -10655,9 +10719,10 @@ window.createAISmartTrading = function (suffix) {
 
   /* P&L summary for external consumers (AI Brain chat / status). Realized is
      summed from the closed-trade ledger (net of charges) so it always matches
-     the Closed Positions table; open (unrealized) P&L is priced with the exact
-     same chart close the Running Trades row uses, so a still-running trade is
-     never reported as a flat zero. */
+     the Closed Positions table; open (unrealized) P&L is priced with the same
+     canonical engine-bucket price + money formula the Running Trades row and the
+     chart's running-P&L label use, so a still-running trade is never reported
+     as a flat zero nor as a different number than its row. */
   api.pnlSummary = function () {
     let realized = 0, charges = 0, count = 0, wins = 0;
     (state.closed || []).forEach((t) => {
@@ -10668,14 +10733,19 @@ window.createAISmartTrading = function (suffix) {
       if (v > 0) wins++;
     });
     let openPnlSum = 0, open = 0;
+    const pt4 = basePaper();
+    const ap4 = (pt4 && pt4.getState && pt4.getState().autoPositions) ? pt4.getState().autoPositions : {};
     const openCount = Object.keys(state.positions || {}).length;
     Object.keys(state.positions || {}).forEach((k) => {
       const p = state.positions[k];
       if (!p) return;
-      const cur = positionCurrentPrice(p);
-      if (cur != null && p.entryPrice != null && p.qty) {
+      const live = astOwnedLive(ap4, k) ? ap4[k] : null;
+      const eff = live ? Object.assign({}, p, live) : p;
+      const cur = positionCurrentPrice(eff);
+      const pnl = cur != null ? positionMoneyPnlSafe(eff, cur) : null;
+      if (pnl != null && p.entryPrice != null && p.qty) {
         open++;
-        openPnlSum += (p.side === 'BUY' ? (cur - p.entryPrice) : (p.entryPrice - cur)) * p.qty;
+        openPnlSum += pnl;
       }
     });
     return { realized: realized, charges: charges, count: count, wins: wins,
@@ -10735,38 +10805,54 @@ window.createAISmartTrading = function (suffix) {
     render();
     startPoll();
     /* Full resume after a page reload. The engine remembers the exact run the
-       user had active and re-arms it automatically - identical to pressing the
-       Run button again - so settings / ticked strategies / indicator filters /
-       picked strikes / running trades all come back without any re-click:
+       user had active and re-arms it automatically, so settings / ticked
+       strategies / indicator filters / picked strikes / running trades all come
+       back without any re-click. The saved state IS the last applied engine
+       settings (a template run had already applied its settings + ticked
+       strategies and persisted them), so resume re-enters the run loop exactly
+       as it was - it does NOT replay the Run-button handlers, because those:
 
-       - runIntent.active=true: the user had pressed Run Paper Trading (normal)
-         or Indicator-filters run (filter). We replay that exact button press
-         after a short warm-up so the saved settings are re-applied from the
-         restored state and the engine re-enters its run loop.
-       - otherwise state.enabled=true (Auto toggle was ON): re-tick the already
-         enabled engine so Running Strategies / Running Trades repopulate. */
+       - would re-run the NIFTY trend assigned-template redirect: a page reload
+         is NOT a new "run start", so it must never rotate to the NEXT template
+         nor flip the user's Indicator-filters mode to whatever run mode a
+         template was saved under (which is what un-ticked the mode / left the
+         engine idling with nothing picked after every reload);
+       - would re-read the DOM inputs (state already mirrors the UI from boot).
+
+       runIntent.active=true: the user had pressed Run Paper Trading (normal) /
+       Indicator-filters run (filter) / a template quick-run - the persisted
+       filterMode + aiPick + ticked strategies already describe that exact run,
+       so the engine is simply re-enabled and ticked under the restored flags.
+       Otherwise state.enabled=true (Auto toggle was ON): re-tick the already
+       enabled engine so Running Strategies / Running Trades repopulate. */
     const ri = state.runIntent && state.runIntent.active;
-    if (ri) {
-      const fm = state.runIntent.mode === 'filter';
-      log('Auto-resuming ' + (fm ? 'Indicator-filters run mode' : 'Run Paper Trading') + ' after page reload (instance ' + (suffix || 'base') + ') - re-applying saved settings & picked strikes, trades continue automatically', 'ok');
+    const armRun = (delay) => {
       setTimeout(() => {
         if (!(state.runIntent && state.runIntent.active)) return;
+        if (state.enabled !== true) return;
         try {
-          if (fm) runFilterPaper(); else runPaper();
+          tick();
+          if (typeof api.refreshLiveRunning === 'function') api.refreshLiveRunning();
         } catch (e) {
           log('Auto-resume re-run failed: ' + (e && e.message ? e.message : e), 'warn');
         }
-      }, 1500);
+      }, delay);
+    };
+    const _modeLabel = state.filterMode === true ? 'Indicator-filters run mode' : (state.aiPick === true ? 'AI auto-pick run' : 'Run Paper Trading');
+    if (ri) {
+      /* Force the persisted run-mode truth onto the engine + checkboxes (a
+         template run may have last written a different filterMode) so the
+         Indicator-filters mode can never be silently lost across a reload. */
+      state.filterMode = ri.mode === 'filter';
+      applyRunModeUI();
+      save();
+      _userFastDataOff = false;
+      bbpWindowArmRun();
+      log('Auto-resuming ' + _modeLabel + ' after page reload (instance ' + (suffix || 'base') + ') - re-applying saved settings & picked strikes, trades continue automatically', 'ok');
+      armRun(1500);
     } else if (state.enabled === true) {
-      setTimeout(() => {
-        if (state.enabled === true) {
-          tick();
-          if (typeof api.refreshLiveRunning === 'function') api.refreshLiveRunning();
-        }
-      }, 800);
-      log(state.filterMode === true
-        ? 'Resumed from saved state - Indicator-filters mode active, trades continue automatically'
-        : 'Resumed from saved state - ticked strategies keep running automatically', 'ok');
+      log('Resumed from saved state - ' + _modeLabel + ', trades continue automatically', 'ok');
+      armRun(800);
     }
     const nEl = $id('astAiPickN');
     if (nEl) {

@@ -5271,13 +5271,16 @@ def api_auto_research():
     })
 
 
-# Seconds a pooled connection may stay silent before _OneShotRequestHandler
-# gives up and frees its pool slot. The preview tunnel keeps ~200 connections
-# open; with one request per connection, a short idle cap reclaims those slots
-# within a few seconds instead of letting the pool queue grow. Long enough to
-# never interrupt a request that is actually in flight (a real request line
-# arrives immediately on connect), short enough to churn idle sockets fast.
-_ONESHOT_IDLE_TIMEOUT = 5
+# Seconds a real HTTP request / WebSocket may stay open before its worker is
+# reclaimed. This is deliberately LARGE: idle tunnel keep-alive sockets never
+# reach the handler (process_request_thread already closes them after
+# _WORKER_READY_TIMEOUT when they send nothing), so the socket timeout here is
+# only a slow-loris guard - it must NOT be small enough to abort a legit large
+# response (a gzip JS bundle streamed over a slow preview tunnel can take far
+# longer than 5s) or a hijacked WebSocket that idles between pings. A 5s cap
+# here kept cutting big /static files mid-transfer ("pending" forever in the
+# browser) and dropping the /ws bridge.
+_REQUEST_SOCKET_TIMEOUT = 300
 
 # How long a pool worker waits for an accepted socket to deliver its first
 # byte before closing it as an idle tunnel connection (see
@@ -5305,12 +5308,13 @@ class _OneShotRequestHandler(WSGIRequestHandler):
 
     def handle(self):
         self.close_connection = True
-        # The preview tunnel also holds connections that never send a request
-        # (idle keep-alive). A bare readline() parks a bounded-pool worker
-        # forever waiting on a request line that never comes, so cap the wait -
-        # a connection silent for _ONESHOT_IDLE_TIMEOUT is dropped and its pool
-        # slot freed for real traffic.
-        self.connection.settimeout(_ONESHOT_IDLE_TIMEOUT)
+        # Idle tunnel keep-alive connections never reach this point: the bounded
+        # pool's process_request_thread waits _WORKER_READY_TIMEOUT for a first
+        # byte and closes silent sockets itself. Once a real request is here the
+        # socket must stay writable for as long as the response takes - large
+        # gzip JS bundles over the slow preview tunnel, and the hijacked /ws
+        # WebSocket, both need a generous timeout (see _REQUEST_SOCKET_TIMEOUT).
+        self.connection.settimeout(_REQUEST_SOCKET_TIMEOUT)
         self.handle_one_request()
 
 

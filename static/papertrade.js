@@ -1047,6 +1047,52 @@ window.createPaperTrade = function (suffix) {
     /* Flush any silent (tick-level) risk-scan closes to localStorage once per
        throttled cycle instead of writing on every ~5ms feed batch. */
     if (_dirtySave) { _dirtySave = false; save(); }
+    ptLiveSnapshot();
+  }
+
+  /* TEMP DIAGNOSTIC (running-trade "profit then sudden loss" bug): every ~3s
+     post one line per OPEN auto position holding the authoritative engine
+     fields (stop / peak / trail) AND both price sources - the engine's live
+     quoteFor LTP and the canonical display mark (positionMarkPrice) - so a
+     reported flip from +profit to -loss can be traced to whichever number
+     actually moved (quote vs mark vs the ratcheted stop). Remove when done. */
+  let _ptLiveLast = 0;
+  function ptLiveSnapshot() {
+    if (window.__ptLive === false) return;
+    const keys = Object.keys(state.autoPositions || {});
+    if (!keys.length) return;
+    const now = Date.now();
+    if (now - _ptLiveLast < 3000) return;
+    _ptLiveLast = now;
+    const rows = [];
+    for (const k of keys) {
+      const p = state.autoPositions[k];
+      if (!p) continue;
+      const q = quoteFor({ id: p.symbolId, exch: p.symbolExch });
+      const ltp = (q && q.ltp != null) ? Number(q.ltp) : null;
+      let mark = null, markSrc = '';
+      try {
+        if (typeof window.positionMarkPrice === 'function') {
+          const m = window.positionMarkPrice(p);
+          if (m != null && m > 0) { mark = Number(m); markSrc = 'disp'; }
+        }
+      } catch (e) {}
+      rows.push('k=' + k + ' ' + (p.symbol || p.symbolId) + ' s=' + p.side +
+        ' e=' + p.entryPrice + ' qty=' + p.qty +
+        ' stop=' + p.stopLoss + ' trailPct=' + (p.slTrailPct || 0) +
+        ' sl%=' + (p.slPct || 0) + ' autoTr=' + (!!p.autoTrail) +
+        ' trailed=' + (!!p.slTrailed) + ' peak=' + p.peakPrice +
+        ' ltp=' + ltp + ' live=' + (!!(q && q.live)) +
+        ' qat=' + ((q && q.at) || '-') +
+        ' disp=' + (mark != null ? mark + '(' + markSrc + ')' : '-'));
+    }
+    if (!rows.length) return;
+    try {
+      fetch('/api/client_error', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ errs: rows.map(r => ({ type: 'ptLive', msg: r })) })
+      }).catch(() => {});
+    } catch (e) {}
   }
 
   const api = {

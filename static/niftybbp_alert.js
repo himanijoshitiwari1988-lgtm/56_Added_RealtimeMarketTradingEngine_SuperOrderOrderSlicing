@@ -87,6 +87,15 @@
     const chip = el(inst.pfx + 'BbpWinState');
     if (!chip) return;
     const w = inst.win;
+    /* Section master checkbox OFF = whole BB%b section fully inactive: the chip
+       must not show a misleading "RUN INACTIVE (waiting...)" because the window
+       cannot block anything while the gate is off. */
+    if (!inst.master) {
+      chip.textContent = 'BB%b off';
+      chip.style.color = '#777';
+      chip.title = 'BB%b section disabled (Gate checkbox OFF) - RUN WINDOW aur alert dono inactive.';
+      return;
+    }
     if (!w.enabled) { chip.textContent = 'Run Win off'; chip.style.color = '#777'; return; }
     const st = inst.winState === 'active';
     chip.textContent = 'RUN ' + (st ? 'ACTIVE' : 'INACTIVE') + (st ? '' : ' (waiting BB%b ' + winRowSummary('active', w.active) + ')');
@@ -119,6 +128,7 @@
     saveWin(inst);
     syncWinEditor(inst);
     if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b RUN WINDOW ' + (inst.win.enabled ? 'ON - engine run ab BB%b ACTIVE line par start & INACTIVE line par stop hogi' : 'OFF - normal BB%b alert gate hi apply hoga'), inst.win.enabled ? 'ok' : 'warn');
+    redrawPaneLines(pfx);
   }
   function editWinDraft(pfx, k, field, raw) {
     const inst = instances[pfx];
@@ -136,10 +146,16 @@
     }
     saveWin(inst);
     syncWinEditor(inst);
+    redrawPaneLines(pfx);
   }
   function windowReset(pfx) {
     const inst = instances[pfx];
     if (!inst) return;
+    /* Section master checkbox OFF = the WHOLE BB%b section is fully inactive:
+       a reset must not touch the window state nor log while the gate is off
+       (the engine already ignores the window then, and the log would only
+       confuse - "no entry until BB%b crosses" while the section is disabled). */
+    if (!inst.master) return;
     if (!inst.win || !inst.win.enabled) return;
     inst.winState = 'inactive';
     if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b RUN WINDOW state reset -> INACTIVE (nayi entries tab tak nahi jab tak BB%b ACTIVE line cross na kare)', 'warn');
@@ -286,7 +302,8 @@
       chart: null,
       series: null,
       guideLines: [],
-      rowLines: []
+      rowLines: [],
+      winLines: []
     };
     inst.cfg = loadCfg(inst);
     inst.draft = loadDraft(inst) || cloneCfg(inst.cfg);
@@ -324,6 +341,14 @@
     inst.master = !!on;
     try { localStorage.setItem(inst.enabledKey, inst.master ? '1' : ''); } catch (e) {}
     paintMaster(inst);
+    /* Re-enabling the section: reset the firing baseline and re-seed the run
+       window from the CURRENT sample, so re-enabling mid-move never fires a
+       stale cross and the window chip reflects where BB%b sits right now. */
+    if (inst.master) {
+      inst.prev = null;
+      if (inst.win && inst.win.enabled) seedWindowState(inst);
+      paintWindowChip(inst);
+    }
     if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b alert section ' + (inst.master ? 'ENABLED - naye entries ab BB%b alert signal ke baad hi lagegi' : 'DISABLED - BB%b gate off, engine normally trades'), inst.master ? 'ok' : 'warn');
   }
   function gateStatus(pfx) {
@@ -415,7 +440,7 @@
     }
     saveDraft(inst);
     syncEditor(inst);
-    if (inst.chart) rebuildRowLines(inst);
+    redrawPaneLines(pfx);
   }
   function arm(pfx) {
     const inst = instances[pfx];
@@ -423,7 +448,7 @@
     inst.cfg = cloneCfg(inst.draft);
     saveCfg(inst);
     paint(inst);
-    if (inst.chart) rebuildRowLines(inst);
+    redrawPaneLines(pfx);
     if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b alert SET: ' + ROWS.map(function (r) { return rowSummary(r, inst.cfg[r.key]); }).join(' | '), 'ok');
     toastMsg('BB%b alert armed: ' + ROWS.filter(function (r) { return inst.cfg[r.key].enabled; }).map(function (r) { return rowSummary(r, inst.cfg[r.key]); }).join(' | ') || 'none enabled');
   }
@@ -452,7 +477,7 @@
     saveDraft(inst);
     paint(inst);
     syncEditor(inst);
-    if (inst.chart) rebuildRowLines(inst);
+    redrawPaneLines(pfx);
     if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b alerts cleared (all rows off)', 'warn');
     toastMsg('BB%b alerts removed - BULL CE & BEAR PE ab off hain');
   }
@@ -484,6 +509,10 @@
     if (!isFinite(last)) return;
     inst.lastPctt = last;
     paintLive(inst);
+    /* Section master checkbox OFF = the whole BB%b section is disabled: keep the
+       value readout live but fire NO alert / run-window transitions (a disabled
+       section must never keep signalling the engine or flipping the window). */
+    if (!inst.master) { inst.prev = last; return; }
     const effTf = (typeof inst.tfGet === 'function') ? inst.tfGet() : '5min';
     if (inst.chart && inst.series && inst._lastDataTime && (effTf === '1min' || effTf === '5min' || effTf === '15min')) {
       try { inst.series.update({ time: inst._lastDataTime, value: last }); } catch (e) {}
@@ -548,6 +577,46 @@
       } catch (e) {}
     });
   }
+  /* RUN WINDOW ACTIVE / INACTIVE levels drawn on the pane. These follow
+     inst.win (the config the engine gates on) and redraw live while the
+     ACTIVE/INACTIVE numbers are edited, so the pair of green/red lines always
+     shows where the run window really sits on the BB%b scale. */
+  function rebuildWinLines(inst) {
+    if (!inst.series) return;
+    inst.winLines.forEach(function (l) { try { inst.series.removePriceLine(l); } catch (e) {} });
+    inst.winLines = [];
+    if (!inst.win || !inst.win.enabled) return;
+    WIN_ROWS.forEach(function (k) {
+      const s = inst.win[k];
+      if (!s || !s.enabled) return;
+      try {
+        inst.winLines.push(inst.series.createPriceLine({
+          price: Number(s.value),
+          color: (k === 'active') ? '#00d4aa' : '#ef5350',
+          lineWidth: 2,
+          lineStyle: 0,
+          axisLabelVisible: true,
+          title: (k === 'active' ? 'ACTIVE' : 'INACTIVE') + ' ' + fmtV(s.value)
+        }));
+      } catch (e) {}
+    });
+  }
+  function rebuildPaneLines(inst) {
+    rebuildRowLines(inst);
+    rebuildWinLines(inst);
+  }
+  /* Redraw the pane lines after an edit. If the chart is live, refresh the
+     price lines in place. If the pane is open but no chart exists yet (e.g. it
+     was rendered by a stale/detached instance) kick renderPane so the current
+     draft value lands on the visible lines immediately instead of silently
+     doing nothing. */
+  function redrawPaneLines(pfx) {
+    const inst = instances[pfx];
+    if (!inst) return;
+    if (inst.series) { rebuildPaneLines(inst); return; }
+    const w = el(pfx + 'BbpPaneWrap');
+    if (w && w.style.display === 'block') { try { renderPane(pfx); } catch (e) {} }
+  }
   function renderPane(pfx) {
     const inst = attach({ pfx: pfx });
     if (!inst) return;
@@ -579,7 +648,7 @@
         inst._lastDataTime = data.length ? data[data.length - 1].time : null;
         if (data.length) inst.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, data.length - 130), to: data.length - 1 });
       } catch (e) {}
-      rebuildRowLines(inst);
+      rebuildPaneLines(inst);
     });
   }
   function togglePane(pfx) {
