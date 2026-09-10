@@ -60,6 +60,81 @@
   function saveWin(inst) {
     try { localStorage.setItem(inst.winKey, JSON.stringify(inst.win || {})); } catch (e) {}
   }
+  /* Per-direction manual ENGINE ACTIVE / INACTIVE latch. Independent of the
+     BB%b alert gate + run window: each direction (bull = CE, bear = PE) has its
+     own checkbox. Checked = that direction's engine works normally. Unchecked =
+     that direction's engine is COMPLETELY inactive: no new entries of that side
+     are placed (open trades keep running to their own SL / trail / TP). */
+  function defaultsEngActive() { return { bull: true, bear: true }; }
+  function cloneEngActive(cfg) {
+    return {
+      bull: !(cfg && cfg.bull === false),
+      bear: !(cfg && cfg.bear === false)
+    };
+  }
+  function loadEngActive(inst) {
+    let out;
+    try { out = cloneEngActive(JSON.parse(localStorage.getItem(inst.engActiveKey) || 'null')); }
+    catch (e) { out = cloneEngActive(null); }
+    return out;
+  }
+  function saveEngActive(inst) {
+    try { localStorage.setItem(inst.engActiveKey, JSON.stringify(inst.engActive || {})); } catch (e) {}
+  }
+  function syncEngActiveUI(inst) {
+    if (!inst) return;
+    const ea = inst.engActive || defaultsEngActive();
+    const bullOn = ea.bull !== false, bearOn = ea.bear !== false;
+    const b = el(inst.pfx + 'BbpEngBull');
+    if (b) b.checked = bullOn;
+    const r = el(inst.pfx + 'BbpEngBear');
+    if (r) r.checked = bearOn;
+    const st = el(inst.pfx + 'BbpEngState');
+    if (st) {
+      if (!inst.master) {
+        st.textContent = 'Engine: -- (BB%b Gate OFF)';
+        st.style.color = '#777';
+        st.title = 'BB%b section disabled (Gate checkbox OFF) - engine ACTIVE/INACTIVE latch poora inactive hai.';
+      } else {
+        st.textContent = 'Engine: BULL ' + (bullOn ? 'ACTIVE' : 'INACTIVE') + ' | BEAR ' + (bearOn ? 'ACTIVE' : 'INACTIVE');
+        st.style.color = (bullOn && bearOn) ? '#00d4aa' : '#ef5350';
+        st.title = 'Bullish engine ' + (bullOn ? 'ACTIVE' : 'INACTIVE (CE nayi entries band)') + ' - Bearish engine ' + (bearOn ? 'ACTIVE' : 'INACTIVE (PE nayi entries band)');
+      }
+    }
+    const bb = el(inst.pfx + 'BbpEngBullWrap');
+    if (bb) bb.style.opacity = bullOn ? '1' : '0.55';
+    const bw = el(inst.pfx + 'BbpEngBearWrap');
+    if (bw) bw.style.opacity = bearOn ? '1' : '0.55';
+  }
+  function setSideActive(pfx, side, on) {
+    const inst = attach({ pfx: pfx });
+    if (!inst) return;
+    /* Gate OFF = whole BB%b section fully inactive: never change the latch,
+       never toast, never log - just snap the checkbox back to its saved state.
+       This kills the "gate off but still gets an engine ACTIVE/INACTIVE alert"
+       report at the source. */
+    if (!inst.master) { syncEngActiveUI(inst); return; }
+    const k = (side === 'bear') ? 'bear' : 'bull';
+    if (!inst.engActive) inst.engActive = defaultsEngActive();
+    inst.engActive[k] = !!on;
+    saveEngActive(inst);
+    syncEngActiveUI(inst);
+    const lab = (k === 'bear') ? 'Bearish (PE)' : 'Bullish (CE)';
+    if (inst.log) inst.log(pfx.toUpperCase() + ' BB%b engine ' + lab + ' ' + (on ? 'ACTIVE - is direction ki nayi entries allow' : 'INACTIVE - is direction ki nayi entries band (open trades apne SL/TP/trail par chalti rahengi)'), on ? 'ok' : 'warn');
+    toastMsg('BB%b engine ' + lab + ' ' + (on ? 'ACTIVE' : 'INACTIVE'));
+  }
+  function sideActiveStatus(pfx) {
+    const inst = instances[pfx];
+    if (!inst) return { bull: true, bear: true };
+    /* Section master Gate checkbox OFF = the WHOLE BB%b section is disabled:
+       the per-direction engine latch must NOT block anything then (same no-op
+       rule as the BB%b alert gate + run window, which all require inst.master).
+       Without this the manual OFF still blocked entries even though the user
+       had turned the whole BB%b section off. */
+    if (!inst.master) return { bull: true, bear: true };
+    const ea = inst.engActive || defaultsEngActive();
+    return { bull: ea.bull !== false, bear: ea.bear !== false };
+  }
   /* Line-trend mode helpers. Each alert / run-window row can run in one of two
      LOGICS:
        - value mode (existing): the row reacts to the BB%b VALUE crossing a
@@ -187,6 +262,8 @@
   function setWindowEnabled(pfx, on) {
     const inst = attach({ pfx: pfx });
     if (!inst) return;
+    /* Gate OFF = section fully inactive: do not change the window nor log. */
+    if (!inst.master) { syncWinEditor(inst); return; }
     inst.win.enabled = !!on;
     if (inst.win.enabled) seedWindowState(inst);
     saveWin(inst);
@@ -262,7 +339,13 @@
      state when the ACTIVE or INACTIVE boundary is crossed (BB%b value in value
      mode, or the line turning into the chosen direction in trend mode). */
   function stepWindowState(inst, prev, last) {
-    if (!inst || !inst.win || !inst.win.enabled) return;
+    /* Master Gate OFF = whole BB%b section dormant: never advance the run
+       window nor fire the ACTIVE/INACTIVE toast/log, even if a stale window
+       switch was left ON. Defensive at the source (feed() already returns
+       early) so no caller can resurrect the "gate off but engine run dialog
+       still fires" behaviour. */
+    if (!inst || !inst.master) return;
+    if (!inst.win || !inst.win.enabled) return;
     const pTrend = inst.prevTrend, lTrend = inst.lastTrend;
     let next = null;
     if (rowCrossed(inst.win.active, prev, last, pTrend, lTrend)) next = 'active';
@@ -382,10 +465,12 @@
       draftKey: pfx + 'BbpAlertDraft',
       enabledKey: pfx + 'BbpEnabled',
       winKey: pfx + 'BbpWinCfg',
+      engActiveKey: pfx + 'BbpEngActive',
       cfg: null,
       draft: null,
       master: false,
       win: null,
+      engActive: null,
       winState: 'inactive',
       prev: null,
       lastPctt: null,
@@ -403,6 +488,7 @@
     inst.draft = loadDraft(inst) || cloneCfg(inst.cfg);
     inst.master = loadMaster(inst);
     inst.win = loadWin(inst);
+    inst.engActive = loadEngActive(inst);
     seedWindowState(inst);
     instances[pfx] = inst;
     paint(inst);
@@ -410,6 +496,7 @@
     paintWindowChip(inst);
     syncEditor(inst);
     syncWinEditor(inst);
+    syncEngActiveUI(inst);
     syncAlertBtn(inst);
     return inst;
   }
@@ -429,10 +516,43 @@
        active, even if the window switch itself was left ON. */
     const winBox = el(inst.pfx + 'BbpWinBox');
     if (winBox) winBox.style.opacity = inst.master ? '1' : '0.45';
+    /* The per-direction ENGINE ACTIVE/INACTIVE latch is part of the same BB%b
+       section: fade it too so it is obvious it enforces nothing while the
+       master Gate is OFF. */
+    const engBox = el(inst.pfx + 'BbpEngBox');
+    if (engBox) engBox.style.opacity = inst.master ? '1' : '0.45';
+    /* Make the whole run-window + engine-latch area truly INACTIVE (disabled
+       inputs), so a gate-OFF section cannot even be clicked into firing an
+       "engine ON/OFF" toast or flipping a latch. */
+    setSectionInputsDisabled(inst, !inst.master);
+    /* Repaint the two status readouts that describe the engine state. Without
+       this a Gate toggle left them stale: turning the Gate OFF really stopped
+       every block helper (entry engine trades normally) but the run-window chip
+       kept showing "RUN INACTIVE (waiting...)" and the engine latch kept showing
+       "Engine: BULL/BEAR INACTIVE", so the box looked like the engine was still
+       dormant. paintWindowChip + syncEngActiveUI both branch on inst.master, so
+       they render "BB%b off" / "Engine: -- (BB%b Gate OFF)" the moment it is off. */
+    paintWindowChip(inst);
+    syncEngActiveUI(inst);
   }
   function isEnabled(pfx) {
     const inst = instances[pfx];
     return !!(inst && inst.master);
+  }
+  /* Gate checkbox OFF = the WHOLE BB%b section is fully INACTIVE: every control
+     inside the run-window box and the per-direction engine-latch box is
+     disabled (not merely faded), so no click can fire an "engine ACTIVE /
+     INACTIVE" toast / log while the gate is off. The Gate checkbox itself, the
+     show/hide-alerts button and the pane button live in the top bar and stay
+     usable so the user can turn the section back on. */
+  function setSectionInputsDisabled(inst, disabled) {
+    if (!inst) return;
+    ['BbpWinBox', 'BbpEngBox', 'BbpAlertBox'].forEach(function (bid) {
+      const box = el(inst.pfx + bid);
+      if (!box) return;
+      const ctrls = box.querySelectorAll('input, select, button, textarea');
+      for (let i = 0; i < ctrls.length; i++) ctrls[i].disabled = !!disabled;
+    });
   }
   function setEnabled(pfx, on) {
     const inst = attach({ pfx: pfx });
@@ -585,7 +705,7 @@
     if (!box) return;
     const opening = box.style.display === 'none';
     box.style.display = opening ? 'flex' : 'none';
-    if (opening) syncEditor(inst);
+    if (opening) { paintMaster(inst); syncEditor(inst); syncEngActiveUI(inst); }
     syncAlertBtn(inst);
   }
   function closeEditor(pfx) {
@@ -676,6 +796,14 @@
     const tail = [];
     for (let i = from; i < data.length; i++) tail.push(Number(data[i].value));
     const t = ringTrend(tail);
+    /* Seed the live-line ring with the SAME rendered history the arrow uses.
+       The live feed only produces one distinct BB%b sample per bar, so without
+       this the ring needs ~RING_MIN bars before it can report a trend: the pane
+       arrow showed Bullish/Bearish while the engine gate (rowMet -> lastTrend)
+       still read null/Flat and blocked BOTH sides. Seeding makes the gate agree
+       with the line the user actually sees, then live samples keep it fresh. */
+    inst.trendBuf = tail.slice();
+    inst.lastTrend = t;
     applyArrow(inst, t, data[data.length - 1].time);
   }
 
@@ -897,6 +1025,8 @@
     setWindowEnabled: setWindowEnabled,
     editWinDraft: editWinDraft,
     windowReset: windowReset,
-    windowStatus: windowStatus
+    windowStatus: windowStatus,
+    setSideActive: setSideActive,
+    sideActiveStatus: sideActiveStatus
   };
 })();

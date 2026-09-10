@@ -1451,8 +1451,8 @@ window.createPaperTrade = function (suffix) {
         if (p.peakPrice == null) p.peakPrice = p.entryPrice;
         p.targetPrice = p.entryPrice;
         p.stopLoss = side === 'BUY' ? p.entryPrice * (1 - effectiveSlPct(sl, slTrail) / 100) : p.entryPrice * (1 + effectiveSlPct(sl, slTrail) / 100);
-        if (ftp > 0) { p.tpPct = ftp; p.tpPrice = side === 'BUY' ? p.entryPrice * (1 + ftp / 100) : p.entryPrice * (1 - ftp / 100); }
-        else { delete p.tpPct; delete p.tpPrice; }
+        if (ftp > 0) { p.tpPct = ftp; p.tpPrice = side === 'BUY' ? p.entryPrice * (1 + ftp / 100) : p.entryPrice * (1 - ftp / 100); p.tpSrc = opts.tpSrc || ''; }
+        else { delete p.tpPct; delete p.tpPrice; delete p.tpSrc; }
         log('Auto ' + side + ' ' + name + ' averaged @ ' + fmt(fillPx, 2), side === 'BUY' ? 'buy' : 'sell');
         recompute(); renderDashboard(true);
         return true;
@@ -1470,6 +1470,7 @@ window.createPaperTrade = function (suffix) {
         stopLoss: side === 'BUY' ? fillPx * (1 - effectiveSlPct(sl, slTrailShow) / 100) : fillPx * (1 + effectiveSlPct(sl, slTrailShow) / 100),
         tpPct: ftp > 0 ? ftp : 0,
         tpPrice: ftp > 0 ? (side === 'BUY' ? fillPx * (1 + ftp / 100) : fillPx * (1 - ftp / 100)) : 0,
+        tpSrc: ftp > 0 ? (opts.tpSrc || '') : '',
         symbol: name,
         symbolId: symbol.id, symbolExch: symbol.exch,
         inst: symbol.inst || null,
@@ -1627,7 +1628,7 @@ window.createPaperTrade = function (suffix) {
         //  - A fixed take-profit % (tpPct) banks a set profit % off entry.
         //  Fills are priced at the protection level (the trail/TP order) so a
         //  gap through a level never books a worse fill than the level.
-        if (p.tpPct > 0 && cur >= p.tpPrice) { closeAutoPosition(key, 'Take profit hit', p.tpPrice, silent); continue; }
+        if (p.tpPct > 0 && cur >= p.tpPrice) { closeAutoPosition(key, (p.tpSrc ? p.tpSrc + ' hit' : 'Take profit hit'), p.tpPrice, silent); continue; }
         if (trailPct > 0) {
           const peakProfit = p.peakPrice - p.entryPrice;
           const trail = Math.max(p.entryPrice + peakProfit * (1 - trailPct / 100), p.entryPrice);
@@ -1659,7 +1660,7 @@ window.createPaperTrade = function (suffix) {
         // Stop-loss protection for SELL positions: closes when the price rises
         // to the SL % (above entry) level, capping the loss.
         if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur >= p.stopLoss) { try { if (window.__ptDiag !== false) fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ptDiag', msg: 'CLOSE ' + key + ' reason=' + (p.slTrailed ? 'TrailingSL' : 'StopLoss') + ' trailPct=' + (p.slTrailPct || 0) + ' slPct=' + (p.slPct || 0) + ' armed=' + (!!p.slTrailed) + ' entry=' + p.entryPrice + ' peak=' + p.peakPrice + ' stop=' + p.stopLoss + ' cur=' + cur + ' src=' + (q && q.live ? 'live' : 'mark') }] }) }).catch(() => {}); } catch (e) {} closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }
-        if (p.tpPct > 0 && cur <= p.tpPrice) { closeAutoPosition(key, 'Take profit hit', p.tpPrice, silent); continue; }
+        if (p.tpPct > 0 && cur <= p.tpPrice) { closeAutoPosition(key, (p.tpSrc ? p.tpSrc + ' hit' : 'Take profit hit'), p.tpPrice, silent); continue; }
         if (trailPct > 0) {
           const peakProfit = p.entryPrice - p.peakPrice;
           const trail = Math.min(p.entryPrice - peakProfit * (1 - trailPct / 100), p.entryPrice);

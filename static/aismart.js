@@ -2503,7 +2503,7 @@ window.createAISmartTrading = function (suffix) {
       premiumOnly: false, // when ON the strategy run AND trade execution both lock to the option premium chart for every instrument type
       groups: GROUP_KEYS.slice(),
       symbols: [],
-      movers: { enabled: false, gainers: 5, losers: 5, indices: [], picked: [] },
+      movers: { enabled: false, gainers: 5, losers: 5, indices: [], picked: [], gainerTpls: [], loserTpls: [] }, // top gainers/losers universe (per-direction: gainers = bullish, losers = bearish; per-direction assigned AST engine-settings template cycles)
       niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] }, // NIFTY trend-following F&O picker (per-direction: F&O stocks above a daily change% threshold OR auto top-N gainers/losers; optional indices + per-direction assigned AST engine-settings template cycles)
       sim: { enabled: false }, // market-off simulation chart: trades the synthetic SIM 900001 stream instead of real strikes
       commodity: { enabled: false, sids: [] }, // MCX commodity futures paper trading: trades each +Add-ed FUTCOM contract directly (spot mode), alongside stocks/F&O
@@ -2727,6 +2727,13 @@ window.createAISmartTrading = function (suffix) {
       s.movers.losers = Math.max(0, Number(s.movers.losers) || 0);
       if (!Array.isArray(s.movers.indices)) s.movers.indices = [];
       if (!Array.isArray(s.movers.picked)) s.movers.picked = [];
+      /* Per-direction assigned AST engine-settings template ids (gainers =
+         bullish, losers = bearish; order = the run-start cycle order). Dead ids
+         are simply ignored everywhere - the live template library is truth. */
+      if (!Array.isArray(s.movers.gainerTpls)) s.movers.gainerTpls = [];
+      if (!Array.isArray(s.movers.loserTpls)) s.movers.loserTpls = [];
+      s.movers.gainerTpls = s.movers.gainerTpls.map(x => String(x)).filter(Boolean);
+      s.movers.loserTpls = s.movers.loserTpls.map(x => String(x)).filter(Boolean);
       delete s.movers.includeIndices;
     }
     if (s && s.niftyTrend) {
@@ -2952,14 +2959,17 @@ window.createAISmartTrading = function (suffix) {
       votes for that idea (consumed by overallDirBlocks at the entry point);
       every row keeps its structural cross/level/compare gate strict in conds._p
       exactly as before. */
-  function allSelectedFilterConditions() {
+  function allSelectedFilterConditions(opSide) {
     const tpl = { entry: { indId: 'ema', indSettings: { length: 9, source: 'close' }, valueKey: 'v0' }, entryExtra: [], exit: null, exitExtra: [], candlestick: { enabled: false, entry: [], exit: [] } };
     /* While NIFTY trend-following is running on a confirmed side, the Indicator-
        filters run trades ONLY that side, so build the strict-AND set from that
        side's filters only. The opposite side's selection is left untouched so
        the user can keep configuring / Mirror it for the next trend flip and for
-       template building - it can never leak into the operative side's gates. */
-    const op = trendOperativeSide();
+       template building - it can never leak into the operative side's gates.
+       `opSide` forces an explicit side (Top Movers both-legs: the bullish leg
+       builds from the bullish template's filters only, the bearish leg from the
+       bearish template's only - never both together on one symbol). */
+    const op = opSide || trendOperativeSide();
     let f = state.filters || {};
     if (op) {
       f = Object.assign({}, f);
@@ -2981,55 +2991,74 @@ window.createAISmartTrading = function (suffix) {
      together on THAT timeframe's chart. Each synthetic strategy carries its own
      tf (1min or 5min), so pickTimeframe()/liveStrategyTf() resolve it exactly -
      the filter run analyses every ticked AST timeframe (1-min chart AND/OR
-     5-min chart), never a default timeframe and never the open chart's tf.
-     The per-symbol execution side is decided by the universe method itself
-     (NIFTY trend direction / top gainer-loser / active filter side), so no
-     per-symbol strategy binding is needed. */
+     5-min      chart), never a default timeframe and never the open chart's tf.
+     Top Movers: when the gainers/losers universe is live, ONE synthetic strategy
+     is built per active SIDE (bullish from the gainer template's filters only,
+     bearish from the loser template's only) and the tick loop binds each symbol
+     to the strategy matching its own daily move - the two templates never gate
+     the same symbol together. Outside movers a single combined per-tf strategy
+     is built exactly as before. */
   function filterModeStrategies() {
-    const conds = allSelectedFilterConditions();
-    if (!conds.length) return [];
-    /* Rows lifted out of the strict set by the "Overall Bullish/Bearish idea"
-       (single-line direction/facing sub-conds) - carried on every synthetic
-       strategy so the entry veto (overallDirBlocks) can read the vote lines on
-       that TF's own chart. */
-    const dirDropped = (conds && conds._dirDropped) || [];
-    /* AI Brain AUTO is NOT applied to the Indicator-filters synthetic run: that
-       mode's contract is "all together (strict AND)" - every ticked Bullish /
-       Bearish filter must pass on the chart. Softening the whole set into one
-       weighted confluence condition (need >= threshold) is exactly what left the
-       "all my conditions pass but no trade" situation (confluence read 17/54%
-       < 65%), so the synthetic run gates on the filters STRICTLY no matter what
-       the shared AI Brain toolbar select says. AI Brain AUTO still applies to
-       real strategy runs (Strategies / Auto Experiment) as before. */
-    const brainSoft = false;
-    const brainConds = null;
-    const entryConds = conds;
-    const entryNeed = conds.length;
     const tfs = (state.universal && state.universal.tfs) || { '1min': true, '5min': true };
     const enabled = ALL_TIMEFRAMES.filter(t => tfs[t] !== false);
     const tfsLive = enabled.length ? enabled : ['5min'];
-    return tfsLive.map(tf => ({
-      id: 'flt:' + tf,
-      name: 'Indicator filter based trades (all together) [' + tf + ']',
-      cat: 'bullish',
-      method: '',
-      tf: tf,
-      /* Primary entry = ALL selected filter conditions (strict AND), or the
-         single AI Brain confluence condition when the brain is ON. */
-      entry: entryConds,
-      exit: null,
-      entryExtra: [],
-      exitExtra: [],
-      entryThreshold: entryNeed,
-      candlestick: { enabled: false, entry: [], exit: [] },
-      /* Synthetic strategy: never persisted and must not re-append the global
-         filters (they ARE the entry conditions). */
-      _filterBuilt: true,
-      /* Lines contributing votes to the "Overall Bullish/Bearish idea" veto. */
-      _dirDropped: dirDropped,
-      createdAt: Date.now(),
-      autoSlPct: null
-    }));
+    /* Top Movers with BOTH gainer + loser legs live: the two assigned templates
+       MUST NOT be piled onto every symbol together. Build ONE synthetic strategy
+       per (timeframe, side) whose entry holds ONLY that side's filters, then let
+       the run loop route each symbol to the strategy matching its own daily move
+       (gainers -> bullish, losers -> bearish; see _bindSide in the tick loop).
+       Single-side movers restricts to that one side the same way. */
+    const mv = state.movers || {};
+    const moverSides = (mv.enabled && _moversActiveSides().length) ? _moversActiveSides() : [];
+    const groups = moverSides.length ? moverSides.map(s => ({ side: s })) : [{ side: null }];
+    const out = [];
+    for (const tf of tfsLive) {
+      for (const grp of groups) {
+        const conds = grp.side ? allSelectedFilterConditions(grp.side) : allSelectedFilterConditions();
+        if (!conds.length) continue;
+        /* Rows lifted out of the strict set by the "Overall Bullish/Bearish idea"
+           (single-line direction/facing sub-conds) - carried on every synthetic
+           strategy so the entry veto (overallDirBlocks) can read the vote lines
+           on that TF's own chart. */
+        const dirDropped = (conds && conds._dirDropped) || [];
+        /* AI Brain AUTO is NOT applied to the Indicator-filters synthetic run:
+           that mode's contract is "all together (strict AND)" - every ticked
+           Bullish / Bearish filter must pass on the chart. Softening the whole
+           set into one weighted confluence condition (need >= threshold) is
+           exactly what left the "all my conditions pass but no trade" situation
+           (confluence read 17/54% < 65%), so the synthetic run gates on the
+           filters STRICTLY no matter what the shared AI Brain toolbar select
+           says. AI Brain AUTO still applies to real strategy runs (Strategies /
+           Auto Experiment) as before. */
+        const sideTag = grp.side ? (grp.side === 'bearish' ? ' · Top losers (bearish)' : ' · Top gainers (bullish)') : '';
+        out.push({
+          id: 'flt:' + tf + (grp.side ? (grp.side === 'bearish' ? ':bear' : ':bull') : ''),
+          name: 'Indicator filter based trades (all together) [' + tf + ']' + sideTag,
+          cat: grp.side || 'bullish',
+          method: '',
+          tf: tf,
+          /* Primary entry = ALL selected filter conditions of THIS side (strict
+             AND). No AI Brain confluence condition is ever injected here. */
+          entry: conds,
+          exit: null,
+          entryExtra: [],
+          exitExtra: [],
+          entryThreshold: conds.length,
+          candlestick: { enabled: false, entry: [], exit: [] },
+          /* Synthetic strategy: never persisted and must not re-append the global
+             filters (they ARE the entry conditions). */
+          _filterBuilt: true,
+          /* Movers routing: evaluate this synthetic only on symbols whose own
+             daily move points at this side. */
+          _bindSide: grp.side || null,
+          /* Lines contributing votes to the "Overall Bullish/Bearish idea" veto. */
+          _dirDropped: dirDropped,
+          createdAt: Date.now(),
+          autoSlPct: null
+        });
+      }
+    }
+    return out;
   }
 
   /* ---------------- symbol / instrument resolution ---------------- */
@@ -3505,7 +3534,12 @@ window.createAISmartTrading = function (suffix) {
     const onEl = $id('astNiftyTrendEnabled'), pctEl = $id('astNiftyTrendPct'), incEl = $id('astNiftyTrendIndices');
     const pctOnEl = $id('astNiftyTrendPctOn'), topNEl = $id('astNiftyTrendTopN'), topNCountEl = $id('astNiftyTrendTopNCount');
     if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
-    state.niftyTrend.enabled = onEl ? onEl.checked : false;
+    /* `enabled` is owned by the "Trend Follow" toggle button (toggleNiftyTrend) -
+       there is no astNiftyTrendEnabled checkbox. NEVER clear it here: this reader
+       runs on every pct / topN / indices / pick-mode change, and defaulting a
+       missing element to false silently switched trend-following (and its
+       assigned-template rotation) OFF the moment the user configured the picker. */
+    if (onEl) state.niftyTrend.enabled = !!onEl.checked;
     state.niftyTrend.pct = pctEl ? (Number(pctEl.value) > 0 ? Number(pctEl.value) : 2.5) : 2.5;
     state.niftyTrend.includeIndices = incEl ? incEl.checked : false;
     /* The two pick modes are mutually exclusive: the dedicated setTrendMode
@@ -3594,7 +3628,7 @@ window.createAISmartTrading = function (suffix) {
     /* Mutually exclusive with Top Gainers / Losers + Indices: enabling trend
        following switches the paper engine into trend mode, so the movers
        universe is switched off and its controls fade to inactive. */
-    if (state.niftyTrend.enabled && state.movers) state.movers.enabled = false;
+    if (state.niftyTrend.enabled && state.movers) { state.movers.enabled = false; _moversRunStartPending = false; }
     if (state.niftyTrend.enabled && state.sim) state.sim.enabled = false;
     save();
     _resetTrendScan();
@@ -3630,7 +3664,7 @@ window.createAISmartTrading = function (suffix) {
     if (!state.sim) state.sim = { enabled: false };
     state.sim.enabled = !state.sim.enabled;
     if (state.sim.enabled) {
-      if (state.movers) state.movers.enabled = false;
+      if (state.movers) { state.movers.enabled = false; _moversRunStartPending = false; }
       if (state.niftyTrend) { state.niftyTrend.enabled = false; _resetTrendScan(); _trendRunStartPending = false; }
       if (state.commodity) state.commodity.enabled = false;
       /* Make sure the server simulator is producing a live stream. */
@@ -4457,7 +4491,21 @@ window.createAISmartTrading = function (suffix) {
     const now = _lastNiftyDir;
     if ((now === 'bullish' || now === 'bearish') && now !== prev) {
       try {
-        if (_trendRunStartPending) {
+        if (state.movers && state.movers.enabled) {
+          /* Top Movers drives the assigned-template cycle off the same confirmed
+             market side (gainers = bullish, losers = bearish). When BOTH legs
+             are selected together they already run their own templates (see
+             _moversTplRedirectBoth), so a NIFTY flip must not switch a leg off. */
+          if (_moversBothActive()) {
+            _moversRunStartPending = false;
+          } else if (_moversRunStartPending) {
+            const pend = _moversRunStartPending;
+            _moversRunStartPending = false;
+            if (state.enabled === true) _moversTplApplyRunStart(now, pend === 'filter' ? 'filter' : null);
+          } else {
+            _moversTplApplyLive(now);
+          }
+        } else if (_trendRunStartPending) {
           const pend = _trendRunStartPending;
           _trendRunStartPending = false;
           /* Only the run that set the flag (still running) may apply it; if the
@@ -4468,7 +4516,7 @@ window.createAISmartTrading = function (suffix) {
         } else {
           _trendTplApplyLive(now);
         }
-      } catch (e) { log('NIFTY trend live template apply error: ' + (e && e.message ? e.message : e), 'warn'); }
+      } catch (e) { log('Assigned-template live apply error: ' + (e && e.message ? e.message : e), 'warn'); }
     }
     return now;
   }
@@ -4501,9 +4549,6 @@ window.createAISmartTrading = function (suffix) {
     const sum = _niftySummary(bias);
     const sumEl = $id('astNiftyStatus');
     if (sumEl) sumEl.innerHTML = (sum || '<span style="color:#666">waiting for NIFTY ' + niftyTfLabel(_niftyTf) + ' data&hellip;</span>') + ' ' + niftyConfirmStatusHtml();
-    if (bias && isFinite(bias.pctb) && window.NiftyBbpAlert) {
-      NiftyBbpAlert.feed('ast', { pctb: bias.pctb, overall: bias.overall });
-    }
   }
   /* Confirmed-vs-raw NIFTY direction marker for the status readout. */
   function niftyConfirmStatusHtml() {
@@ -4521,102 +4566,6 @@ window.createAISmartTrading = function (suffix) {
     return ' &middot; <span style="font-size:9px">' + txt + pend + '</span>';
   }
 
-  /* BB%b alert gate (mirrors the NTR BB%b alert section). Only acts when the
-     section's master "Gate" checkbox is ON. When ON, a new entry may only be
-     placed once the matching set BB%b alert signal is currently met:
-       - exactly ONE alert line armed (user's manual direction pick) -> that
-         line alone decides for every instrument (manual top gainer/loser runs).
-       - BOTH lines armed (needed in NIFTY trend-following auto runs, where the
-         direction can flip) -> the executed option leg decides: CE leg -> BULL
-         CE alert, PE leg -> BEAR PE alert.
-       - no option leg known for the instrument -> the NIFTY trend-following
-         direction (bullish -> BULL CE alert, bearish -> BEAR PE alert) decides.
-     Returns null when the gate is off / satisfied, else a human reason. */
-  function bbpGateBlock(instr, tradeTargets) {
-    if (!window.NiftyBbpAlert) return null;
-    const g = NiftyBbpAlert.gateStatus('ast');
-    if (!g || !g.master) return null;
-    const armed = [];
-    if (g.bull.enabled) armed.push('bull');
-    if (g.bear.enabled) armed.push('bear');
-    /* No alert line armed/enabled: the gate has NOTHING to enforce, so it must
-       be a NO-OP - never block entries. (Previously this returned a hard block
-       "koi BB%b alert line LOCK/SET nahi hui", which stopped every entry even
-       though the BB%b alert itself was off - the reported "gate still blocks
-       the engine when BB%b alert is off".) An empty gate = gate off, so it also
-       must not wait for a BB%b sample it will never use. */
-    if (!armed.length) return null;
-    if (g.last == null) return 'BB%b gate ON: NIFTY BB%b sample pending...';
-    const rowWait = function (rk, row) {
-      const sideTxt = rk === 'bear' ? 'BEAR PE' : 'BULL CE';
-      if (row.met) return null;
-      const ab = (row.logic === 'trend') ? (g.trendText || 'line --') : ('ab ' + g.lastText);
-      return 'BB%b gate: waiting ' + sideTxt + ' alert (' + row.ruleText + '; ' + ab + ')';
-    };
-    /* Manual direction pick: one line armed -> that line gates every entry. */
-    if (armed.length === 1) {
-      const rk = armed[0];
-      const row = (rk === 'bear') ? g.bear : g.bull;
-      return rowWait(rk, row);
-    }
-    /* Both lines armed (auto / trend-following run): the executed leg decides. */
-    const probe = (instr && instr.kind === 'option' && (instr.optionType === 'CE' || instr.optionType === 'PE'))
-      ? instr
-      : (Array.isArray(tradeTargets) && tradeTargets.length && (tradeTargets[0].optionType === 'CE' || tradeTargets[0].optionType === 'PE'))
-        ? tradeTargets[0]
-        : null;
-    let needBear;
-    if (probe) {
-      needBear = probe.optionType === 'PE';
-    } else {
-      const dir = _lastNiftyDir;
-      if (dir !== 'bullish' && dir !== 'bearish') return 'BB%b gate ON: NIFTY trend direction clear nahi (bullish/bearish pending)';
-      needBear = dir === 'bearish';
-    }
-    const row = needBear ? g.bear : g.bull;
-    return rowWait(needBear ? 'bear' : 'bull', row);
-  }
-
-   /* BB%b RUN WINDOW (AST engine run window): when the "Run Win" switch is ON
-      the whole engine run (both normal poll and HFT scanner) only allows NEW
-      entries between the two window lines:
-        - BB%b crosses ACTIVE line  -> run window ACTIVE  (entries allowed).
-        - BB%b crosses INACTIVE line -> run window INACTIVE (no new entries;
-          open trades keep running to their SL/TP/trail).
-      The window is a separate, higher-level pause/resume latch layered above the
-      BB%b alert gate: when the window is INACTIVE no entry passes regardless of
-      the BB%b gate state; when ACTIVE the BB%b gate still applies as usual.
-      The WHOLE BB%b section is master-gated by its "Gate" checkbox: when that
-      checkbox is OFF the section is fully disabled, so the run window must NOT
-      keep the engine dormant either (a stale Run-Win state can otherwise keep
-      blocking every new entry even though the user turned the BB%b section off).
-      Returns null when the section is off / the window is off or active, else a
-      human reason. */
-  function bbpWindowBlock() {
-    if (!window.NiftyBbpAlert) return null;
-    const g = NiftyBbpAlert.gateStatus('ast');
-    if (!g || !g.master) return null;
-    const w = NiftyBbpAlert.windowStatus('ast');
-    if (!w || !w.enabled) return null;
-    /* No ACTIVE rule enabled = there is NO boundary that can ever (re)start the
-       run, so the window would hold the engine dormant forever (windowReset /
-       seedWindowState can only ever leave it INACTIVE). Treat it as a no-op
-       instead of blocking every entry. */
-    if (!w.active || !w.active.enabled) return null;
-    if (w.state === 'active') return null;
-    const a = w.active;
-    let reason;
-    if (a && a.enabled) {
-      reason = (a.logic === 'trend')
-        ? 'BB%b pane line ' + (a.trendDir === 'bearish' ? 'Bearish (down)' : 'Bullish (up)') + ' (ACTIVE)'
-        : 'BB%b ' + (a.cond === 'crossed_above' ? 'above' : 'below') + ' ' + a.valueText + ' (ACTIVE)';
-    } else {
-      reason = 'ACTIVE line';
-    }
-    const ab = (a && a.logic === 'trend') ? (w.trendText || 'line --') : ('ab ' + (w.lastText || '--'));
-    return 'BB%b run window INACTIVE - engine dormant. Naye entries tab tak nahi jab tak BB%b ' + reason + ' na ho (' + ab + '). Open trades chalti rahengi.';
-  }
-
   /* NIFTY ensemble-trend timeframe (1 min / 5 min). Switching invalidates the
      cached bias so the trend is recomputed on the newly chosen timeframe, the
      static helper text is updated and the choice persists across reloads. */
@@ -4632,7 +4581,6 @@ window.createAISmartTrading = function (suffix) {
     _niftyTf = tf;
     localStorage.setItem(_NIFTY_TF_KEY, tf);
     delete _niftyBiasCache[tf];
-    if (window.NiftyBbpAlert) NiftyBbpAlert.reset('ast');
     syncNiftyTfUI();
     updateNiftyBiasStatus(null);
     niftyBias().then(b => { if (b) updateNiftyBiasStatus(b); });
@@ -4736,9 +4684,17 @@ window.createAISmartTrading = function (suffix) {
              bullish/bearish strategy set only ever trades its own side).
            - Only when NO directional choice is expressed does the symbol's own
              daily move auto-pick the leg (top-gainers->CE / top-losers->PE). */
-      const dir = state.filterMode
-        ? (activeFilterDirection() || ntSide || moverDirectionFor(symbol) || await trendDirectionFor(symbol))
-        : (ntSide || strategyDirectionFor() || activeFilterDirection() || moverDirectionFor(symbol) || await trendDirectionFor(symbol));
+      /* Top Movers universe: the symbol's OWN daily move decides the leg FIRST
+         (top gainer -> CE, top loser -> PE). Without this a mixed bullish +
+         bearish assigned-template run let the primary template's filter /
+         strategy direction pin EVERY symbol to that one side, so all picked
+         strikes came out CE even though top losers were selected. */
+      const mvDir = moverDirectionFor(symbol);
+      const dir = mvDir
+        ? mvDir
+        : (state.filterMode
+          ? (activeFilterDirection() || ntSide || strategyDirectionFor() || await trendDirectionFor(symbol))
+          : (ntSide || strategyDirectionFor() || activeFilterDirection() || await trendDirectionFor(symbol)));
       if (dir === 'bullish') ot = 'CE';
       else if (dir === 'bearish') ot = 'PE';
     }
@@ -5657,10 +5613,18 @@ window.createAISmartTrading = function (suffix) {
         the unanimous running-strategy category, then the ticked filter, and only
         then the symbol's own daily move. Keeps the HFT scanner / picked-strike
         reconciler trading the SAME leg the poll resolves. */
-     const dir = state.filterMode
-       ? (activeFilterDirection() || ntSide || moverDirectionFor(symbol) || (stratDir !== undefined ? stratDir : strategyDirectionFor()))
-       : (ntSide || (stratDir !== undefined ? stratDir : strategyDirectionFor()) || activeFilterDirection() || moverDirectionFor(symbol));
-     return dir === 'bullish' ? 'CE' : (dir === 'bearish' ? 'PE' : null);
+      /* Top Movers universe: the symbol's OWN daily move decides its leg FIRST
+         (top gainer -> CE, top loser -> PE). Without this, a mixed bullish +
+         bearish assigned-template run let the primary template's filter /
+         strategy direction pin EVERY symbol to that one side, so only bullish
+         stocks' CE strikes were picked even though top losers were selected. */
+      const mvDir = moverDirectionFor(symbol);
+      const dir = mvDir
+        ? mvDir
+        : (state.filterMode
+          ? (activeFilterDirection() || ntSide || (stratDir !== undefined ? stratDir : strategyDirectionFor()))
+          : (ntSide || (stratDir !== undefined ? stratDir : strategyDirectionFor()) || activeFilterDirection()));
+      return dir === 'bullish' ? 'CE' : (dir === 'bearish' ? 'PE' : null);
    }
 
    /* Reconcile the picked-strikes map against the CURRENT run every tick: the
@@ -5685,7 +5649,7 @@ window.createAISmartTrading = function (suffix) {
        chain. Mirror it here so records created by this tick's resolve are never
        judged stale by a side the resolve itself never produces (the filterMode
        ticked-filter bias vs auto NIFTY side mismatch). */
-    const forcedSide = runInForcedSide();
+    const forcedSide = _moversBothActive() ? null : runInForcedSide();
     /* Only prune by session age once the session is actually open (09:15-15:30):
        while the market is closed the engine legitimately keeps resolving picks
        off the frozen cache for the panel, and pruning them there would just make
@@ -5752,7 +5716,7 @@ window.createAISmartTrading = function (suffix) {
     /* Same run-in override side the poll resolves (see reconcilePickedStrikes):
        never filter the scanner's contracts against a side the resolve itself
        does not produce. */
-    const forcedSide = runInForcedSide();
+    const forcedSide = _moversBothActive() ? null : runInForcedSide();
     const out = [];
     for (const sym of syms) {
       if (runInMode(sym) === 'spot') {
@@ -5936,13 +5900,6 @@ window.createAISmartTrading = function (suffix) {
           /* One-trade-per-signal: this still-true condition already fired its
              trade - no re-entry until the signal resets and meets again. */
           if (firedSignal(key)) continue;
-          /* BB%b run window (engine run window): when the window is INACTIVE
-             the HFT scanner stays dormant - no new entries until BB%b crosses
-             the ACTIVE line. Higher-level than the BB%b alert gate below. */
-          const winBlock = bbpWindowBlock();
-          if (winBlock) continue;
-          const bbpBlock = bbpGateBlock(instr, tradeTargets);
-          if (bbpBlock) continue;
           gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });
           const side = 'BUY';
           let lotSize = u.lotSize != null ? Number(u.lotSize) : null;
@@ -5969,6 +5926,13 @@ window.createAISmartTrading = function (suffix) {
           const fixedTpPct = (u.rrEnabled === true && Number(u.rrValue) > 0 && slPct > 0)
             ? slPct * Number(u.rrValue)   // reward = risk x RR (overrides manual + AI TP)
             : (manualTPOn ? (Number(u.manualTPPct) || 0) : (aiTPOn ? aiTPPct(candles) : 0));
+          /* Name the exact source that owns this fixed take-profit so the Closed
+             Trades row shows "Risk:Reward hit" / "Manual TP hit" / "AI TP hit"
+             instead of a generic "Take profit hit" that misattributes the exit
+             to a checkbox the user had faded out. RR wins over manual/AI TP. */
+          const tpSrc = (u.rrEnabled === true && Number(u.rrValue) > 0 && slPct > 0)
+            ? 'Risk:Reward'
+            : (manualTPOn && fixedTpPct > 0 ? 'Manual TP' : (aiTPOn && fixedTpPct > 0 ? 'AI TP' : ''));
           if (manualSLOn && manualTrailSLOn) updateAiSlStatus('Overall SL ' + slPct.toFixed(2) + '% + Trail SL ' + slTrailPct.toFixed(2) + '%');
           else if (manualSLOn) updateAiSlStatus('Overall SL ' + slPct.toFixed(2) + '%');
           else if (manualTrailSLOn) updateAiSlStatus('Trail SL ' + slTrailPct.toFixed(2) + '%');
@@ -5989,7 +5953,7 @@ window.createAISmartTrading = function (suffix) {
             const budget = hftOpsBudget();
             if (!budget.ok) break;
             const sCap = strategyMarginCap(s);
-            const ok = pt.autoEntry(side, { key: key, symbol: tSym, lotSize: lotSize, lots: u.lots, margin: (sCap > 0 ? sCap : u.margin), marginCap: sCap, tpPct: tpPct, slPct: slPct, slTrailPct: slTrailPct, fixedTpPct: fixedTpPct, fnoLimit: false, fallbackLtp: tSym.premium, autoTrail: (aiSlOn && slPct > 0) });
+            const ok = pt.autoEntry(side, { key: key, symbol: tSym, lotSize: lotSize, lots: u.lots, margin: (sCap > 0 ? sCap : u.margin), marginCap: sCap, tpPct: tpPct, slPct: slPct, slTrailPct: slTrailPct, fixedTpPct: fixedTpPct, tpSrc: tpSrc, fnoLimit: false, fallbackLtp: tSym.premium, autoTrail: (aiSlOn && slPct > 0) });
             if (ok) {
               placedLegs++;
               _etPlaced++;
@@ -6005,7 +5969,7 @@ window.createAISmartTrading = function (suffix) {
                   slTrailPct: np.slTrailPct || 0, slTrailed: !!(np.slTrailed),
                   targetPrice: np.targetPrice, stopLoss: np.stopLoss,
                   orderType: np.orderType || 'MARKET', limitPrice: np.limitPrice || 0,
-                  tpPct: np.tpPct || 0, tpPrice: np.tpPrice || 0,
+                  tpPct: np.tpPct || 0, tpPrice: np.tpPrice || 0, tpSrc: np.tpSrc || '',
                   instrumentName: np.symbol || instrumentName(instr),
                   symbol: np.symbol, symbolId: np.symbolId, symbolExch: np.symbolExch, inst: np.inst,
                   underId: underKeyOfInstr(instr),
@@ -6834,8 +6798,13 @@ window.createAISmartTrading = function (suffix) {
          trend / top gainers-losers) for every symbol in the selected universe. */
       let instruments;
       const rsiCfg = runStrategyInConfig();
+      /* Top Movers with BOTH legs selected runs per-symbol (gainers CE, losers
+         PE) - forcing the single "Run Strategy In" side would collapse every
+         symbol onto one option side and hide the other leg, so the override is
+         bypassed while both movers legs are live. */
+      const forceSingleSide = rsiCfg.enabled && !_moversBothActive();
       try {
-        instruments = rsiCfg.enabled
+        instruments = forceSingleSide
           ? await resolveInstruments(effectiveRunInSide(null, rsiCfg))
           : await resolveInstruments();
       } catch (e) { instruments = []; }
@@ -6852,7 +6821,7 @@ window.createAISmartTrading = function (suffix) {
       cutStaleSideLegs(instruments, strategies);
 
       let placedTotal = 0;
-      const _newBucket = () => ({ candles: 0, targets: 0, nifty: 0, limit: 0, confirm: 0, signal: 0, bbp: 0 });
+      const _newBucket = () => ({ candles: 0, targets: 0, nifty: 0, limit: 0, confirm: 0, signal: 0 });
       const skips = { idx: _newBucket(), fno: _newBucket() };
       const bump = (instr, reason) => { const b = skips[isIndex(instr.symbol) ? 'idx' : 'fno']; if (b) b[reason]++; };
 
@@ -6879,6 +6848,14 @@ window.createAISmartTrading = function (suffix) {
             const isym = instr.symbol;
             if (!isym || String(isym.id) + ':' + (isym.exch || '') !== s._bindSym) continue;
             if (instr.kind === 'option' && ((instr.optionType === 'CE') !== (s.cat !== 'bearish'))) continue;
+          }
+          /* Top Movers per-side filter routing: the bullish synthetic runs ONLY
+             on gainers (daily % >= 0) and the bearish synthetic ONLY on losers
+             (% < 0), so each symbol is gated by its OWN side's assigned template
+             indicators - never both templates at once. A missing live quote
+             leaves the side unknown, so that symbol is skipped this pass. */
+          if (s._bindSide) {
+            if (moverDirectionFor(instr.symbol) !== s._bindSide) continue;
           }
           const candles = await candlesForInstrument(instr, entryTf);
           if (!candles || candles.length < 10) { prog(s.id, 5, 'Waiting candles'); bump(instr, 'candles'); continue; }
@@ -7008,13 +6985,6 @@ window.createAISmartTrading = function (suffix) {
             if (cold.length) { try { await ensureOptionQuotes(cold, entryTf); } catch (e) {} }
           }
           prog(s.id, 30, 'Execution target ready');
-          /* BB%b run window (engine run window): when INACTIVE the engine stays
-             dormant - no new entries until BB%b crosses the ACTIVE line. Open
-             trades keep running. Higher-level than the BB%b alert gate below. */
-          const winBlock = bbpWindowBlock();
-          if (winBlock) { prog(s.id, 76, winBlock); bump(instr, 'bbp'); continue; }
-          const bbpBlock = bbpGateBlock(instr, tradeTargets);
-          if (bbpBlock) { prog(s.id, 77, bbpBlock); bump(instr, 'bbp'); continue; }
           gridEvent('signal', { name: instrumentName(instr), strategy: s.name, key: key, dir: s.cat || '' });
           prog(s.id, 90, 'Placing entry');
 
@@ -7048,6 +7018,13 @@ window.createAISmartTrading = function (suffix) {
           const fixedTpPct = (u.rrEnabled === true && Number(u.rrValue) > 0 && slPct > 0)
             ? slPct * Number(u.rrValue)   // reward = risk x RR (overrides manual + AI TP)
             : (manualTPOn ? (Number(u.manualTPPct) || 0) : (aiTPOn ? aiTPPct(candles) : 0));
+          /* Name the exact source that owns this fixed take-profit so the Closed
+             Trades row shows "Risk:Reward hit" / "Manual TP hit" / "AI TP hit"
+             instead of a generic "Take profit hit" that misattributes the exit
+             to a checkbox the user had faded out. RR wins over manual/AI TP. */
+          const tpSrc = (u.rrEnabled === true && Number(u.rrValue) > 0 && slPct > 0)
+            ? 'Risk:Reward'
+            : (manualTPOn && fixedTpPct > 0 ? 'Manual TP' : (aiTPOn && fixedTpPct > 0 ? 'AI TP' : ''));
           if (manualSLOn && manualTrailSLOn) updateAiSlStatus('Overall SL ' + slPct.toFixed(2) + '% + Trail SL ' + slTrailPct.toFixed(2) + '%');
           else if (manualSLOn) updateAiSlStatus('Overall SL ' + slPct.toFixed(2) + '%');
           else if (manualTrailSLOn) updateAiSlStatus('Trail SL ' + slTrailPct.toFixed(2) + '%');
@@ -7093,7 +7070,7 @@ window.createAISmartTrading = function (suffix) {
                fresh entry can be placed. */
             if (stopGen !== _stopGen) { prog(s.id, 95, 'Stopped by Close All'); return; }
             const sCap = strategyMarginCap(s);
-            const ok = pt.autoEntry(side, { key: key, symbol: tSym, lotSize: lotSize, lots: u.lots, margin: (sCap > 0 ? sCap : u.margin), marginCap: sCap, tpPct: tpPct, slPct: slPct, slTrailPct: slTrailPct, fixedTpPct: fixedTpPct, fnoLimit: false, fallbackLtp: tSym.premium, autoTrail: (aiSlOn && slPct > 0) });
+            const ok = pt.autoEntry(side, { key: key, symbol: tSym, lotSize: lotSize, lots: u.lots, margin: (sCap > 0 ? sCap : u.margin), marginCap: sCap, tpPct: tpPct, slPct: slPct, slTrailPct: slTrailPct, fixedTpPct: fixedTpPct, tpSrc: tpSrc, fnoLimit: false, fallbackLtp: tSym.premium, autoTrail: (aiSlOn && slPct > 0) });
             if (ok) {
               placed++;
               _etPlaced++;
@@ -7108,7 +7085,7 @@ window.createAISmartTrading = function (suffix) {
                   slTrailPct: np.slTrailPct || 0, slTrailed: !!(np.slTrailed),
                   targetPrice: np.targetPrice, stopLoss: np.stopLoss,
                   orderType: np.orderType || 'MARKET', limitPrice: np.limitPrice || 0,
-                  tpPct: np.tpPct || 0, tpPrice: np.tpPrice || 0,
+                  tpPct: np.tpPct || 0, tpPrice: np.tpPrice || 0, tpSrc: np.tpSrc || '',
                   instrumentName: np.symbol || instrumentName(instr),
                   symbol: np.symbol, symbolId: np.symbolId, symbolExch: np.symbolExch, inst: np.inst,
                   underId: underKeyOfInstr(instr),
@@ -7147,7 +7124,6 @@ window.createAISmartTrading = function (suffix) {
           if (b.limit > 0) p.push(b.limit + ' trade-limit-reached');
           if (b.confirm > 0) p.push(b.confirm + ' missing-both-confirm');
           if (b.signal > 0) p.push(b.signal + ' no-signal');
-          if (b.bbp > 0) p.push(b.bbp + ' bbp-gate-wait');
           return p.length ? p.join(', ') : 'none';
         };
         const idxPart = fmt(skips.idx);
@@ -7474,7 +7450,7 @@ window.createAISmartTrading = function (suffix) {
 
   function startPoll() {
     if (_pollTimer) clearInterval(_pollTimer);
-    _pollTimer = setInterval(() => { tick(); refreshNiftyStatus(); renderMoversList(); renderNiftyTrendList(); renderPickedStrikes(); if (state.dataPool) poolScan(); syncFastDataUI(); renderBrainSummary(); refreshTrendTplSelects(); renderTrendTplChips(); }, POLL_MS);
+    _pollTimer = setInterval(() => { tick(); refreshNiftyStatus(); renderMoversList(); renderNiftyTrendList(); renderPickedStrikes(); if (state.dataPool) poolScan(); syncFastDataUI(); renderBrainSummary(); refreshTrendTplSelects(); renderTrendTplChips(); refreshMoversTplSelects(); renderMoversTplChips(); applyFilterListLock(); }, POLL_MS);
   }
   function stopPoll() {
     if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
@@ -7719,9 +7695,22 @@ window.createAISmartTrading = function (suffix) {
 
   function readMoversUI() {
     const g = $id('astMoversGainers'), l = $id('astMoversLosers');
-    if (!state.movers) state.movers = { enabled: false, gainers: 5, losers: 5, indices: [] };
-    state.movers.gainers = g ? (Number(g.value) || 0) : 0;
-    state.movers.losers = l ? (Number(l.value) || 0) : 0;
+    if (!state.movers) state.movers = { enabled: false, gainers: 5, losers: 5, indices: [], gainerTpls: [], loserTpls: [] };
+    const ng = g ? (Number(g.value) || 0) : 0;
+    const nl = l ? (Number(l.value) || 0) : 0;
+    const changed = (ng !== state.movers.gainers) || (nl !== state.movers.losers);
+    state.movers.gainers = ng;
+    state.movers.losers = nl;
+    /* Typing a top-N count switches the universe to the auto scan: drop any
+       manual +Add picks so the number input actually drives the universe. A
+       leftover picked list (persisted from an earlier +Add) silently overrode
+       the counts - topMoverSymbols()/moverDirectionFor() then used ONLY those
+       stale picks, which showed up as the run sticking to one side (e.g. only
+       bullish strikes) no matter what counts were entered. */
+    if (changed && Array.isArray(state.movers.picked) && state.movers.picked.length) {
+      state.movers.picked = [];
+      log('Top Movers: manual +Add picks cleared - the auto top gainers/losers counts now drive the universe', '');
+    }
     save();
   }
 
@@ -7846,6 +7835,43 @@ window.createAISmartTrading = function (suffix) {
       if (master) master.checked = on;
       secEl.style.opacity = on ? '1' : '0.45';
     });
+  }
+
+  /* When a saved AST template is assigned to the ACTIVE direction of the running
+     universe (NIFTY Trend Following bullish/bearish, or Top Movers gainers/
+     losers) that universe OWNS the indicator filters: the manual Bullish/Bearish
+     indicator-filter list must go inactive, otherwise its leftover ticks keep
+     gating / conflicting with the assigned template's own saved filters and
+     ticked strategies. No assignment (or the universe OFF) = the manual list
+     stays fully usable for normal runs. */
+  function filterListTemplateLocked() {
+    const nt = state.niftyTrend || {};
+    if (nt.enabled && _tplSrcHasAny('trend')) return true;
+    const mv = state.movers || {};
+    if (mv.enabled && _tplSrcHasAny('movers')) return true;
+    return false;
+  }
+  function applyFilterListLock() {
+    const row = $id('astFilterRow');
+    if (!row) return;
+    const locked = filterListTemplateLocked();
+    const ctrls = row.querySelectorAll('input, select, button');
+    for (let i = 0; i < ctrls.length; i++) ctrls[i].disabled = locked;
+    row.style.opacity = locked ? '0.6' : '';
+    row.title = locked
+      ? 'Manual indicator filters are inactive while a saved AST template is assigned to the active NIFTY Trend Following / Top Movers direction - the assigned template supplies the filters.'
+      : '';
+    const note = $id('astFilterLockNote');
+    if (note) {
+      note.style.display = locked ? 'block' : 'none';
+      if (locked) {
+        /* A strategy-override fade can dim the note (it also matches the
+           [id^="astFilter"] selector) - keep it readable while locked. */
+        note.style.opacity = '1';
+        note.title = '';
+        note.classList.remove('ast-faded');
+      }
+    }
   }
 
   /* Indicator-filter side exclusivity while NIFTY trend-following runs live.
@@ -8133,6 +8159,7 @@ window.createAISmartTrading = function (suffix) {
     }
     if (!html) html = '<span style="color:#888">No live quotes yet - connect to Dhan to see daily top gainers / losers.</span>';
     if (!mv.enabled) html = '<div style="color:#888;font-size:9px;margin-bottom:2px">Top Movers is <b style="color:#e67e22">OFF</b> - toggle it ON to run AI Smart Trading on these.</div>' + html;
+    if (mv.enabled) html += moversTplStatusHtml();
     host.innerHTML = html;
   }
 
@@ -8334,6 +8361,12 @@ window.createAISmartTrading = function (suffix) {
     fade(mttEl, aiTpOn);
     fade(aitpEl, manualTPOn);
     fade(mtpEl, aiTPOn);
+    /* Real (not just visual) mutual exclusion for the fixed-TP pair: when one
+       is ticked the other is cleared, so a faded-out TP checkbox can never keep
+       a stale true flag that still arms a fixed target at entry (the "TP hit
+       while the TP box is greyed" bug). Manual TP wins over AI TP. */
+    if (manualTPOn && u.aiTP === true) { u.aiTP = false; if (aitpEl) aitpEl.checked = false; }
+    else if (aiTPOn && u.manualTP === true) { u.manualTP = false; if (mtpEl) mtpEl.checked = false; }
     if (mslPctEl) { const on = !!(mslEl && mslEl.checked); mslPctEl.disabled = !on || aiSlOn; mslPctEl.style.opacity = (on && !aiSlOn) ? '1' : '0.5'; }
     if (mtslPctEl) { const on = !!(mtslEl && mtslEl.checked); mtslPctEl.disabled = !on || aiSlOn; mtslPctEl.style.opacity = (on && !aiSlOn) ? '1' : '0.5'; }
     if (mttPctEl) { const on = !!(mttEl && mttEl.checked); mttPctEl.disabled = !on || aiTpOn; mttPctEl.style.opacity = (on && !aiTpOn) ? '1' : '0.5'; }
@@ -8494,11 +8527,18 @@ window.createAISmartTrading = function (suffix) {
   function syncStrategyOverrideUI() {
     const ov = strategyOverrideStatus();
     const hasAny = ov.tf || ov.sl || ov.trailSl || ov.filters;
+    /* When a saved AST template is assigned to the active direction, the manual
+       indicator-filter list is LOCKED (see applyFilterListLock). This sync must
+       never re-enable it - otherwise unfadeAstControls() released the lock every
+       time a running strategy changed and the manual filter list "khud active ho
+       ja raha" mid-run. */
+    const filterLocked = filterListTemplateLocked();
     const tfBoxes = ['astTf1min', 'astTf5min'];
     const slBoxes = ['astManualSL', 'astManualSLPct', 'astManualTrailSL', 'astManualTrailSLPct'];
     const filterIds = Array.from(document.querySelectorAll('[id^="astFilter"]')).map(el => el.id);
     if (!hasAny) {
-      unfadeAstControls(tfBoxes.concat(slBoxes, filterIds));
+      unfadeAstControls(tfBoxes.concat(slBoxes, filterLocked ? [] : filterIds));
+      if (filterLocked) applyFilterListLock();
       return;
     }
     if (ov.tf) {
@@ -8538,7 +8578,10 @@ window.createAISmartTrading = function (suffix) {
       unfadeAstControls(slBoxes);
     }
     if (ov.filters) fadeAstControls(filterIds);
-    else unfadeAstControls(filterIds);
+    else if (!filterLocked) unfadeAstControls(filterIds);
+    /* Re-assert the template lock after the override sync so a mid-run strategy
+       change can never leave the manual indicator-filter list active. */
+    if (filterLocked) applyFilterListLock();
   }
 
   function syncTradesUI() {
@@ -8564,8 +8607,10 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function applyMoversToUI() {
-    const mv = state.movers || (state.movers = { enabled: false, gainers: 5, losers: 5, indices: [] });
+    const mv = state.movers || (state.movers = { enabled: false, gainers: 5, losers: 5, indices: [], gainerTpls: [], loserTpls: [] });
     if (!Array.isArray(mv.indices)) mv.indices = [];
+    if (!Array.isArray(mv.gainerTpls)) mv.gainerTpls = [];
+    if (!Array.isArray(mv.loserTpls)) mv.loserTpls = [];
     // One-time migration from the old "Include all indices" checkbox: when it
     // was on and the user never picked explicit indices, seed with every index
     // symbol so previous behaviour is preserved.
@@ -8599,13 +8644,17 @@ window.createAISmartTrading = function (suffix) {
        out and disabled (the engine trades the trend-filtered F&O gainers/losers
        + selected indices instead). The toggle button itself stays clickable so
        turning it ON switches the engine out of trend mode. */
-    ['astMoversGainers', 'astMoversLosers', 'astMoversIndicesSelect', 'astMoversIndicesAdd'].forEach(id => {
+    ['astMoversGainers', 'astMoversLosers', 'astMoversIndicesSelect', 'astMoversIndicesAdd',
+     'astMoversGainTplSel', 'astMoversGainTplAdd', 'astMoversLoserTplSel', 'astMoversLoserTplAdd'].forEach(id => {
       const el = $id(id);
       if (el) {
         el.disabled = !active;
         el.style.opacity = active ? '1' : '0.5';
       }
     });
+    refreshMoversTplSelects();
+    renderMoversTplChips();
+    applyFilterListLock();
   }
 
   function updateAiSlStatus(text) {
@@ -9132,6 +9181,12 @@ window.createAISmartTrading = function (suffix) {
          reconcilePickedStrikes run-in mirror). Without the override the
          indicator-filters synthetic strategy follows the currently active
          Bullish/Bearish filter set, and other strategies their own category. */
+      /* Top Movers with BOTH legs live routes the option side per SYMBOL
+         (gainer -> CE, loser -> PE), so a strategy legitimately holds mixed CE
+         and PE legs at once. Cutting a leg because it does not match the
+         strategy's own category would wrongly axe every loser PE leg, so the
+         stale-side cut is disabled entirely on a both-legs movers run. */
+      if (_moversBothActive()) return;
       const forcedSide = runInForcedSide();
       const sideFor = {};
       (strategies || []).forEach(s => {
@@ -9229,6 +9284,7 @@ window.createAISmartTrading = function (suffix) {
         p.stopLoss = live.stopLoss;
         p.tpPct = live.tpPct || 0;
         p.tpPrice = live.tpPrice || 0;
+        p.tpSrc = live.tpSrc || '';
       });
     } catch (e) {}
   }
@@ -9466,17 +9522,6 @@ window.createAISmartTrading = function (suffix) {
     syncRunStrategyInUI();
   }
 
-  /* Fresh-run arming of the BB%b run window: when the window switch is ON, a
-     new engine run always starts dormant/INACTIVE and only allows entries once
-     BB%b crosses the ACTIVE line. windowReset no-ops when the window is off OR
-     when the whole BB%b section gate checkbox is OFF (section fully inactive -
-     it must never reset/log a dormant window while disabled). */
-  function bbpWindowArmRun() {
-    if (window.NiftyBbpAlert && typeof NiftyBbpAlert.windowReset === 'function') {
-      try { NiftyBbpAlert.windowReset('ast'); } catch (e) {}
-    }
-  }
-
   /* ---------------- actions ---------------- */
   function toggleAuto() {
     const turningOn = !state.enabled;
@@ -9487,16 +9532,17 @@ window.createAISmartTrading = function (suffix) {
        (the explicit mode choice is preserved); otherwise it rotates to the next
        assigned template whatever its saved mode. */
     if (turningOn) {
-      const redirected = state.filterMode === true ? _trendTplRedirectFilter() : _trendTplRedirect();
+      const redirected = state.filterMode === true
+        ? (_trendTplRedirectFilter() || _moversTplRedirectFilter())
+        : (_trendTplRedirect() || _moversTplRedirect());
       if (redirected) return;
     }
     /* Turning the engine off cancels any deferred run-start template apply. */
-    if (!turningOn) _trendRunStartPending = false;
+    if (!turningOn) { _trendRunStartPending = false; _moversRunStartPending = false; }
     state.enabled = !state.enabled;
     if (state.enabled) {
       state.runIntent = { active: true, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
       _userFastDataOff = false;
-      bbpWindowArmRun();
     } else {
       state.runIntent = { active: false, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
     }
@@ -9507,7 +9553,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function toggleMovers() {
-    if (!state.movers) state.movers = { enabled: false, gainers: 5, losers: 5, indices: [], picked: [] };
+    if (!state.movers) state.movers = { enabled: false, gainers: 5, losers: 5, indices: [], picked: [], gainerTpls: [], loserTpls: [] };
     state.movers.enabled = !state.movers.enabled;
     /* Mutually exclusive with NIFTY Trend Following: enabling the movers
        universe switches the engine out of trend-following mode. */
@@ -9524,6 +9570,24 @@ window.createAISmartTrading = function (suffix) {
     applyCommodityToUI();
     renderMoversList();
     renderPickedStrikes();
+    /* Enabling the movers universe on an ALREADY-running engine immediately
+       applies the assigned template(s): BOTH legs when both are selected (merge
+       each side's strategies live), else the confirmed side's template; with an
+       unconfirmed side the apply is deferred to the first confirmation.
+       Disabling clears any deferred apply. */
+    if (!state.movers.enabled) {
+      _moversRunStartPending = false;
+    } else if (state.enabled === true) {
+      try {
+        if (_moversBothActive()) {
+          if (_moversTplApplyLiveBoth()) _workingCache.clear();
+        } else if (_lastNiftyDir === 'bullish' || _lastNiftyDir === 'bearish') {
+          if (_moversTplApplyLive(_lastNiftyDir)) _workingCache.clear();
+        } else if (_moversHasAnyAssigned()) {
+          _moversRunStartPending = true;
+        }
+      } catch (e) { log('Top Movers live template apply error: ' + (e && e.message ? e.message : e), 'warn'); }
+    }
     log('Daily top gainers/losers + indices AI Smart Trading ' + (state.movers.enabled ? 'enabled' : 'disabled'), state.movers.enabled ? 'ok' : 'warn');
   }
 
@@ -9571,10 +9635,12 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function runPaper() {
-    /* NIFTY trend side with assigned templates: this run start rotates to the
-       next template of the confirmed side and starts under ITS settings instead
-       of the manual ones (see _trendTplRedirect). */
+    /* NIFTY trend / Top Movers side with assigned templates: this run start
+       rotates to the next template of the confirmed side and starts under ITS
+       settings instead of the manual ones (see _trendTplRedirect /
+       _moversTplRedirect). */
     if (_trendTplRedirect()) return;
+    if (_moversTplRedirect()) return;
     readUniversal();
     // "Run Paper Trading" runs the strategies the user ticked. Turn off the
     // dynamic "Smart AI trader picked" auto-picker (which re-picks top-N every
@@ -9588,7 +9654,6 @@ window.createAISmartTrading = function (suffix) {
     state.enabled = true;
     state.runIntent = { active: true, mode: 'normal', at: Date.now() };
     _userFastDataOff = false;
-    bbpWindowArmRun();
     save();
     applyUniversalToUI();
     render();
@@ -9602,12 +9667,14 @@ window.createAISmartTrading = function (suffix) {
      trail TP / fixed TP / lots / margin / AI risk / time gates) apply exactly
      like the normal Run Paper Trading mode. */
   function runFilterPaper() {
-    /* NIFTY trend side with assigned INDICATOR-FILTERS templates: this run start
-       applies the next assigned filter template of the confirmed side (same
-       Indicator-filters mode - the user's explicit mode choice is preserved) via
-       _trendTplRedirectFilter. When the side is still unconfirmed the redirect
-       arms a deferred apply and manual filters run until confirmation. */
+    /* NIFTY trend / Top Movers side with assigned INDICATOR-FILTERS templates:
+       this run start applies the next assigned filter template of the confirmed
+       side (same Indicator-filters mode - the user's explicit mode choice is
+       preserved) via _trendTplRedirectFilter / _moversTplRedirectFilter. When the
+       side is still unconfirmed the redirect arms a deferred apply and manual
+       filters run until confirmation. */
     if (_trendTplRedirectFilter()) return;
+    if (_moversTplRedirectFilter()) return;
     readUniversal();
     state.filterMode = true;
     state.aiPick = false;
@@ -9620,7 +9687,6 @@ window.createAISmartTrading = function (suffix) {
     state.enabled = true;
     state.runIntent = { active: true, mode: 'filter', at: Date.now() };
     _userFastDataOff = false;
-    bbpWindowArmRun();
     save();
     applyUniversalToUI();
     render();
@@ -9947,7 +10013,7 @@ window.createAISmartTrading = function (suffix) {
      Strategies / Close All Trades controls. */
   function stopAllStrategies(keepEnabled) {
     state.aiPick = false;
-    if (!keepEnabled) { state.enabled = false; _trendRunStartPending = false; }
+    if (!keepEnabled) { state.enabled = false; _trendRunStartPending = false; _moversRunStartPending = false; }
     state.runIntent = { active: false, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
     _stopGen++;
     applyModeToUI();
@@ -10015,6 +10081,8 @@ window.createAISmartTrading = function (suffix) {
        pick, so refresh them together with the quick-run selects. */
     refreshTrendTplSelects();
     renderTrendTplChips();
+    refreshMoversTplSelects();
+    renderMoversTplChips();
   }
 
   /* Fill one "AST saved templates quick run" <select> with every saved engine
@@ -10115,19 +10183,80 @@ window.createAISmartTrading = function (suffix) {
       template only configures HOW that side trades. When no template is assigned
       to the operative side, the manual settings path is exactly unchanged. */
 
-  function _trendAssignArr(side) {
-    const nt = state.niftyTrend || {};
-    const arr = side === 'bearish' ? nt.bearTpls : nt.bullTpls;
+  /* ---- Shared template-assignment primitives (NIFTY trend + Top Movers) ----
+     Both universes assign AST engine-settings templates per market direction and
+     rotate them round-robin on each generic run start. `src` names the owning
+     state: 'trend' = state.niftyTrend, 'movers' = state.movers. Direction sides
+     map to the per-source assignment arrays - trend: bullish=bullTpls,
+     bearish=bearTpls; movers: bullish=gainerTpls, bearish=loserTpls. The cycle
+     cursor lives in the owning object's tplCursor[side]. */
+  function _tplAssignArrFor(src, side) {
+    const owner = src === 'movers' ? (state.movers || {}) : (state.niftyTrend || {});
+    const arr = side === 'bearish'
+      ? (src === 'movers' ? owner.loserTpls : owner.bearTpls)
+      : (src === 'movers' ? owner.gainerTpls : owner.bullTpls);
     return Array.isArray(arr) ? arr : [];
   }
+  function _tplAssignedFor(src, side) {
+    const lib = tplLoad();
+    return _tplAssignArrFor(src, side).map(id => lib.find(t => String(t.id) === String(id))).filter(Boolean);
+  }
+  function _tplOwner(src) {
+    if (src === 'movers') {
+      if (!state.movers) state.movers = { enabled: false, gainers: 5, losers: 5, indices: [], picked: [], gainerTpls: [], loserTpls: [] };
+      return state.movers;
+    }
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
+    return state.niftyTrend;
+  }
+  /* Next template in a side's assigned cycle: cursor = the id used by the last
+     run/apply of that side; the next step moves one template forward (first ever
+     step -> the first assigned template) and advances the cursor. */
+  function _tplCycleNextFor(src, side) {
+    const list = _tplAssignedFor(src, side);
+    if (!list.length) return null;
+    const owner = _tplOwner(src);
+    const last = owner.tplCursor && owner.tplCursor[side];
+    let i = -1;
+    if (last) i = list.findIndex(t => String(t.id) === String(last));
+    const next = list[(i + 1) % list.length];
+    if (!owner.tplCursor) owner.tplCursor = {};
+    owner.tplCursor[side] = String(next.id);
+    save();
+    return next;
+  }
+  function _tplCycleNextInModeFor(src, side, mode) {
+    const list = _tplAssignedFor(src, side);
+    if (!list.length) return null;
+    const owner = _tplOwner(src);
+    const last = owner.tplCursor && owner.tplCursor[side];
+    let i = -1;
+    if (last) i = list.findIndex(t => String(t.id) === String(last));
+    for (let step = 1; step <= list.length; step++) {
+      const t = list[(i + step) % list.length];
+      if (_trendTplModeKey(t) === mode) {
+        if (!owner.tplCursor) owner.tplCursor = {};
+        owner.tplCursor[side] = String(t.id);
+        save();
+        return t;
+      }
+    }
+    return null;
+  }
+  function _tplSrcHasAny(src) {
+    return _tplAssignedFor(src, 'bullish').length > 0 || _tplAssignedFor(src, 'bearish').length > 0;
+  }
+  function _tplSrcHasInMode(src, mode) {
+    return _tplAssignedFor(src, 'bullish').some(t => _trendTplModeKey(t) === mode) ||
+           _tplAssignedFor(src, 'bearish').some(t => _trendTplModeKey(t) === mode);
+  }
+
+  function _trendAssignArr(side) { return _tplAssignArrFor('trend', side); }
   function _trendTplSideName(side) { return side === 'bearish' ? 'Bearish' : 'Bullish'; }
 
   /* Every assigned template id that still exists in the saved-template library
      (ids of templates deleted since the assignment are skipped everywhere). */
-  function _trendAssignedTpls(side) {
-    const lib = tplLoad();
-    return _trendAssignArr(side).map(id => lib.find(t => String(t.id) === String(id))).filter(Boolean);
-  }
+  function _trendAssignedTpls(side) { return _tplAssignedFor('trend', side); }
   function _trendTplRunMode(t) {
     return _trendModeLabel(_trendTplModeKey(t));
   }
@@ -10186,6 +10315,7 @@ window.createAISmartTrading = function (suffix) {
     save();
     refreshTrendTplSelects();
     renderTrendTplChips();
+    applyFilterListLock();
     log('Template "' + t.name + '" (' + t.mode + ') assigned to NIFTY ' + _trendTplSideName(side) + ' side - it drives the next NIFTY ' + _trendTplSideName(side).toLowerCase() + ' run start (cycle position ' + state.niftyTrend[key].length + ')', 'ok');
   }
 
@@ -10198,6 +10328,7 @@ window.createAISmartTrading = function (suffix) {
     save();
     refreshTrendTplSelects();
     renderTrendTplChips();
+    applyFilterListLock();
     if (state.niftyTrend[key].length !== before) log('Template removed from the NIFTY ' + _trendTplSideName(side) + ' side assignments', '');
   }
 
@@ -10241,6 +10372,160 @@ window.createAISmartTrading = function (suffix) {
       ' <div style="color:#666;margin-top:2px">Each NIFTY run start applies the next assigned template of the confirmed side (its saved settings + ticked strategies + run mode); trend CE/PE picking stays automatic. No template on a side = manual engine settings.</div></div>';
   }
 
+  /* ---------------- TOP MOVERS: assign saved engine templates to a direction ----------------
+     Mirror of the NIFTY trend assignment for the Top Gainers/Losers universe.
+     The market direction drives which cycle is used (gainers = bullish, losers =
+     bearish); while Top Movers is ON with a confirmed market side, each generic
+     run start applies the NEXT assigned template of that side (its saved
+     settings + ticked strategies + run mode). No template on the operative side
+     = the manual engine settings run as usual. */
+  function _moversAssignArr(side) { return _tplAssignArrFor('movers', side); }
+  function _moversAssignedTpls(side) { return _tplAssignedFor('movers', side); }
+  function _moversTplSideName(side) {
+    return side === 'bearish' ? 'Top losers (bearish)' : 'Top gainers (bullish)';
+  }
+  function _moversOperativeSide() {
+    const mv = state.movers || {};
+    if (!mv.enabled) return null;
+    if (_lastNiftyDir === 'bullish') return 'bullish';
+    if (_lastNiftyDir === 'bearish') return 'bearish';
+    return null;
+  }
+  /* The sides ACTUALLY present in the Top Movers universe, independent of the
+     confirmed NIFTY direction. Top gainers (>=0 change) are the bullish leg and
+     top losers (<0) are the bearish leg. When the user selects BOTH universes
+     (gainers>0 AND losers>0, or manually picked symbols of both signs) both
+     legs run TOGETHER: gainers use the bullish-side assigned template, losers
+     use the bearish-side one (see _moversTplRedirect). This is what makes "dono
+     ek sath selected ho to dono templates ek sath apply aur run" work - the old
+     single _moversOperativeSide path only ever ran one confirmed side. */
+  function _moversActiveSides() {
+    const mv = state.movers || {};
+    if (!mv.enabled) return [];
+    const picked = Array.isArray(mv.picked) ? mv.picked : [];
+    let gainer = false, loser = false;
+    if (picked.length) {
+      picked.forEach(s => {
+        const q = quoteFor(s);
+        const pct = (q && q.change_pct !== undefined) ? Number(q.change_pct) : NaN;
+        if (!isFinite(pct)) return;
+        if (pct < 0) loser = true; else gainer = true;
+      });
+    }
+    if (!gainer && !loser) {
+      gainer = (Number(mv.gainers) || 0) > 0;
+      loser = (Number(mv.losers) || 0) > 0;
+    }
+    const out = [];
+    if (gainer) out.push('bullish');
+    if (loser) out.push('bearish');
+    return out;
+  }
+  function _moversBothActive() { return _moversActiveSides().length > 1; }
+  function _moversHasAnyAssigned() { return _tplSrcHasAny('movers'); }
+  function _moversHasAssignedInMode(mode) { return _tplSrcHasInMode('movers', mode); }
+
+  function fillMoversTplSelect(side) {
+    const el = $id(side === 'bearish' ? 'astMoversLoserTplSel' : 'astMoversGainTplSel');
+    if (!el) return;
+    /* Direction restriction: Top gainers (bullish leg) may only be assigned a
+       template saved with mode 'bullish'; Top losers (bearish leg) only mode
+       'bearish'. Any other template is filtered out of this dropdown. */
+    const list = tplLoad().filter(t => (t.mode || '') === side);
+    const assigned = _moversAssignArr(side).map(x => String(x));
+    const rows = list.map(t => ({
+      id: String(t.id),
+      label: esc(String(t.name)) + ' (' + esc(t.mode || '') + ') · ' + _trendTplRunMode(t) +
+        (assigned.indexOf(String(t.id)) >= 0 ? ' · assigned' : '')
+    }));
+    const sig = rows.map(r => r.id + '~' + r.label).join('|');
+    if (el.dataset.tplIds === sig) return;
+    el.dataset.tplIds = sig;
+    const cur = el.value;
+    if (!rows.length) {
+      el.innerHTML = '<option value="">-- no saved ' + (side === 'bearish' ? 'bearish' : 'bullish') + ' template --</option>';
+      return;
+    }
+    el.innerHTML = '<option value="">-- select ' + (side === 'bearish' ? 'bearish' : 'bullish') + ' template --</option>' + rows.map(r =>
+      '<option value="' + r.id + '">' + r.label + '</option>').join('');
+    if (cur && el.querySelector('option[value="' + esc(cur) + '"]')) el.value = cur;
+  }
+  function refreshMoversTplSelects() { fillMoversTplSelect('bullish'); fillMoversTplSelect('bearish'); }
+
+  function assignMoversTemplate(side) {
+    const sel = $id(side === 'bearish' ? 'astMoversLoserTplSel' : 'astMoversGainTplSel');
+    const id = sel ? String(sel.value || '') : '';
+    if (!id) { log('Pick a saved engine-settings template to assign to the Top Movers ' + _moversTplSideName(side) + ' side first', 'warn'); return; }
+    const t = tplLoad().find(x => String(x.id) === id);
+    if (!t) return;
+    /* Direction restriction: gainers only accept a 'bullish' template, losers
+       only a 'bearish' one. A sideways/opposite template is refused. */
+    if ((t.mode || '') !== side) {
+      log('Top Movers ' + _moversTplSideName(side) + ': only a ' + side + '-mode template can be assigned here (template "' + t.name + '" is ' + (t.mode || 'unknown') + ')', 'warn');
+      refreshMoversTplSelects();
+      return;
+    }
+    const key = side === 'bearish' ? 'loserTpls' : 'gainerTpls';
+    if (!state.movers) state.movers = { enabled: false, gainers: 5, losers: 5, indices: [], picked: [], gainerTpls: [], loserTpls: [] };
+    if (!Array.isArray(state.movers[key])) state.movers[key] = [];
+    if (state.movers[key].indexOf(id) >= 0) {
+      log('Template "' + t.name + '" is already assigned to the Top Movers ' + _moversTplSideName(side) + ' side', 'warn');
+      return;
+    }
+    state.movers[key].push(id);
+    save();
+    refreshMoversTplSelects();
+    renderMoversTplChips();
+    applyFilterListLock();
+    log('Template "' + t.name + '" (' + t.mode + ') assigned to Top Movers ' + _moversTplSideName(side) + ' - it drives the next matching run start (cycle position ' + state.movers[key].length + ')', 'ok');
+  }
+
+  function removeMoversTemplate(side, id) {
+    const key = side === 'bearish' ? 'loserTpls' : 'gainerTpls';
+    if (!state.movers || !Array.isArray(state.movers[key])) return;
+    const before = state.movers[key].length;
+    state.movers[key] = state.movers[key].filter(x => String(x) !== String(id));
+    save();
+    refreshMoversTplSelects();
+    renderMoversTplChips();
+    applyFilterListLock();
+    if (state.movers[key].length !== before) log('Template removed from the Top Movers ' + _moversTplSideName(side) + ' assignments', '');
+  }
+
+  function renderMoversTplChips() {
+    ['bullish', 'bearish'].forEach(side => {
+      const el = $id(side === 'bearish' ? 'astMoversLoserTplList' : 'astMoversGainTplList');
+      if (!el) return;
+      const tpls = _moversAssignedTpls(side);
+      el.innerHTML = tpls.length
+        ? tpls.map(t => '<span style="display:inline-flex;align-items:center;gap:4px;background:#1a1a35;border:1px solid #2d2d50;color:#ffd700;border-radius:3px;padding:2px 6px;font-size:9px;margin:1px">' + esc(String(t.name)) + ' (' + esc(t.mode || '') + ') <b style="color:#00d4aa">' + _trendTplRunMode(t) + '</b>' +
+          ' <a href="javascript:void(0)" style="color:#ef5350;font-weight:700;text-decoration:none;font-size:11px" title="Remove from ' + _moversTplSideName(side) + ' assignments" onclick="AISmartTrading.removeMoversTemplate(\'' + side + '\', \'' + String(t.id) + '\')">&times;</a></span>').join('')
+        : '<span style="color:#666">none assigned - manual engine settings run as usual</span>';
+    });
+  }
+
+  function moversTplStatusHtml() {
+    const mv = state.movers || {};
+    if (!mv.enabled) return '';
+    const both = _moversBothActive();
+    const activeSide = both ? 'both' : (_lastNiftyDir === 'bullish' ? 'bullish' : (_lastNiftyDir === 'bearish' ? 'bearish' : null));
+    const parts = [];
+    ['bullish', 'bearish'].forEach(s => {
+      const tpls = _moversAssignedTpls(s);
+      if (!tpls.length) return;
+      const last = mv.tplCursor && mv.tplCursor[s];
+      let li = -1;
+      if (last) li = tpls.findIndex(t => String(t.id) === String(last));
+      const nextTpl = tpls[(li + 1) % tpls.length];
+      const mark = (both || activeSide === s) ? ' <b style="color:#00d4aa">- ' + (both ? 'both legs active: next run applies' : 'this side now: next run applies') + ' "' + esc(String(nextTpl.name)) + '"</b>' : '';
+      parts.push('<b style="color:#00d4aa">' + _moversTplSideName(s) + ':</b> ' + tpls.map(t =>
+        esc(String(t.name)) + ' <span style="color:#888">(' + _trendTplRunMode(t) + ')</span>').join(' &middot; ') + mark);
+    });
+    if (!parts.length) return '';
+    return '<div style="border-top:1px dashed #2d2d50;margin-top:4px;padding-top:3px"><span style="color:#b39ddb;font-weight:700">Assigned AST templates:</span> ' + parts.join(' &nbsp;|&nbsp; ') +
+      ' <div style="color:#666;margin-top:2px">Gainers leg me sirf bullish-mode template, losers leg me sirf bearish-mode template assign hota hai. ' + (both ? 'Dono legs selected hain: dono templates ek saath apply aur run honge (gainers CE + losers PE).' : 'Each matching run start applies the next assigned template of the confirmed market side (its saved settings + ticked strategies + run mode); top gainer/loser picking stays automatic.') + ' No template on a side = manual engine settings.</div></div>';
+  }
+
   /* ---------------- run-start template cycle for the NIFTY trend side ----------------
      While NIFTY trend-following is ON with a confirmed direction, starting the
      engine (Run Paper Trading / Indicator-filters / AI auto-pick) rotates to the
@@ -10264,6 +10549,18 @@ window.createAISmartTrading = function (suffix) {
   let _liveTplSide = null;
   let _liveTplId = null;
 
+  /* Top Movers counterparts of the NIFTY trend run-start/live-apply flags. */
+  let _moversRunStartPending = false;
+  let _moversLiveTplAt = 0;
+  let _moversLiveTplSide = null;
+  /* Set while applying a Top Movers assigned template so applyEngineSettings
+     can never switch the movers universe OFF (a template saved while movers was
+     off still carries enabled=false; the assignment means the universe stays on)
+     and can never overwrite the live gainers/losers/picked universe with the
+     template's saved snapshot. */
+  let _forceMoversOn = false;
+  let _moversTplApplyActive = false;
+
   function _trendOperativeSide() {
     const nt = state.niftyTrend || {};
     if (!nt.enabled) return null;
@@ -10276,17 +10573,7 @@ window.createAISmartTrading = function (suffix) {
      by the last run/apply of that side; the next step moves one template forward
      (first ever step -> the first assigned template) and advances the cursor. */
   function _trendCycleNext(side) {
-    const list = _trendAssignedTpls(side);
-    if (!list.length) return null;
-    const nt = state.niftyTrend;
-    const last = nt.tplCursor && nt.tplCursor[side];
-    let i = -1;
-    if (last) i = list.findIndex(t => String(t.id) === String(last));
-    const next = list[(i + 1) % list.length];
-    if (!nt.tplCursor) nt.tplCursor = {};
-    nt.tplCursor[side] = String(next.id);
-    save();
-    return next;
+    return _tplCycleNextFor('trend', side);
   }
 
   /* The run mode the engine is CURRENTLY executing under. Live flips preserve
@@ -10305,26 +10592,12 @@ window.createAISmartTrading = function (suffix) {
      no same-mode template exists the cursor is left untouched and null returns,
      so the engine keeps its current settings/filters running as-is. */
   function _trendCycleNextInMode(side, mode) {
-    const list = _trendAssignedTpls(side);
-    if (!list.length) return null;
-    const nt = state.niftyTrend;
-    const last = nt.tplCursor && nt.tplCursor[side];
-    let i = -1;
-    if (last) i = list.findIndex(t => String(t.id) === String(last));
-    for (let step = 1; step <= list.length; step++) {
-      const t = list[(i + step) % list.length];
-      if (_trendTplModeKey(t) === mode) {
-        if (!nt.tplCursor) nt.tplCursor = {};
-        nt.tplCursor[side] = String(t.id);
-        save();
-        return t;
-      }
-    }
-    return null;
+    return _tplCycleNextInModeFor('trend', side, mode);
   }
 
   function _trendTplRedirect() {
     if (_insideTemplateRun) return false;
+    if (!(state.niftyTrend && state.niftyTrend.enabled)) return false;
     const side = _trendOperativeSide();
     if (!side) {
       /* Side not confirmed yet (fresh page / first run of the session): there is
@@ -10350,15 +10623,14 @@ window.createAISmartTrading = function (suffix) {
      library (used to decide whether a run start with an unconfirmed side owes
      a deferred assigned-template apply). */
   function _trendHasAnyAssigned() {
-    return _trendAssignedTpls('bullish').length > 0 || _trendAssignedTpls('bearish').length > 0;
+    return _tplSrcHasAny('trend');
   }
 
   /* Any template assigned to EITHER NIFTY side whose SAVED run mode equals
      `mode` (used to decide whether a run start under a specific mode owes a
      deferred assigned-template apply of that mode). */
   function _trendHasAssignedInMode(mode) {
-    return _trendAssignedTpls('bullish').some(t => _trendTplModeKey(t) === mode) ||
-           _trendAssignedTpls('bearish').some(t => _trendTplModeKey(t) === mode);
+    return _tplSrcHasInMode('trend', mode);
   }
 
   /* Indicator-filters run-start rotation. The Indicator-filters run button is an
@@ -10375,6 +10647,7 @@ window.createAISmartTrading = function (suffix) {
      manual filter selections run exactly as before. */
   function _trendTplRedirectFilter() {
     if (_insideTemplateRun) return false;
+    if (!(state.niftyTrend && state.niftyTrend.enabled)) return false;
     const side = _trendOperativeSide();
     if (!side) {
       if (_trendHasAssignedInMode('filter')) {
@@ -10525,6 +10798,258 @@ window.createAISmartTrading = function (suffix) {
     return true;
   }
 
+  /* ---------------- TOP MOVERS run-start template cycle / live apply ----------------
+     Same contract as the NIFTY trend side, but the operative direction comes from
+     the Top Movers toggle (gainers = bullish, losers = bearish) and the assigned
+     arrays live in state.movers.gainerTpls / loserTpls. */
+  function _moversTplRedirect(onlyMode) {
+    if (_insideTemplateRun) return false;
+    if (!(state.movers && state.movers.enabled)) return false;
+    /* Both universes selected together (gainers>0 AND losers>0): run BOTH
+       assigned legs at once - gainers with the bullish template, losers with the
+       bearish template - instead of waiting for / following the confirmed NIFTY
+       direction and running only one side. */
+    if (_moversBothActive()) return _moversTplRedirectBoth(onlyMode);
+    const side = _moversOperativeSide();
+    const wantFilter = onlyMode === 'filter';
+    if (!side) {
+      if (wantFilter ? _moversHasAssignedInMode('filter') : _moversHasAnyAssigned()) {
+        _moversRunStartPending = wantFilter ? 'filter' : true;
+        log('Top Movers: run started before the market side is confirmed - the confirmed side\'s next assigned' + (wantFilter ? ' Indicator-filters' : '') + ' template will be applied automatically the moment it confirms (manual settings run until then)', 'warn');
+      }
+      return false;
+    }
+    const next = wantFilter ? _tplCycleNextInModeFor('movers', side, 'filter') : _tplCycleNextFor('movers', side);
+    if (!next) return false;
+    _moversRunStartPending = false;
+    log('Top Movers ' + _moversTplSideName(side).toLowerCase() + ': ' + (wantFilter ? 'Indicator-filters ' : '') + 'run start applies assigned template "' + next.name + '" (' + next.mode + ') - next in the assigned cycle', 'ok');
+    _forceMoversOn = true;
+    try { runTemplateById(next.id); } finally { _forceMoversOn = false; }
+    return true;
+  }
+
+  /* Run-start apply when BOTH Top Movers legs are selected together. Rotates the
+     next assigned template of EACH active side, starts the engine on the primary
+     (the leg matching the confirmed NIFTY side, else the first), then MERGES the
+     other leg's ticked strategies into the running engine. Result: the gainers
+     (CE) leg runs its bullish template's strategies and the losers (PE) leg runs
+     its bearish template's strategies, all in one live run. */
+  /* Keep the Bullish/Bearish indicator-filter sections side-pure for a Top
+     Movers both-legs Indicator-filters run: each assigned template contributes
+     ONLY its own side's filter keys (gainer template -> Bullish section, loser
+     template -> Bearish section), so the two templates' indicators never gate
+     the same symbol together. filterModeStrategies() then builds one synthetic
+     strategy per side from its own section. */
+  function _moversApplySideFilters(picks) {
+    const F = state.filters || (state.filters = {});
+    BULL_FILTER_KEYS.concat(BEAR_FILTER_KEYS).forEach(k => { F[k] = false; });
+    F.bullish = false;
+    F.bearish = false;
+    (picks || []).forEach(p => {
+      const pf = (p.t && p.t.settings && p.t.settings.filters) || {};
+      const keys = p.side === 'bearish' ? BEAR_FILTER_KEYS : BULL_FILTER_KEYS;
+      let any = false;
+      keys.forEach(k => { if (pf[k] === true) { F[k] = true; any = true; } });
+      F[p.side] = any || pf[p.side] === true;
+    });
+    try { applyFiltersToUI(); } catch (e) {}
+    save();
+  }
+
+  function _moversTplRedirectBoth(onlyMode) {
+    const sides = _moversActiveSides();
+    const wantFilter = onlyMode === 'filter';
+    const picks = [];
+    sides.forEach(s => {
+      const t = wantFilter ? _tplCycleNextInModeFor('movers', s, 'filter') : _tplCycleNextFor('movers', s);
+      if (t) picks.push({ side: s, t: t });
+    });
+    if (!picks.length) return false;
+    const primary = picks.find(p => p.side === _lastNiftyDir) || picks[0];
+    _moversRunStartPending = false;
+    log('Top Movers BOTH legs active (' + sides.join(' + ') + '): run start applies ' +
+      picks.map(p => _moversTplSideName(p.side).toLowerCase() + ' template "' + p.t.name + '" (' + p.t.mode + ')').join(' + ') +
+      (wantFilter ? ' [Indicator-filters]' : '') +
+      ' · universe gainers=' + (Number((state.movers || {}).gainers) || 0) + ' losers=' + (Number((state.movers || {}).losers) || 0), 'ok');
+    _forceMoversOn = true;
+    try { runTemplateById(primary.t.id); } finally { _forceMoversOn = false; }
+    /* Indicator-filters mode: rebuild the two filter sections so each side holds
+       ONLY its own assigned template's indicators before the engine starts
+       evaluating (gainers -> Bullish section, losers -> Bearish section). */
+    if (wantFilter) {
+      _moversApplySideFilters(picks);
+      log('Top Movers BOTH legs (Indicator-filters): gainer template filters -> Bullish section only, loser template filters -> Bearish section only (never combined on one symbol)', 'ok');
+    }
+    /* Merge the OTHER leg's ticked strategies so both templates run together in
+       the one live engine (the per-symbol CE/PE leg pick routes each one). */
+    const extra = picks.filter(p => p !== primary);
+    if (extra.length) {
+      const prev = _insideTemplateRun;
+      _insideTemplateRun = true;
+      let added = 0;
+      try {
+        extra.forEach(p => {
+          const st = (p.t.settings && typeof p.t.settings === 'object') ? p.t.settings : {};
+          if (Array.isArray(st.selected) && st.selected.length) added += ensureTickedDefs(st.selected);
+        });
+        if (added) { save(); render(); }
+      } finally { _insideTemplateRun = prev; }
+      _workingCache.clear();
+      log('Top Movers BOTH legs: merged ' + added + ' strategy(s) from ' +
+        extra.map(p => _moversTplSideName(p.side).toLowerCase() + ' template "' + p.t.name + '"').join(' + ') +
+        ' - gainers (CE) aur losers (PE) dono legs ab ek saath run ho rahe hain', added ? 'ok' : 'warn');
+    }
+    return true;
+  }
+
+  function _moversTplRedirectFilter() { return _moversTplRedirect('filter'); }
+
+  /* Apply BOTH legs' assigned templates LIVE without restarting or changing the
+     running mode: merges the next assigned template's ticked strategies of each
+     active side into the already-running engine (running-mode preserved). Used
+     when Top Movers is switched on with both legs selected while the engine is
+     already live. */
+  function _moversTplApplyLiveBoth() {
+    if (!_moversBothActive()) return false;
+    if (!(state.movers && state.movers.enabled)) return false;
+    if (state.enabled !== true) return false;
+    if (_insideTemplateRun) return false;
+    /* Debounce: the gainer/loser count inputs fire per keystroke; never rotate
+       the both-legs cycle more than once per 8s from rapid UI edits. */
+    const nowMs = Date.now();
+    if (_moversLiveTplSide === 'both' && (nowMs - _moversLiveTplAt) < 8000) return false;
+    _moversLiveTplAt = nowMs;
+    _moversLiveTplSide = 'both';
+    const sides = _moversActiveSides();
+    const mode = _trendLiveMode();
+    const picks = [];
+    sides.forEach(s => {
+      const t = _tplCycleNextInModeFor('movers', s, mode);
+      if (t) picks.push({ side: s, t: t });
+    });
+    if (!picks.length) return false;
+    /* Indicator-filters run: keep each side's filter section pure (gainer
+       template -> Bullish only, loser template -> Bearish only). */
+    if (mode === 'filter') _moversApplySideFilters(picks);
+    const prev = _insideTemplateRun;
+    _insideTemplateRun = true;
+    let added = 0;
+    try {
+      picks.forEach(p => {
+        const st = (p.t.settings && typeof p.t.settings === 'object') ? p.t.settings : {};
+        if (Array.isArray(st.selected) && st.selected.length) added += ensureTickedDefs(st.selected);
+      });
+      if (added) { save(); render(); }
+    } finally { _insideTemplateRun = prev; }
+    _workingCache.clear();
+    log('Top Movers BOTH legs switched on live: applied ' +
+      picks.map(p => _moversTplSideName(p.side).toLowerCase() + ' template "' + p.t.name + '" (' + p.t.mode + ')').join(' + ') +
+      ' in running ' + _trendModeLabel(mode).toLowerCase() + ' mode' +
+      (added ? ' · merged ' + added + ' strategy(s)' : '') + ' - dono legs ek saath run', 'ok');
+    return true;
+  }
+
+  function _moversTplApplyRunStart(side, onlyMode) {
+    /* Both legs active = applied together at run start (see _moversTplRedirectBoth);
+       never fall back to the single-side deferred apply. */
+    if (_moversBothActive()) return false;
+    const next = onlyMode ? _tplCycleNextInModeFor('movers', side, onlyMode) : _tplCycleNextFor('movers', side);
+    if (!next) return false;
+    const st = (next.settings && typeof next.settings === 'object') ? next.settings : {};
+    const runMode = _trendTplModeKey(next);
+    const prev = _insideTemplateRun;
+    _insideTemplateRun = true;
+    const prevPreserve = _moversTplApplyActive;
+    _moversTplApplyActive = true;
+    let restored = 0;
+    try {
+      applyEngineSettings(st);
+      if (state.movers) {
+        state.movers.enabled = true;
+        if (!Array.isArray(state.movers.gainerTpls)) state.movers.gainerTpls = [];
+        if (!Array.isArray(state.movers.loserTpls)) state.movers.loserTpls = [];
+      }
+      applyFiltersToUI();
+      applyAllInOneToUI();
+      if (Array.isArray(st.selected) && st.selected.length) restored = ensureTickedDefs(st.selected);
+      state.filterMode = runMode === 'filter';
+      state.aiPick = runMode === 'aipick';
+      state.callManual = true;
+      applyModeToUI();
+      applyRunModeUI();
+      const aEl = $id('astAiPick');
+      if (aEl) aEl.checked = state.aiPick === true;
+      state.enabled = true;
+      state.runIntent = { active: true, mode: (state.filterMode ? 'filter' : 'normal'), at: Date.now() };
+      _userFastDataOff = false;
+      save();
+      applyUniversalToUI();
+      render();
+    } finally {
+      _insideTemplateRun = prev;
+      _moversTplApplyActive = prevPreserve;
+    }
+    _workingCache.clear();
+    log('Top Movers ' + _moversTplSideName(side).toLowerCase() + ': run start applies assigned template "' + next.name + '" (' + next.mode + ') - ' + _trendModeLabel(runMode) + ' mode' + (restored ? ' · ' + restored + ' strategy(s) restored' : '') + ' (applied live once the side got confirmed)', 'ok');
+    return true;
+  }
+
+  function _moversTplApplyLive(side) {
+    const mv = state.movers;
+    if (!mv || !mv.enabled) return false;
+    /* Both legs active = both templates already run together; a single-side live
+       flip apply would wrongly drop one leg. Handled by _moversTplRedirectBoth. */
+    if (_moversBothActive()) return false;
+    if (state.enabled !== true) return false;
+    if (_insideTemplateRun) return false;
+    const nowMs = Date.now();
+    if (_moversLiveTplSide === side && (nowMs - _moversLiveTplAt) < 8000) return false;
+    const mode = _trendLiveMode();
+    const next = _tplCycleNextInModeFor('movers', side, mode);
+    if (!next) {
+      _moversLiveTplAt = nowMs;
+      _moversLiveTplSide = side;
+      log('Top Movers confirmed flip to ' + _moversTplSideName(side).toLowerCase() + ' - no assigned ' + _trendModeLabel(mode).toLowerCase() + ' template on that side: running-mode preserved, current settings keep running' +
+        (_moversAssignedTpls(side).length ? ' (assigned templates there are of another run mode - they apply on the next run start, never mid-run)' : ' (no template assigned - manual settings run as usual)'), 'warn');
+      return false;
+    }
+    _moversLiveTplAt = nowMs;
+    _moversLiveTplSide = side;
+    const st = (next.settings && typeof next.settings === 'object') ? next.settings : {};
+    const prev = _insideTemplateRun;
+    _insideTemplateRun = true;
+    const prevPreserve = _moversTplApplyActive;
+    _moversTplApplyActive = true;
+    let restored = 0;
+    try {
+      applyEngineSettings(st);
+      if (state.movers) {
+        state.movers.enabled = true;
+        if (!Array.isArray(state.movers.gainerTpls)) state.movers.gainerTpls = [];
+        if (!Array.isArray(state.movers.loserTpls)) state.movers.loserTpls = [];
+      }
+      if (Array.isArray(st.selected) && st.selected.length) restored = ensureTickedDefs(st.selected);
+      if (mode === 'filter') { state.filterMode = true; state.aiPick = false; }
+      else if (mode === 'aipick') { state.aiPick = true; state.filterMode = false; }
+      else { state.aiPick = false; state.filterMode = false; }
+      state.callManual = true;
+      state.runIntent = { active: true, mode: (state.filterMode ? 'filter' : 'normal'), at: Date.now() };
+      save();
+      applyModeToUI();
+      applyRunModeUI();
+      applyFiltersToUI();
+      applyAllInOneToUI();
+    } finally {
+      _insideTemplateRun = prev;
+      _moversTplApplyActive = prevPreserve;
+    }
+    _workingCache.clear();
+    log('Top Movers confirmed flip to ' + _moversTplSideName(side).toLowerCase() + ' - assigned ' + _trendModeLabel(mode).toLowerCase() + ' template "' + next.name + '" (' + next.mode + ') applied LIVE to the running engine' +
+      (restored ? ' · ' + restored + ' strategy(s) restored from the template' : '') +
+      ' - running-mode preserved, open trades keep running to their own SL/trail/TP', 'ok');
+    return true;
+  }
+
   /* Deep copies of every strategy currently TICKED (state.selected[id] true)
      across all four engine sources (saved library / imported / manual / AI
      picks). Stored inside a saved engine-settings template so the "quick run"
@@ -10555,6 +11080,21 @@ window.createAISmartTrading = function (suffix) {
      definitions are captured too, so a template can be re-run with one click:
      the quick-run control applies these settings and starts the engine exactly
      as it was when the template was saved. */
+  /* A template's movers snapshot must carry the universe CHOICES (enabled /
+     gainers / losers / indices / picked) but never the per-direction assignment
+     lists or the run-start cycle cursor - those are owned by state.movers and
+     must survive every template apply (otherwise re-applying a template would
+     rewind the round-robin cursor / revert assignments). */
+  function _moversTplSnapshot(mv) {
+    const o = JSON.parse(JSON.stringify(mv || {}));
+    delete o.gainerTpls;
+    delete o.loserTpls;
+    delete o.tplCursor;
+    delete o._migrated;
+    delete o.includeIndices;
+    return o;
+  }
+
   function captureEngineSettings() {
     return {
       universal: JSON.parse(JSON.stringify(state.universal)),
@@ -10564,7 +11104,7 @@ window.createAISmartTrading = function (suffix) {
       premiumOnly: !!state.premiumOnly,
       groups: (state.groups || []).slice(),
       filters: JSON.parse(JSON.stringify(state.filters)),
-      movers: JSON.parse(JSON.stringify(state.movers)),
+      movers: _moversTplSnapshot(state.movers),
       niftyTf: _niftyTf,
       commodity: state.commodity ? JSON.parse(JSON.stringify(state.commodity)) : { enabled: false, sids: [] },
       symbols: experimentSymbols(),
@@ -10635,7 +11175,15 @@ window.createAISmartTrading = function (suffix) {
     if (typeof s.premiumOnly === 'boolean') state.premiumOnly = s.premiumOnly;
     if (Array.isArray(s.groups) && s.groups.length) state.groups = s.groups.slice();
     if (s.filters) state.filters = Object.assign(state.filters || {}, JSON.parse(JSON.stringify(s.filters)));
-    if (s.movers) state.movers = Object.assign(state.movers || {}, JSON.parse(JSON.stringify(s.movers)));
+    /* A Top Movers assigned-template run must NEVER let the template's saved
+       movers snapshot overwrite the live universe the user set (5 gainers + 5
+       losers). That snapshot only carries enabled/gainers/losers/picked/indices
+       and applying it turned the loser leg OFF whenever the applied template
+       happened to be saved with losers=0, so the whole run collapsed onto the
+       gainer (CE) side - "kewal bullish stocks ke strikes pick hue". The movers
+       universe is owned live by the user; the assigned template only configures
+       HOW that universe trades. */
+    if (s.movers && !(_forceMoversOn || _moversTplApplyActive)) state.movers = Object.assign(state.movers || {}, _moversTplSnapshot(s.movers));
     if (s.niftyTf) setNiftyTf(s.niftyTf);
     if (s.commodity) state.commodity = Object.assign({ enabled: false, sids: [] }, JSON.parse(JSON.stringify(s.commodity)));
     if (typeof s.allInOne === 'boolean') state.allInOne = s.allInOne;
@@ -10728,10 +11276,12 @@ window.createAISmartTrading = function (suffix) {
      variant of runPaper - keeps aiPick ON so activeStrategies() re-picks the
      top-N strategies every tick instead of only running manual ticks). */
   function startAiPickRun() {
-    /* NIFTY trend side with assigned templates: this run start rotates to the
-       next template of the confirmed side and starts under ITS settings instead
-       of the manual ones (see _trendTplRedirect). */
+    /* NIFTY trend / Top Movers side with assigned templates: this run start
+       rotates to the next template of the confirmed side and starts under ITS
+       settings instead of the manual ones (see _trendTplRedirect /
+       _moversTplRedirect). */
     if (_trendTplRedirect()) return;
+    if (_moversTplRedirect()) return;
     readUniversal();
     state.filterMode = false;
     state.aiPick = true;
@@ -10803,7 +11353,15 @@ window.createAISmartTrading = function (suffix) {
     }
     const st = (t.settings && typeof t.settings === 'object') ? t.settings : {};
     _trendRunStartPending = false;
+    _moversRunStartPending = false;
     applyEngineSettings(st);
+    /* A Top Movers assigned-template run must never let the template's saved
+       movers snapshot switch the universe OFF. */
+    if (_forceMoversOn && state.movers) {
+      state.movers.enabled = true;
+      if (!Array.isArray(state.movers.gainerTpls)) state.movers.gainerTpls = [];
+      if (!Array.isArray(state.movers.loserTpls)) state.movers.loserTpls = [];
+    }
     /* Push the template's saved filter selection back into the (static) DOM
        checkboxes so the Bullish/Bearish lists always mirror what the engine is
        about to run. */
@@ -10812,7 +11370,18 @@ window.createAISmartTrading = function (suffix) {
        the run starters repaint the mode buttons. */
     applyAllInOneToUI();
     let restored = 0;
-    if (Array.isArray(st.selected) && st.selected.length) restored = ensureTickedDefs(st.selected);
+    if (Array.isArray(st.selected) && st.selected.length) {
+      /* A template is the COMPLETE run definition: REPLACE the ticked strategy
+         set with exactly the template's own strategies instead of accreting on
+         top of whatever was ticked before. Without this, strategies from a
+         previously applied template (e.g. the one last loaded from the saved
+         templates dropdown) stayed ticked and kept running under the new
+         template - "engine is running the top template's settings, not the
+         gainer/loser assigned template" - and a mixed bullish+bearish leftover
+         tick set muddied the running-strategy direction. */
+      Object.keys(state.selected || {}).forEach(k => { state.selected[k] = false; });
+      restored = ensureTickedDefs(st.selected);
+    }
     const runMode = st.runMode || (st.filterMode === true ? 'filter' : (st.aiPick === true ? 'aipick' : 'normal'));
     save();
     render();
@@ -10839,6 +11408,21 @@ window.createAISmartTrading = function (suffix) {
     const el = $id('ptAstTplRun');
     const id = el ? String(el.value || '') : '';
     const statusEl = $id('ptAstTplRunStatus');
+    /* Top Movers with BOTH legs selected: the gainer/loser ASSIGNED templates own
+       the run, not whatever template happens to be selected in this quick-run
+       dropdown. Without this, "Run saved template" silently ran the dropdown
+       template's saved settings + universe instead of the assigned
+       gainers=bullish / losers=bearish pair - the reported "engine upar saved
+       template section ke dropdown template ke base par settings assign kar raha
+       hai, top gainer/loser assigned template ke base par nahin". */
+    if (state.movers && state.movers.enabled && _moversBothActive() && _moversHasAnyAssigned()) {
+      const redirected = state.filterMode === true ? _moversTplRedirectFilter() : _moversTplRedirect();
+      if (redirected) {
+        log('Quick run: Top Movers BOTH legs have assigned templates - the gainer (bullish) + loser (bearish) assigned templates drive this run (the dropdown template is ignored)', 'ok');
+        if (statusEl) statusEl.innerHTML = '<span style="color:#00d4aa;font-weight:700">Top Movers assigned templates (gainers + losers) applied</span> - assigned templates drive this run; dropdown template ignored <span style="color:#666">- engine ON, running live</span>';
+        return { ok: true, redirected: true };
+      }
+    }
     if (!id) {
       log('Select a saved template from the quick-run dropdown first', 'warn');
       if (statusEl) statusEl.innerHTML = '<span style="color:#ff9800">Please select a saved template from the dropdown first.</span>';
@@ -10869,7 +11453,11 @@ window.createAISmartTrading = function (suffix) {
     onPremiumOnlyInput() { onPremiumOnlyInput(); },
     onGroupsInput() { readGroupsUI(); },
     toggleMovers,
-    onMoversInput() { readMoversUI(); applyMoversToUI(); },
+    onMoversInput() { readMoversUI(); applyMoversToUI();
+      /* If editing the counts turns BOTH legs on while the engine is already
+         running, apply the two direction templates together live. */
+      try { if (_moversBothActive() && _moversTplApplyLiveBoth()) _workingCache.clear(); } catch (e) {}
+    },
     toggleNiftyTrend,
     toggleSim,
     onNiftyTrendInput() { readNiftyTrendUI(); _resetTrendScan(); applyNiftyTrendToUI(); },
@@ -10883,6 +11471,8 @@ window.createAISmartTrading = function (suffix) {
     renderNiftyTrendList,
     assignTrendTemplate,
     removeTrendTemplate,
+    assignMoversTemplate,
+    removeMoversTemplate,
     onFiltersInput() {
       readFiltersUI();
       /* Cross-side exclusivity: while NIFTY trend-following runs on a confirmed
@@ -11292,9 +11882,6 @@ window.createAISmartTrading = function (suffix) {
     populateMoversIndicesUI();
     applyUniversalToUI();
     syncNiftyTfUI();
-    if (window.NiftyBbpAlert) {
-      NiftyBbpAlert.attach({ pfx: 'ast', symbol: NIFTY_IDX, tfGet: function () { return _niftyTf; }, log: log });
-    }
     renderTemplateSelect();
     applyCommodityToUI();
     applyAllInOneToUI();
@@ -11344,7 +11931,6 @@ window.createAISmartTrading = function (suffix) {
       applyRunModeUI();
       save();
       _userFastDataOff = false;
-      bbpWindowArmRun();
       log('Auto-resuming ' + _modeLabel + ' after page reload (instance ' + (suffix || 'base') + ') - re-applying saved settings & picked strikes, trades continue automatically', 'ok');
       armRun(1500);
     } else if (state.enabled === true) {
