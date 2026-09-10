@@ -1758,7 +1758,21 @@ window.createAISmartTrading = function (suffix) {
     return STREAM_FLAG_KEYS.some(k => f[k] && k.indexOf(side) === 0);
   }
 
+  /* The NIFTY trend-following CONFIRMED side while the engine is live on it -
+     the only side that run may trade. null when the trend engine is off / the
+     side is still unconfirmed. Lets the whole engine stay side-aware even when
+     BOTH Bullish and Bearish filter lists are populated (so the user can freely
+     configure / Mirror the other side without being force-cleared). */
+  function trendOperativeSide() {
+    const nt = state.niftyTrend;
+    if (!nt || !nt.enabled) return null;
+    if (state.enabled !== true) return null;
+    return (_lastNiftyDir === 'bullish' || _lastNiftyDir === 'bearish') ? _lastNiftyDir : null;
+  }
+
   function activeFilterDirection() {
+    const op = trendOperativeSide();
+    if (op) return op;
     const f = state.filters || {};
     const bull = f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || hasStreamFlags(f, 'bull') || pbrOn(f, 'bull'));
     const bear = f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || hasStreamFlags(f, 'bear') || pbrOn(f, 'bear'));
@@ -2940,7 +2954,24 @@ window.createAISmartTrading = function (suffix) {
       exactly as before. */
   function allSelectedFilterConditions() {
     const tpl = { entry: { indId: 'ema', indSettings: { length: 9, source: 'close' }, valueKey: 'v0' }, entryExtra: [], exit: null, exitExtra: [], candlestick: { enabled: false, entry: [], exit: [] } };
-    return buildFilterConditions(tpl, state.filters || {}, { filterMode: true });
+    /* While NIFTY trend-following is running on a confirmed side, the Indicator-
+       filters run trades ONLY that side, so build the strict-AND set from that
+       side's filters only. The opposite side's selection is left untouched so
+       the user can keep configuring / Mirror it for the next trend flip and for
+       template building - it can never leak into the operative side's gates. */
+    const op = trendOperativeSide();
+    let f = state.filters || {};
+    if (op) {
+      f = Object.assign({}, f);
+      if (op === 'bullish') {
+        f.bearish = false;
+        BEAR_FILTER_KEYS.forEach(k => { delete f[k]; });
+      } else {
+        f.bullish = false;
+        BULL_FILTER_KEYS.forEach(k => { delete f[k]; });
+      }
+    }
+    return buildFilterConditions(tpl, f, { filterMode: true });
   }
 
   /* The strategy set for Indicator-filters mode: ONE synthetic strategy PER
@@ -3579,6 +3610,13 @@ window.createAISmartTrading = function (suffix) {
     if (state.niftyTrend.enabled && state.enabled === true && (_lastNiftyDir === 'bullish' || _lastNiftyDir === 'bearish')) {
       try { if (_trendTplApplyLive(_lastNiftyDir)) _workingCache.clear(); }
       catch (e) { log('NIFTY trend live template apply error: ' + (e && e.message ? e.message : e), 'warn'); }
+    } else if (!state.niftyTrend.enabled) {
+      _trendRunStartPending = false;
+    } else if (state.enabled === true && _trendHasAnyAssigned()) {
+      /* Trend switched on over an already-running engine but the side is still
+         unconfirmed: defer the assigned-template apply to the first confirmed
+         side (same deferred path as a run started before confirmation). */
+      _trendRunStartPending = true;
     }
     log('NIFTY trend-following trading ' + (state.niftyTrend.enabled ? 'enabled' : 'disabled'), state.niftyTrend.enabled ? 'ok' : 'warn');
   }
@@ -3593,7 +3631,7 @@ window.createAISmartTrading = function (suffix) {
     state.sim.enabled = !state.sim.enabled;
     if (state.sim.enabled) {
       if (state.movers) state.movers.enabled = false;
-      if (state.niftyTrend) { state.niftyTrend.enabled = false; _resetTrendScan(); }
+      if (state.niftyTrend) { state.niftyTrend.enabled = false; _resetTrendScan(); _trendRunStartPending = false; }
       if (state.commodity) state.commodity.enabled = false;
       /* Make sure the server simulator is producing a live stream. */
       if (window.Simulator && typeof window.Simulator.ensureRunning === 'function') {
@@ -4412,11 +4450,25 @@ window.createAISmartTrading = function (suffix) {
     }
     /* Confirmed flip of the LIVE engine: apply the flipped-to side's assigned
        template immediately (same turn - see _trendTplApplyLive), never waiting
-       for the next run start. Open trades are left running to their SL/trail. */
+       for the next run start. Open trades are left running to their SL/trail.
+       Exception: when the run STARTED while the side was still unconfirmed, this
+       first confirmation is the deferred run-start rotation (the template's own
+       saved run mode applies - see _trendTplApplyRunStart), not a mid-run flip. */
     const now = _lastNiftyDir;
     if ((now === 'bullish' || now === 'bearish') && now !== prev) {
-      try { _trendTplApplyLive(now); }
-      catch (e) { log('NIFTY trend live template apply error: ' + (e && e.message ? e.message : e), 'warn'); }
+      try {
+        if (_trendRunStartPending) {
+          const pend = _trendRunStartPending;
+          _trendRunStartPending = false;
+          /* Only the run that set the flag (still running) may apply it; if the
+             engine was stopped before the side confirmed, do not restart it.
+             'filter' -> deferred Indicator-filters run start (restrict to
+             filter-mode templates, keep the explicit filter mode). */
+          if (state.enabled === true) _trendTplApplyRunStart(now, pend === 'filter' ? 'filter' : null);
+        } else {
+          _trendTplApplyLive(now);
+        }
+      } catch (e) { log('NIFTY trend live template apply error: ' + (e && e.message ? e.message : e), 'warn'); }
     }
     return now;
   }
@@ -4484,10 +4536,17 @@ window.createAISmartTrading = function (suffix) {
     if (!window.NiftyBbpAlert) return null;
     const g = NiftyBbpAlert.gateStatus('ast');
     if (!g || !g.master) return null;
-    if (g.last == null) return 'BB%b gate ON: NIFTY BB%b sample pending...';
     const armed = [];
     if (g.bull.enabled) armed.push('bull');
     if (g.bear.enabled) armed.push('bear');
+    /* No alert line armed/enabled: the gate has NOTHING to enforce, so it must
+       be a NO-OP - never block entries. (Previously this returned a hard block
+       "koi BB%b alert line LOCK/SET nahi hui", which stopped every entry even
+       though the BB%b alert itself was off - the reported "gate still blocks
+       the engine when BB%b alert is off".) An empty gate = gate off, so it also
+       must not wait for a BB%b sample it will never use. */
+    if (!armed.length) return null;
+    if (g.last == null) return 'BB%b gate ON: NIFTY BB%b sample pending...';
     const rowWait = function (rk, row) {
       const sideTxt = rk === 'bear' ? 'BEAR PE' : 'BULL CE';
       if (row.met) return null;
@@ -4500,7 +4559,6 @@ window.createAISmartTrading = function (suffix) {
       const row = (rk === 'bear') ? g.bear : g.bull;
       return rowWait(rk, row);
     }
-    if (!armed.length) return 'BB%b gate ON: koi BB%b alert line LOCK/SET nahi hui - BULL CE ya BEAR PE line enable karke LOCK ALERT & SET dabao';
     /* Both lines armed (auto / trend-following run): the executed leg decides. */
     const probe = (instr && instr.kind === 'option' && (instr.optionType === 'CE' || instr.optionType === 'PE'))
       ? instr
@@ -4540,6 +4598,11 @@ window.createAISmartTrading = function (suffix) {
     if (!g || !g.master) return null;
     const w = NiftyBbpAlert.windowStatus('ast');
     if (!w || !w.enabled) return null;
+    /* No ACTIVE rule enabled = there is NO boundary that can ever (re)start the
+       run, so the window would hold the engine dormant forever (windowReset /
+       seedWindowState can only ever leave it INACTIVE). Treat it as a no-op
+       instead of blocking every entry. */
+    if (!w.active || !w.active.enabled) return null;
     if (w.state === 'active') return null;
     const a = w.active;
     let reason;
@@ -7785,33 +7848,23 @@ window.createAISmartTrading = function (suffix) {
     });
   }
 
-  /* While the NIFTY trend-following engine is RUNNING on a confirmed side, the
-     indicator-filter sections are mutually exclusive: the operative (confirmed)
-     side is the only side the engine trades, so any selection left on the
-     OPPOSITE side is force-cleared (master + every sub-key, DOM included). The
-     engine otherwise keeps evaluating the flipped-out side's stale filters and
-     would keep firing wrong-side entries. Outside this live trend context (setup
-     / manual dual-side runs / no confirmed side) both sections stay fully
-     independent as before. */
+  /* Indicator-filter side exclusivity while NIFTY trend-following runs live.
+
+     HISTORICAL behavior force-cleared the opposite (flipped-out) side's filters,
+     which also made the "Mirror opposite" button a silent no-op (it copied to
+     the opposite side and this function wiped it in the SAME click) and locked
+     the user out of configuring the other side. It is no longer needed: the
+     entry pipeline is now side-aware -
+       - Indicator-filters run: allSelectedFilterConditions() builds the strict
+         AND set from the confirmed side only (trendOperativeSide());
+       - normal strategies: buildWorking()/directionFilterConditions() already
+         zero the opposite side per strategy;
+       - activeFilterDirection() returns the confirmed side while live.
+     So BOTH lists may stay populated (great for Mirror + template building) and
+     the engine still only ever trades the confirmed side. Kept as a function
+     (returns false = nothing cleared) so every existing call site is a no-op. */
   function trendLiveSingleSide() {
-    const nt = state.niftyTrend;
-    if (!nt || !nt.enabled) return false;
-    if (state.enabled !== true) return false;
-    const operative = _lastNiftyDir === 'bullish' ? 'bullish' : (_lastNiftyDir === 'bearish' ? 'bearish' : null);
-    if (!operative) return false;
-    const oppKey = operative === 'bullish' ? 'bearish' : 'bullish';
-    const oppKeys = operative === 'bullish' ? BEAR_FILTER_KEYS : BULL_FILTER_KEYS;
-    const f = state.filters || (state.filters = Object.assign({}, defaultState().filters));
-    const oppOn = !!f[oppKey] || oppKeys.some(k => !!f[k]);
-    if (!oppOn) return false;
-    f[oppKey] = false;
-    oppKeys.forEach(k => { f[k] = false; });
-    save();
-    applyFiltersToUI();
-    log('NIFTY trend-following is running on the ' + _trendTplSideName(operative).toLowerCase() + ' side - ' +
-      _trendTplSideName(oppKey).toLowerCase() + ' indicator filters auto-cleared (the engine only places confirmed ' +
-      _trendTplSideName(operative).toLowerCase() + ' side trades)', 'warn');
-    return true;
+    return false;
   }
 
   /* "Mirror opposite selection" button handler (between the Bullish and Bearish
@@ -9429,10 +9482,16 @@ window.createAISmartTrading = function (suffix) {
     const turningOn = !state.enabled;
     /* Enabling auto-trading on a NIFTY trend side that has assigned templates
        also rotates to the next assigned template (same run-start cycle as the
-       explicit Run buttons) - EXCEPT when the user has the Indicator-filters
-       mode explicitly selected: that mode is an explicit choice and must start
-       as itself, never be silently replaced by a template. */
-    if (turningOn && state.filterMode !== true && _trendTplRedirect()) return;
+       explicit Run buttons). Under the Indicator-filters mode the run start
+       rotates only to an assigned template SAVED UNDER Indicator-filters mode
+       (the explicit mode choice is preserved); otherwise it rotates to the next
+       assigned template whatever its saved mode. */
+    if (turningOn) {
+      const redirected = state.filterMode === true ? _trendTplRedirectFilter() : _trendTplRedirect();
+      if (redirected) return;
+    }
+    /* Turning the engine off cancels any deferred run-start template apply. */
+    if (!turningOn) _trendRunStartPending = false;
     state.enabled = !state.enabled;
     if (state.enabled) {
       state.runIntent = { active: true, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
@@ -9455,6 +9514,7 @@ window.createAISmartTrading = function (suffix) {
     if (state.movers.enabled && state.niftyTrend && state.niftyTrend.enabled) {
       state.niftyTrend.enabled = false;
       _resetTrendScan();
+      _trendRunStartPending = false;
     }
     if (state.movers.enabled && state.sim) state.sim.enabled = false;
     save();
@@ -9542,17 +9602,19 @@ window.createAISmartTrading = function (suffix) {
      trail TP / fixed TP / lots / margin / AI risk / time gates) apply exactly
      like the normal Run Paper Trading mode. */
   function runFilterPaper() {
-    /* The Indicator-filters run button is an EXPLICIT mode choice: it always
-       starts Indicator-filters mode on the current universe. Unlike the generic
-       Run Paper Trading button it is NEVER redirected into the NIFTY trend-side
-       assigned-template cycle (a template could carry a different saved run mode
-       and would silently un-tick this mode / change the run the user asked for).
-       Trend template rotation still happens on the normal Run Paper Trading
-       start, and filter-mode templates stay reachable through that cycle. */
+    /* NIFTY trend side with assigned INDICATOR-FILTERS templates: this run start
+       applies the next assigned filter template of the confirmed side (same
+       Indicator-filters mode - the user's explicit mode choice is preserved) via
+       _trendTplRedirectFilter. When the side is still unconfirmed the redirect
+       arms a deferred apply and manual filters run until confirmation. */
+    if (_trendTplRedirectFilter()) return;
     readUniversal();
     state.filterMode = true;
     state.aiPick = false;
     state.callManual = true;
+    /* NOTE: _trendRunStartPending is deliberately NOT cleared here - the redirect
+       above may have armed a deferred filter-template apply for the first
+       confirmed side. */
     applyModeToUI();
     applyRunModeUI();
     state.enabled = true;
@@ -9885,7 +9947,7 @@ window.createAISmartTrading = function (suffix) {
      Strategies / Close All Trades controls. */
   function stopAllStrategies(keepEnabled) {
     state.aiPick = false;
-    if (!keepEnabled) state.enabled = false;
+    if (!keepEnabled) { state.enabled = false; _trendRunStartPending = false; }
     state.runIntent = { active: false, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
     _stopGen++;
     applyModeToUI();
@@ -10187,6 +10249,13 @@ window.createAISmartTrading = function (suffix) {
      (quick-run dropdown / runTemplateById) - that always keeps the user's chosen
      template. */
   let _insideTemplateRun = false;
+  /* A generic run start (Run Paper / AI auto-pick / Auto toggle) can happen
+     while the NIFTY side is not confirmed yet (fresh page / first run of the
+     session), so the assigned-template rotation has no side to rotate. Instead
+     of silently dropping the run-start rotation, remember that this run start
+     owes the assigned template and apply it to the LIVE engine the moment the
+     side FIRST confirms - exactly what a run start with a known side does. */
+  let _trendRunStartPending = false;
   /* Last LIVE trend-flip template application (same side + id + timestamp used
      as a re-entrancy guard: the confirmed flip is re-detected by BOTH the tick
      body and the status poll in one pass, so only the first caller applies and
@@ -10257,11 +10326,114 @@ window.createAISmartTrading = function (suffix) {
   function _trendTplRedirect() {
     if (_insideTemplateRun) return false;
     const side = _trendOperativeSide();
-    if (!side) return false;
+    if (!side) {
+      /* Side not confirmed yet (fresh page / first run of the session): there is
+         no side to rotate to right now. If any side has assigned templates,
+         remember that this run start owes its template and let the manual
+         settings run; the first confirmed side will then apply its assigned
+         template LIVE (see _trendTplApplyRunStart). */
+      if (_trendHasAnyAssigned()) {
+        _trendRunStartPending = true;
+        log('NIFTY trend: run started before the NIFTY side is confirmed - the confirmed side\'s next assigned template will be applied automatically the moment it confirms (manual settings run until then)', 'warn');
+      }
+      return false;
+    }
     const next = _trendCycleNext(side);
     if (!next) return false;
+    _trendRunStartPending = false;
     log('NIFTY trend ' + _trendTplSideName(side).toLowerCase() + ': run start applies assigned template "' + next.name + '" (' + next.mode + ') - next in the assigned cycle', 'ok');
     runTemplateById(next.id);
+    return true;
+  }
+
+  /* Any template assigned to EITHER NIFTY side that still exists in the
+     library (used to decide whether a run start with an unconfirmed side owes
+     a deferred assigned-template apply). */
+  function _trendHasAnyAssigned() {
+    return _trendAssignedTpls('bullish').length > 0 || _trendAssignedTpls('bearish').length > 0;
+  }
+
+  /* Any template assigned to EITHER NIFTY side whose SAVED run mode equals
+     `mode` (used to decide whether a run start under a specific mode owes a
+     deferred assigned-template apply of that mode). */
+  function _trendHasAssignedInMode(mode) {
+    return _trendAssignedTpls('bullish').some(t => _trendTplModeKey(t) === mode) ||
+           _trendAssignedTpls('bearish').some(t => _trendTplModeKey(t) === mode);
+  }
+
+  /* Indicator-filters run-start rotation. The Indicator-filters run button is an
+     explicit MODE choice (stay in Indicator-filters mode), but it must still
+     honour the NIFTY trend side's assigned templates: when the operative side
+     has an assigned template SAVED UNDER INDICATOR-FILTERS MODE, that template's
+     settings/filters/strategies drive the run (its run mode IS filter, so the
+     explicit mode choice is preserved - a template saved under another mode is
+     never applied here). This is what made "assigned filter template" work on
+     the normal Run Paper start but silently do nothing when the user started via
+     the Indicator-filters button (the mode they actually run). When the side is
+     not confirmed yet, arm the deferred apply so the first confirmed side gets
+     its assigned filter template. When no filter-mode template is assigned, the
+     manual filter selections run exactly as before. */
+  function _trendTplRedirectFilter() {
+    if (_insideTemplateRun) return false;
+    const side = _trendOperativeSide();
+    if (!side) {
+      if (_trendHasAssignedInMode('filter')) {
+        _trendRunStartPending = 'filter';
+        log('NIFTY trend: Indicator-filters run started before the NIFTY side is confirmed - the confirmed side\'s next assigned Indicator-filters template will be applied automatically the moment it confirms (manual filters run until then)', 'warn');
+      }
+      return false;
+    }
+    const next = _trendCycleNextInMode(side, 'filter');
+    if (!next) return false;
+    _trendRunStartPending = false;
+    log('NIFTY trend ' + _trendTplSideName(side).toLowerCase() + ': Indicator-filters run start applies assigned template "' + next.name + '" (' + next.mode + ') - next in the assigned Indicator-filters cycle', 'ok');
+    runTemplateById(next.id);
+    return true;
+  }
+
+  /* Deferred run-start apply: the run was started while the NIFTY side was not
+     confirmed, so this fires on the FIRST confirmation and applies that side's
+     NEXT assigned template to the LIVE engine under the template's OWN saved
+     run mode (a run start is the legal mode-change point, unlike a mid-run
+     flip which preserves the running mode). Mirrors runTemplateByIdInner's
+     settings/strategies/mode application without re-entering the run starters
+     (the engine is already running and must keep its open trades/loop).
+     `onlyMode` (optional): restrict the rotation to templates saved under that
+     run mode (e.g. 'filter' for a deferred Indicator-filters run start). */
+  function _trendTplApplyRunStart(side, onlyMode) {
+    const next = onlyMode ? _trendCycleNextInMode(side, onlyMode) : _trendCycleNext(side);
+    if (!next) return false;
+    const st = (next.settings && typeof next.settings === 'object') ? next.settings : {};
+    const runMode = _trendTplModeKey(next);
+    const prev = _insideTemplateRun;
+    _insideTemplateRun = true;
+    let restored = 0;
+    try {
+      applyEngineSettings(st);
+      /* Mirror runTemplateByIdInner: push the template's saved filter selection
+         and All-together checkbox into the UI before repainting the mode UI. */
+      applyFiltersToUI();
+      applyAllInOneToUI();
+      if (Array.isArray(st.selected) && st.selected.length) restored = ensureTickedDefs(st.selected);
+      state.filterMode = runMode === 'filter';
+      state.aiPick = runMode === 'aipick';
+      state.callManual = true;
+      applyModeToUI();
+      applyRunModeUI();
+      const aEl = $id('astAiPick');
+      if (aEl) aEl.checked = state.aiPick === true;
+      state.enabled = true;
+      state.runIntent = { active: true, mode: (state.filterMode ? 'filter' : 'normal'), at: Date.now() };
+      _userFastDataOff = false;
+      save();
+      applyUniversalToUI();
+      render();
+      trendLiveSingleSide();
+    } finally {
+      _insideTemplateRun = prev;
+    }
+    _workingCache.clear();
+    log('NIFTY trend ' + _trendTplSideName(side).toLowerCase() + ': run start applies assigned template "' + next.name + '" (' + next.mode + ') - ' + _trendModeLabel(runMode) + ' mode' + (restored ? ' · ' + restored + ' strategy(s) restored' : '') + ' (applied live once the side got confirmed)', 'ok');
     return true;
   }
 
@@ -10630,6 +10802,7 @@ window.createAISmartTrading = function (suffix) {
       return { ok: false, name: '', mode: '', runMode: '', restored: 0 };
     }
     const st = (t.settings && typeof t.settings === 'object') ? t.settings : {};
+    _trendRunStartPending = false;
     applyEngineSettings(st);
     /* Push the template's saved filter selection back into the (static) DOM
        checkboxes so the Bullish/Bearish lists always mirror what the engine is
@@ -10798,19 +10971,11 @@ window.createAISmartTrading = function (suffix) {
     /* Master Bullish/Bearish checkbox: checking it selects every sub-filter in
        that section, unchecking it clears them all (no more one-by-one). */
     onFilterMaster(side) {
-      const operative = (state.niftyTrend && state.niftyTrend.enabled && state.enabled === true)
-        ? (_lastNiftyDir === 'bullish' ? 'bullish' : (_lastNiftyDir === 'bearish' ? 'bearish' : null)) : null;
+      /* "(select all)" now works on BOTH sides even while NIFTY trend-following
+         runs live: the engine is side-aware (it only ever trades the confirmed
+         side), so the opposite side may be freely configured / mirrored for the
+         next flip or for template building. */
       const master = $id('astFilter' + (side === 'bullish' ? 'Bullish' : 'Bearish'));
-      if (operative && side !== operative) {
-        /* While trend-following runs on a confirmed side, "(select all)" on the
-           opposite section is blocked - the engine only trades the confirmed
-           side and must never be silently re-pointed to the other one. */
-        if (master) master.checked = false;
-        readFiltersUI();
-        log('NIFTY trend-following is running on the ' + _trendTplSideName(operative).toLowerCase() +
-          ' side - the ' + _trendTplSideName(side).toLowerCase() + ' "(select all)" is blocked (turn the engine off to select both sides freely)', 'warn');
-        return;
-      }
       const sec = side === 'bullish' ? 'Bullish' : 'Bearish';
       const on = !!(master && master.checked);
       const secEl = $id('astFilterSection' + sec);

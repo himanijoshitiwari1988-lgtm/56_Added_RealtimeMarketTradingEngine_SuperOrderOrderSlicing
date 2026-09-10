@@ -174,6 +174,13 @@
     if (wrap) wrap.style.opacity = on ? '1' : '0.55';
   }
   function syncWinEditor(inst) {
+    /* Restore the "engine runs between ACTIVE & INACTIVE only" master switch
+       from the persisted window config. Without this the switch renders
+       unchecked on every page load / sync while inst.win.enabled stays true in
+       storage, so the engine kept enforcing an INACTIVE window that the UI
+       showed as OFF (the "gate off but still blocking" report). */
+    const en = el(inst.pfx + 'BbpWinEn');
+    if (en) en.checked = !!inst.win.enabled;
     WIN_ROWS.forEach(function (k) { syncWinEditorRow(inst, k); });
     paintWindowChip(inst);
   }
@@ -237,7 +244,11 @@
       };
     }
     return {
-      enabled: !!inst.win.enabled,
+      /* The window can only ever gate the engine while the WHOLE BB%b section
+         master Gate is ON: a disabled section must never report an enforcing
+         window (otherwise a stale INACTIVE window keeps the engine dormant
+         even though the user turned the BB%b section off). */
+      enabled: !!(inst.master && inst.win.enabled),
       state: state,
       last: (inst.lastPctt == null) ? null : Number(inst.lastPctt),
       lastText: (inst.lastPctt == null) ? '--' : fmtV(inst.lastPctt),
@@ -413,6 +424,11 @@
     if (chip) chip.style.borderColor = inst.master ? '#00d4aa' : '#4a3a10';
     const statusEl = el(inst.pfx + 'BbpStatus');
     if (statusEl) statusEl.style.borderLeft = inst.master ? '2px solid #00d4aa' : 'none';
+    /* Section master Gate OFF = whole BB%b section (alert + run window) is not
+       enforced. Fade the RUN-WINDOW box so the user can see nothing in it is
+       active, even if the window switch itself was left ON. */
+    const winBox = el(inst.pfx + 'BbpWinBox');
+    if (winBox) winBox.style.opacity = inst.master ? '1' : '0.45';
   }
   function isEnabled(pfx) {
     const inst = instances[pfx];
