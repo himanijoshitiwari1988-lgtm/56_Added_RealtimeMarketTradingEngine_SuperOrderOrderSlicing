@@ -673,6 +673,7 @@ window.IST12 = (function () {
           <span id="barCountdown" title="Time to current bar close" style="font-size:11px;color:#00d4aa;font-weight:700;font-variant-numeric:tabular-nums;background:#0d3b2e;border:1px solid #0f4a38;border-radius:3px;padding:2px 8px">--:--</span>
           <label style="font-size:10px;color:#888;display:flex;align-items:center;gap:4px"><input type="checkbox" id="rtToggle" onchange="onRealtimeToggle(this.checked)" checked> Realtime</label>
           <label style="font-size:10px;color:#c8a0ff;display:flex;align-items:center;gap:4px" title="OI Trend + Levels: OI support/resistance (CE/PE walls), Max Pain, PCR, expected range, and a trend-state line computed by combining the EMA/price methods with volume increasing/decreasing and PCR (no separate filter)."><input type="checkbox" id="oiTrendToggle" onchange="OITrend.setEnabled(this.checked)"> OI Trend</label>
+          <button class="btn-action" onclick="IndChart.applyBestCombo()" title="One-click best combo: Price Action Trend (bias) + Auto Trendline (dynamic S/R) + Trend Core (volume/ATR confirmation). Best read as: trade only in pastruct direction, enter on the autotrend pullback when vlcore confirms, avoid on CHoCH." style="padding:3px 12px;font-size:10px;width:auto;margin:0;background:#1f6f4a;color:#eafff4;border:1px solid #2f9f6a">Best Combo</button>
           <button class="btn-action warn" onclick="IndChart.removeAll()" style="padding:3px 12px;font-size:10px;width:auto;margin:0">Remove Indicators</button>
           <button class="btn-action" onclick="loadChart()" style="padding:3px 12px;font-size:10px;width:auto;margin:0">Refresh Chart</button>
         </div>
@@ -2826,7 +2827,7 @@ window.IST12 = (function () {
 
 <script src="/static/vlcore.js?v=8"></script>
 <script src="/static/rsidiv_core.js?v=1"></script>
-<script src="/static/indicators.js?v=95"></script>
+<script src="/static/indicators.js?v=99"></script>
 <script src="/static/oitrend.js?v=9"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};

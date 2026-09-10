@@ -498,6 +498,250 @@
     return { last, prev };
   }
 
+  /* ---------------- Pane consensus engine ----------------
+     Aggregates the common pane oscillators (RSI, MACD, BB %B, Stochastic %K,
+     CCI, Williams %R, MFI, and RSI divergence) into ONE causal bias score, then
+     turns that score into straight line segments on the price chart.
+     Every oscillator contributes a vote in [-1, +1] (overbought frames dampen an
+     over-extended bullish vote and oversold dampens a bearish one, so the signal
+     reacts to exhaustion instead of blindly following momentum). The votes are
+     averaged, EMA-smoothed, thresholded into a bull/bear regime with hysteresis,
+     and a short-run majority filter removes whipsaw so the drawn line has as few
+     bends as possible. Each regime run is then rendered as a single least-squares
+     straight line through its candles (so it intersects them), coloured green for
+     bull and red for bear. Nothing uses future data, so it never repaints. */
+  function paneSignal(c, o) {
+    o = o || {};
+    const cc = [];
+    if (c) for (let i = 0; i < c.length; i++) { const x = c[i]; if (x && isFinite(x.time) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close)) cc.push(x); }
+    const n = cc.length;
+    const res = { cc, regime: new Array(n).fill(0), rsi: null, bbPct: null, stK: null, cci: null, willR: null, mfi: null, data: [], fitData: [], curReg: 0 };
+    if (n < 35) return res;
+    const cl = v => v > 1 ? 1 : (v < -1 ? -1 : v);
+    const closes = cc.map(x => x.close), highs = cc.map(x => x.high), lows = cc.map(x => x.low);
+    const atrP = Math.max(2, Math.round(o.atrPeriod) || 14);
+    const atr = wilderArr(trArr(cc), atrP);
+    /* RSI (Wilder) */
+    const rsiP = Math.max(2, Math.round(o.rsiLength) || 14);
+    const rsi = (() => {
+      const out = new Array(n).fill(null);
+      if (n < rsiP + 1) return out;
+      let g = 0, l = 0;
+      for (let i = 1; i <= rsiP; i++) { const ch = closes[i] - closes[i - 1]; if (ch >= 0) g += ch; else l -= ch; }
+      let ag = g / rsiP, al = l / rsiP;
+      out[rsiP] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+      for (let i = rsiP + 1; i < n; i++) {
+        const ch = closes[i] - closes[i - 1];
+        ag = (ag * (rsiP - 1) + (ch > 0 ? ch : 0)) / rsiP;
+        al = (al * (rsiP - 1) + (ch < 0 ? -ch : 0)) / rsiP;
+        out[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+      }
+      return out;
+    })();
+    /* MACD histogram */
+    const macdHist = (() => {
+      const e12 = emaArr(closes, 12), e26 = emaArr(closes, 26);
+      const m = new Array(n).fill(null);
+      for (let i = 0; i < n; i++) if (e12[i] != null && e26[i] != null) m[i] = e12[i] - e26[i];
+      const sg = emaSkip(m, 9);
+      const h = new Array(n).fill(null);
+      for (let i = 0; i < n; i++) if (m[i] != null && sg[i] != null) h[i] = m[i] - sg[i];
+      return h;
+    })();
+    /* Bollinger %B */
+    const bbP = Math.max(2, Math.round(o.bbLength) || 20);
+    const bbPct = (() => {
+      const mid = smaArr(closes, bbP), sd = stdevArr(closes, bbP);
+      const out = new Array(n).fill(null);
+      for (let i = 0; i < n; i++) {
+        if (mid[i] == null || sd[i] == null) continue;
+        const u = mid[i] + 2 * sd[i], lo = mid[i] - 2 * sd[i], rng = u - lo;
+        out[i] = rng > 0 ? (closes[i] - lo) / rng : 0.5;
+      }
+      return out;
+    })();
+    /* Stochastic %K */
+    const stP = Math.max(2, Math.round(o.stochLength) || 14);
+    const stK = (() => {
+      const hh = highestArr(highs, stP), ll = lowestArr(lows, stP);
+      const out = new Array(n).fill(null);
+      for (let i = 0; i < n; i++) {
+        if (hh[i] == null || ll[i] == null) continue;
+        const rng = hh[i] - ll[i];
+        out[i] = rng > 0 ? 100 * (closes[i] - ll[i]) / rng : 50;
+      }
+      return out;
+    })();
+    /* CCI */
+    const cciP = Math.max(2, Math.round(o.cciLength) || 20);
+    const cci = (() => {
+      const tp = cc.map(x => (x.high + x.low + x.close) / 3);
+      const sm = smaArr(tp, cciP);
+      const out = new Array(n).fill(null);
+      for (let i = cciP - 1; i < n; i++) {
+        let md = 0;
+        for (let j = i - cciP + 1; j <= i; j++) md += Math.abs(tp[j] - sm[i]);
+        md /= cciP;
+        out[i] = md > 0 ? (tp[i] - sm[i]) / (0.015 * md) : 0;
+      }
+      return out;
+    })();
+    /* Williams %R */
+    const wrP = Math.max(2, Math.round(o.willrLength) || 14);
+    const willR = (() => {
+      const hh = highestArr(highs, wrP), ll = lowestArr(lows, wrP);
+      const out = new Array(n).fill(null);
+      for (let i = 0; i < n; i++) {
+        if (hh[i] == null || ll[i] == null) continue;
+        const rng = hh[i] - ll[i];
+        out[i] = rng > 0 ? -100 * (hh[i] - closes[i]) / rng : -50;
+      }
+      return out;
+    })();
+    /* MFI */
+    const mfP = Math.max(2, Math.round(o.mfiLength) || 14);
+    const mfi = (() => {
+      const out = new Array(n).fill(null);
+      const pv = new Array(n).fill(0), nv = new Array(n).fill(0);
+      for (let i = 1; i < n; i++) {
+        const t0 = (cc[i - 1].high + cc[i - 1].low + cc[i - 1].close) / 3;
+        const t1 = (cc[i].high + cc[i].low + cc[i].close) / 3;
+        const raw = (isFinite(cc[i].volume) ? cc[i].volume : 0) * t1;
+        if (t1 > t0) pv[i] = raw; else if (t1 < t0) nv[i] = raw;
+      }
+      let sp = 0, sn = 0;
+      for (let i = mfP; i < n; i++) {
+        if (i === mfP) { for (let j = i - mfP + 1; j <= i; j++) { sp += pv[j]; sn += nv[j]; } }
+        else { sp += pv[i] - pv[i - mfP]; sn += nv[i] - nv[i - mfP]; }
+        out[i] = (sp + sn) > 0 ? 100 * sp / (sp + sn) : 50;
+      }
+      return out;
+    })();
+    /* RSI divergence (fractal price pivots vs RSI), held a few bars */
+    const divVote = new Array(n).fill(0);
+    if (o.useDiv !== false) {
+      const fp = fractalPivots(cc, 3), hold = 8;
+      const mark = (idx, val) => { for (let i = idx; i < n && i <= idx + hold; i++) divVote[i] = val; };
+      let prevLow = null, prevHigh = null;
+      for (let k = 0; k < fp.length; k++) {
+        const p = fp[k];
+        if (rsi[p.idx] == null) continue;
+        if (p.type === 'low') {
+          if (prevLow && p.price < prevLow.price && rsi[p.idx] > rsi[prevLow.idx]) mark(p.at != null ? p.at : p.idx, 1);
+          prevLow = p;
+        } else {
+          if (prevHigh && p.price > prevHigh.price && rsi[p.idx] < rsi[prevHigh.idx]) mark(p.at != null ? p.at : p.idx, -1);
+          prevHigh = p;
+        }
+      }
+    }
+    /* Composite vote + overbought/oversold dampening */
+    const use = {
+      rsi: o.useRSI !== false, macd: o.useMACD !== false, bb: o.useBB !== false,
+      stoch: o.useStoch !== false, cci: o.useCCI !== false, willr: o.useWillR !== false,
+      mfi: o.useMFI !== false, div: o.useDiv !== false
+    };
+    const comp = new Array(n).fill(0);
+    for (let i = 0; i < n; i++) {
+      let s = 0, w = 0;
+      const add = (v, wt) => { if (v != null && isFinite(v)) { s += v * wt; w += wt; } };
+      if (use.rsi && rsi[i] != null) add(cl((rsi[i] - 50) / 20), 1);
+      if (use.macd && macdHist[i] != null && atr[i] != null) add(cl(macdHist[i] / (Math.max(1e-9, atr[i]) * 0.5)), 1);
+      if (use.bb && bbPct[i] != null) add(cl((bbPct[i] - 0.5) * 2), 1);
+      if (use.stoch && stK[i] != null) add(cl((stK[i] - 50) / 40), 1);
+      if (use.cci && cci[i] != null) add(cl(cci[i] / 150), 1);
+      if (use.willr && willR[i] != null) add(cl((willR[i] + 50) / 40), 1);
+      if (use.mfi && mfi[i] != null) add(cl((mfi[i] - 50) / 30), 1);
+      if (use.div && divVote[i]) add(divVote[i], 1.5);
+      let c0 = w > 0 ? s / w : 0;
+      let ob = 0, os = 0;
+      if (rsi[i] != null) { if (rsi[i] > 70) ob++; else if (rsi[i] < 30) os++; }
+      if (bbPct[i] != null) { if (bbPct[i] > 1) ob++; else if (bbPct[i] < 0) os++; }
+      if (stK[i] != null) { if (stK[i] > 80) ob++; else if (stK[i] < 20) os++; }
+      if (cci[i] != null) { if (cci[i] > 100) ob++; else if (cci[i] < -100) os++; }
+      if (willR[i] != null) { if (willR[i] > -20) ob++; else if (willR[i] < -80) os++; }
+      if (mfi[i] != null) { if (mfi[i] > 80) ob++; else if (mfi[i] < 20) os++; }
+      if (c0 > 0 && ob >= 3) c0 *= 0.5;
+      else if (c0 < 0 && os >= 3) c0 *= 0.5;
+      comp[i] = c0;
+    }
+    const smoothLen = Math.max(1, Math.round(o.smooth) || 3);
+    const sm = smoothLen > 1 ? emaArr(comp, smoothLen) : comp.slice();
+    for (let i = 0; i < n; i++) if (sm[i] == null) sm[i] = comp[i];
+    /* Regime: threshold + hold, then a short-run majority filter kills whipsaw */
+    const bullTh = Number(o.bullTh) > 0 ? Number(o.bullTh) : 0.12;
+    const bearTh = Number(o.bearTh) > 0 ? Number(o.bearTh) : 0.12;
+    const regime = res.regime;
+    let rg = 0, started = false;
+    for (let i = 0; i < n; i++) {
+      const ready = rsi[i] != null && bbPct[i] != null && stK[i] != null;
+      if (!started) { if (!ready) { regime[i] = 0; continue; } started = true; }
+      const v = sm[i];
+      if (v >= bullTh) rg = 1; else if (v <= -bearTh) rg = -1; else if (rg === 0) rg = v >= 0 ? 1 : -1;
+      regime[i] = rg;
+    }
+    const minSeg = Math.max(1, Math.round(o.minSeg) || 5);
+    for (let pass = 0; pass < 2; pass++) {
+      const cp = regime.slice();
+      for (let i = 0; i < n; i++) {
+        let acc = 0;
+        for (let j = Math.max(0, i - minSeg); j <= Math.min(n - 1, i + minSeg); j++) acc += cp[j];
+        regime[i] = acc > 0 ? 1 : (acc < 0 ? -1 : cp[i]);
+      }
+    }
+    /* One straight least-squares line per regime run => minimal bends */
+    const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+    const data = res.data;
+    let st = 0;
+    for (let i = 1; i <= n; i++) {
+      if (i === n || regime[i] !== regime[i - 1]) {
+        const r = regime[st];
+        if (r !== 0) {
+          const a = Math.max(0, st) , b = i - 1, len = b - a + 1;
+          if (len >= 1) {
+            let sx = 0, sy = 0, sxx = 0, sxy = 0;
+            for (let k = a; k <= b; k++) { sx += k; sy += closes[k]; sxx += k * k; sxy += k * closes[k]; }
+            const den = len * sxx - sx * sx;
+            const m = den !== 0 ? (len * sxy - sx * sy) / den : 0;
+            const q = (sy - m * sx) / len;
+            const col = r > 0 ? up : dn;
+            for (let k = a; k <= b; k++) {
+              let val = m * k + q;
+              if (!isFinite(val)) val = closes[k];
+              data.push({ time: cc[k].time, value: val, color: col });
+            }
+          }
+        }
+        st = i;
+      }
+    }
+    /* Single straight fit line over the recent window (the clean intersection line) */
+    const fitLook = Math.max(10, Math.round(o.fitLook) || 60);
+    const f0 = Math.max(0, n - fitLook), flen = n - f0;
+    let fsx = 0, fsy = 0, fsxx = 0, fsxy = 0;
+    for (let i = f0; i < n; i++) { fsx += i; fsy += closes[i]; fsxx += i * i; fsxy += i * closes[i]; }
+    const fden = flen * fsxx - fsx * fsx;
+    const fm = fden !== 0 ? (flen * fsxy - fsx * fsy) / fden : 0;
+    const fq = (fsy - fm * fsx) / flen;
+    for (let i = f0; i < n; i++) { const v = fm * i + fq; if (isFinite(v)) res.fitData.push({ time: cc[i].time, value: v }); }
+    res.curReg = regime[n - 1] || (sm[n - 1] >= 0 ? 1 : -1);
+    res.rsi = rsi; res.bbPct = bbPct; res.stK = stK; res.cci = cci; res.willR = willR; res.mfi = mfi;
+    return res;
+  }
+
+  /* One-entry cache so compute() and markers() don't recompute the engine on
+     the same candle set within a single rebuild. */
+  let PANE_SIG_CACHE = { key: '', val: null };
+  function paneSignalCached(c, o) {
+    const arr = c || [];
+    const last = arr.length ? arr[arr.length - 1] : null;
+    const key = arr.length + '|' + (last ? last.time + ':' + last.close : '') + '|' + JSON.stringify(o || {});
+    if (PANE_SIG_CACHE.key === key) return PANE_SIG_CACHE.val;
+    const v = paneSignal(arr, o);
+    PANE_SIG_CACHE = { key, val: v };
+    return v;
+  }
+
   /* ---------------- indicator definitions ---------------- */
   const IND = {
     ema: {
@@ -1542,6 +1786,263 @@
             }
           }
           trend = nt;
+        }
+        return mk;
+      }
+    },
+
+    /* Combo Master: one overlay that merges the three highest-value trend tools
+       into a single non-repaint setup.
+         - Structure zigzag (confirmed ATR-ZigZag swings) = market bias.
+         - One straight intersection trendline (autoTrendLine scores pivot pairs
+           by touches minus violations) = dynamic S/R that visibly cuts through
+           the candles.
+         - Optional strongest horizontal level (pivot clustering).
+         - BOS / CHoCH arrows plus volume-confirmed candle dots.
+       "Straight-line only" mode hides the zigzag so nothing but the straight
+       trendline (+ optional level) remains. Everything is built from confirmed
+       pivots, so it never repaints intrabar. */
+    trendmaster: {
+      id: 'trendmaster', name: 'Combo Master', fullName: 'Combo Master: structure zigzag + straight intersection trendline + BOS/CHoCH + volume confirmation (non-repaint)', cat: 'Trend', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'trendLook', label: 'Pivots to fit trendline', def: 12, min: 2, max: 40, step: 1 },
+        { key: 'lineOnly', label: 'Straight-line only (hide zigzag)', type: 'checkbox', def: false },
+        { key: 'showBreaks', label: 'Show BOS / CHoCH', type: 'checkbox', def: true },
+        { key: 'showVol', label: 'Volume-confirmed dots', type: 'checkbox', def: true },
+        { key: 'volLength', label: 'Volume avg length', def: 21, min: 2, max: 200, step: 1 },
+        { key: 'volMult', label: 'Volume spike (x avg)', def: 1.5, min: 0.5, max: 10, step: 0.1 },
+        { key: 'showLevel', label: 'Show strongest level', type: 'checkbox', def: false },
+        { key: 'fullSpan', label: 'Trendline spans whole chart', type: 'checkbox', def: true }
+      ],
+      style: [
+        { key: 'upColor', label: 'Bullish', def: '#26a69a' },
+        { key: 'downColor', label: 'Bearish', def: '#ef5350' },
+        { key: 'trendColor', label: 'Trendline (fallback)', def: '#2962ff' },
+        { key: 'levelColor', label: 'Strongest level', def: '#ffb300' },
+        { key: 'volColor', label: 'Volume dot', def: '#ffd54f' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const a = ewAnalyze(c, o);
+        const cc = a.c || [], piv = a.piv || [];
+        const lw = Math.max(1, Math.round(o.lineWidth) || 2);
+        const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+        const empty = (col) => ({ type: 'line', color: col, lineWidth: lw, data: [] });
+        if (cc.length < 3 || piv.length < 2) return [empty(up), empty(o.trendColor || '#2962ff'), empty(o.levelColor || '#ffb300')];
+        /* 1) Structure zigzag (skipped in straight-line-only mode). */
+        const zig = [];
+        if (o.lineOnly !== true) {
+          for (let k = 0; k < piv.length; k++) {
+            const nx = piv[k + 1] || piv[k];
+            zig.push({ time: cc[piv[k].idx].time, value: piv[k].price, color: nx.price >= piv[k].price ? up : dn });
+          }
+          const lastC = cc[cc.length - 1], lastP = piv[piv.length - 1];
+          if (zig.length && lastC.time > zig[zig.length - 1].time) {
+            zig.push({ time: lastC.time, value: lastC.close, color: lastC.close >= lastP.price ? up : dn });
+          }
+        }
+        /* 2) Straight intersection trendline: autoTrendLine lands on the
+              higher-lows (support) in an uptrend or the lower-highs (resistance)
+              in a downtrend and is drawn across the chart so it cuts the
+              candles. */
+        const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
+        const atr = wilderArr(trArr(cc), atrPer);
+        let atrLast = 0;
+        for (let i = atr.length - 1; i >= 0; i--) { if (atr[i] != null && isFinite(atr[i])) { atrLast = atr[i]; break; } }
+        const lastClose = cc[cc.length - 1].close;
+        const minPct = Number(o.minPct) >= 0 ? Number(o.minPct) : 0.15;
+        let tol = Math.max(atrLast * 0.5, Math.abs(lastClose) * (minPct / 100));
+        if (!(tol > 0)) tol = Math.abs(lastClose) * 0.001 || 1;
+        const line = [];
+        let lineColor = o.trendColor || '#2962ff';
+        const best = autoTrendLine(cc, piv, { look: o.trendLook, tol });
+        if (best) {
+          lineColor = best.kind === 'support' ? up : dn;
+          const startIdx = (o.fullSpan === false) ? Math.max(0, best.p1.idx) : 0;
+          for (let i = startIdx; i <= cc.length - 1; i++) {
+            const v = best.a * i + best.b;
+            if (isFinite(v)) line.push({ time: cc[i].time, value: v });
+          }
+        }
+        /* 3) Strongest horizontal level from pivot clustering (optional). */
+        let level = [];
+        if (o.showLevel === true) {
+          const lvtol = Math.max(atrLast, Math.abs(lastClose) * (minPct / 100)) || (Math.abs(lastClose) * 0.001 || 1);
+          const lv = clusterLevels(piv, lvtol);
+          if (lv && lv.length) {
+            let strong = lv[0];
+            for (let i = 1; i < lv.length; i++) if (lv[i].n > strong.n) strong = lv[i];
+            level = cc.map(x => ({ time: x.time, value: strong.price }));
+          }
+        }
+        return [
+          { type: 'line', color: up, lineWidth: lw, data: zig },
+          { type: 'line', color: lineColor, lineWidth: lw, data: line },
+          { type: 'line', color: o.levelColor || '#ffb300', lineWidth: lw, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, data: level }
+        ];
+      },
+      markers(c, o) {
+        const a = ewAnalyze(c, o);
+        const cc = a.c || [], piv = a.piv || [];
+        if (cc.length < 3 || piv.length < 2) return [];
+        const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+        const mk = [], seen = {};
+        /* 1) BOS / CHoCH arrows when the confirmed structure flips. */
+        if (o.showBreaks !== false) {
+          let lastH = null, prevH = null, lastL = null, prevL = null, trend = 0;
+          for (let k = 0; k < piv.length; k++) {
+            const p = piv[k];
+            if (p.type === 'high') { prevH = lastH; lastH = p.price; }
+            else { prevL = lastL; lastL = p.price; }
+            let nt = trend;
+            if (lastH != null && prevH != null && lastL != null && prevL != null) {
+              if (lastH > prevH && lastL > prevL) nt = 1;
+              else if (lastH < prevH && lastL < prevL) nt = -1;
+            }
+            if (nt !== trend && nt !== 0 && piv.length >= 3) {
+              const t = cc[p.idx].time;
+              if (!seen[t]) {
+                seen[t] = 1;
+                mk.push({ time: t, position: nt === 1 ? 'belowBar' : 'aboveBar', color: nt === 1 ? up : dn, shape: nt === 1 ? 'arrowUp' : 'arrowDown', text: trend === 0 ? 'BOS' : 'CHoCH' });
+              }
+            }
+            trend = nt;
+          }
+        }
+        /* 2) Volume-confirmed candle dots, only in the structure direction.
+              A bar is flagged when its volume beats the average of the prior N
+              bars and its body points the same way as the causal structure
+              bias, so a spike against the trend never marks. */
+        if (o.showVol !== false && cc.length) {
+          const vlen = Math.max(2, Math.round(o.volLength) || 21);
+          const vmult = Number(o.volMult) > 0 ? Number(o.volMult) : 1.5;
+          const vols = cc.map(x => (isFinite(x.volume) ? x.volume : 0));
+          const bias = new Array(cc.length).fill(0);
+          let b = 0, pi = 0, lH = null, pH = null, lL = null, pL = null;
+          for (let i = 0; i < cc.length; i++) {
+            while (pi < piv.length && piv[pi].at <= i) {
+              const p = piv[pi++];
+              if (p.type === 'high') { pH = lH; lH = p.price; } else { pL = lL; lL = p.price; }
+              if (lH != null && pH != null && lL != null && pL != null) {
+                if (lH > pH && lL > pL) b = 1; else if (lH < pH && lL < pL) b = -1;
+              }
+            }
+            bias[i] = b;
+          }
+          let vsum = 0;
+          for (let i = 0; i < cc.length; i++) {
+            if (i >= vlen + 1) vsum -= vols[i - vlen - 1];
+            if (i >= 1) vsum += vols[i - 1];
+            const cnt = Math.min(i, vlen);
+            if (cnt < vlen) continue;
+            const avg = vsum / cnt;
+            if (bias[i] === 0 || avg <= 0 || !(vols[i] > vmult * avg)) continue;
+            const bodyUp = cc[i].close >= cc[i].open;
+            if ((bias[i] === 1) !== bodyUp) continue;
+            const t = cc[i].time;
+            if (seen[t]) continue;
+            seen[t] = 1;
+            mk.push({ time: t, position: 'inBar', color: o.volColor || '#ffd54f', shape: 'circle', text: '' });
+          }
+        }
+        return mk;
+      }
+    },
+
+    /* Pane Consensus Signal: one overlay that fuses EVERY pane oscillator
+       (RSI, MACD, BB %B, Stochastic, CCI, Williams %R, MFI, RSI divergence) into
+       a single bullish/bearish bias, then expresses it on the price chart as
+       straight lines that cut through the candles - almost no zigzag. Green line
+       = bullish consensus, red = bearish. It adapts to how the oscillators react
+       with the trend (overbought/oversold dampens an over-extended vote), so it
+       catches trend turns with confirmation instead of chasing momentum. A single
+       straight best-fit "fit line" over the recent window is drawn dashed as the
+       clean intersection line; the solid line is the history of regime runs
+       (one straight segment each). Non-repaint: confirmed readings only. */
+    panemaster: {
+      id: 'panemaster', name: 'Pane Consensus Signal', fullName: 'Pane Consensus Signal (all pane oscillators fused into one bullish/bearish straight intersection line)', cat: 'Trend', type: 'overlay',
+      inputs: [
+        { key: 'rsiLength', label: 'RSI length', def: 14, min: 2, max: 50, step: 1 },
+        { key: 'bbLength', label: 'BB %B length', def: 20, min: 5, max: 60, step: 1 },
+        { key: 'stochLength', label: 'Stochastic length', def: 14, min: 3, max: 50, step: 1 },
+        { key: 'cciLength', label: 'CCI length', def: 20, min: 5, max: 60, step: 1 },
+        { key: 'willrLength', label: 'Williams %R length', def: 14, min: 3, max: 50, step: 1 },
+        { key: 'mfiLength', label: 'MFI length', def: 14, min: 3, max: 50, step: 1 },
+        { key: 'atrPeriod', label: 'ATR period (MACD scaling)', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'smooth', label: 'Signal smoothing', def: 3, min: 1, max: 20, step: 1 },
+        { key: 'bullTh', label: 'Bullish threshold', def: 0.12, min: 0.01, max: 0.9, step: 0.01 },
+        { key: 'bearTh', label: 'Bearish threshold', def: 0.12, min: 0.01, max: 0.9, step: 0.01 },
+        { key: 'minSeg', label: 'Min trend run (bars)', def: 15, min: 1, max: 60, step: 1 },
+        { key: 'fitLook', label: 'Fit line lookback', def: 60, min: 10, max: 500, step: 1 },
+        { key: 'useRSI', label: 'Use RSI', type: 'checkbox', def: true },
+        { key: 'useMACD', label: 'Use MACD', type: 'checkbox', def: true },
+        { key: 'useBB', label: 'Use Bollinger %B', type: 'checkbox', def: true },
+        { key: 'useStoch', label: 'Use Stochastic', type: 'checkbox', def: true },
+        { key: 'useCCI', label: 'Use CCI', type: 'checkbox', def: true },
+        { key: 'useWillR', label: 'Use Williams %R', type: 'checkbox', def: true },
+        { key: 'useMFI', label: 'Use MFI', type: 'checkbox', def: true },
+        { key: 'useDiv', label: 'Use RSI divergence', type: 'checkbox', def: true },
+        { key: 'showExhaustion', label: 'Show overbought/oversold dots', type: 'checkbox', def: true }
+      ],
+      style: [
+        { key: 'upColor', label: 'Bullish', def: '#26a69a' },
+        { key: 'downColor', label: 'Bearish', def: '#ef5350' },
+        { key: 'trendColor', label: 'Flat / fallback', def: '#2962ff' },
+        { key: 'exhaustColor', label: 'Overbought / oversold', def: '#ffb300' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const lw = Math.max(1, Math.round(o.lineWidth) || 2);
+        const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+        const e = () => ({ type: 'line', color: o.trendColor || '#2962ff', lineWidth: lw, data: [] });
+        let sig;
+        try { sig = paneSignalCached(c, o); } catch (err) { return [e(), e()]; }
+        if (!sig || !sig.cc.length) return [e(), e()];
+        return [
+          { type: 'line', color: up, lineWidth: lw, data: sig.data },
+          { type: 'line', color: sig.curReg > 0 ? up : dn, lineWidth: lw, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, data: sig.fitData }
+        ];
+      },
+      markers(c, o) {
+        let sig;
+        try { sig = paneSignalCached(c, o); } catch (err) { return []; }
+        if (!sig || sig.cc.length < 35) return [];
+        const cc = sig.cc, regime = sig.regime;
+        const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+        const mk = [], seen = {};
+        /* Bull / bear arrows at every regime flip. */
+        for (let i = 1; i < cc.length; i++) {
+          if (regime[i] !== regime[i - 1] && regime[i] !== 0) {
+            const t = cc[i].time;
+            if (seen[t]) continue;
+            seen[t] = 1;
+            mk.push({ time: t, position: regime[i] > 0 ? 'belowBar' : 'aboveBar', color: regime[i] > 0 ? up : dn, shape: regime[i] > 0 ? 'arrowUp' : 'arrowDown', text: regime[i] > 0 ? 'BULL' : 'BEAR' });
+          }
+        }
+        /* Overbought / oversold exhaustion dots (first bar of each cluster). */
+        if (o.showExhaustion !== false) {
+          const ex = o.exhaustColor || '#ffb300';
+          let prevOB = false, prevOS = false;
+          for (let i = 0; i < cc.length; i++) {
+            if (regime[i] === 0) { prevOB = prevOS = false; continue; }
+            let ob = 0, os = 0;
+            const a = sig.rsi ? sig.rsi[i] : null, b = sig.bbPct ? sig.bbPct[i] : null, k = sig.stK ? sig.stK[i] : null,
+                  c2 = sig.cci ? sig.cci[i] : null, w = sig.willR ? sig.willR[i] : null, m = sig.mfi ? sig.mfi[i] : null;
+            if (a != null) { if (a > 70) ob++; else if (a < 30) os++; }
+            if (b != null) { if (b > 1) ob++; else if (b < 0) os++; }
+            if (k != null) { if (k > 80) ob++; else if (k < 20) os++; }
+            if (c2 != null) { if (c2 > 100) ob++; else if (c2 < -100) os++; }
+            if (w != null) { if (w > -20) ob++; else if (w < -80) os++; }
+            if (m != null) { if (m > 80) ob++; else if (m < 20) os++; }
+            const obNow = regime[i] > 0 && ob >= 4, osNow = regime[i] < 0 && os >= 4;
+            const t = cc[i].time;
+            if (obNow && !prevOB && !seen[t]) { seen[t] = 1; mk.push({ time: t, position: 'aboveBar', color: ex, shape: 'circle', text: 'OB' }); }
+            else if (osNow && !prevOS && !seen[t]) { seen[t] = 1; mk.push({ time: t, position: 'belowBar', color: ex, shape: 'circle', text: 'OS' }); }
+            prevOB = obNow; prevOS = osNow;
+          }
         }
         return mk;
       }
@@ -3674,6 +4175,8 @@
       case 'keylevel': return [['v0', 'Key levels']];
       case 'autotrend': return [['v0', 'Trend line']];
       case 'zzline': return [['v0', 'ZigZag'], ['v1', 'Trendline']];
+      case 'trendmaster': return [['v0', 'ZigZag'], ['v1', 'Trendline'], ['v2', 'Level']];
+      case 'panemaster': return [['v0', 'Signal line'], ['v1', 'Fit line']];
       case 'pitchfork': return [['v0', 'Median'], ['v1', 'Upper'], ['v2', 'Lower']];
       case 'fibfan': return [['v0', '23.6%'], ['v1', '38.2%'], ['v2', '50%'], ['v3', '61.8%'], ['v4', '78.6%']];
       case 'gannfan': return [['v0', '1x8'], ['v1', '1x4'], ['v2', '1x3'], ['v3', '1x2'], ['v4', '1x1'], ['v5', '2x1'], ['v6', '3x1'], ['v7', '4x1'], ['v8', '8x1']];
@@ -4483,6 +4986,23 @@
     },
     removeIndicator,
     removeAll,
+    /* One-click "best combo" preset: structure bias + dynamic S/R trendline +
+       volume/liquidity trend core. Re-applies the recommended defaults and
+       de-dupes existing instances of these three so repeated clicks never stack.
+       Non-combo indicators already on the chart are left untouched. */
+    applyBestCombo() {
+      const comboIds = ['pastruct', 'autotrend', 'vlcore'];
+      const drop = [];
+      indicators.forEach(i => { if (comboIds.indexOf(i.def.id) >= 0) drop.push(i.uid); });
+      drop.forEach(u => removeIndicator(u));
+      addIndicator('pastruct', { lineMode: 'zigzag', showMarkers: true, markersOnly: false });
+      addIndicator('autotrend', { strength: 5, look: 60, fullSpan: true });
+      addIndicator('vlcore', { length: 21, atrLength: 14, gap: 1.0, confirm: 2, wickLen: 3, straightLine: true, useVolume: true });
+      this.closeMenu();
+      const st = document.getElementById('status');
+      if (st) st.textContent = 'Best Combo: Price Action Trend + Auto Trendline + Trend Core (bias + pullback + volume confirmation)';
+      stateChange();
+    },
     /* Remove every deployed instance whose def id matches (used by the AI Brain
        ui tool so it can drop e.g. all EMA overlays without knowing uids). */
     removeAllOf(id) {
