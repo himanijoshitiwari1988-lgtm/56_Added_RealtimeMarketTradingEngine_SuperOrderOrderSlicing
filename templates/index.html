@@ -1139,7 +1139,7 @@ window.IST12 = (function () {
           </div>
           <div class="monitor-toolbar" style="border:1px solid #1e1e40;border-radius:4px;margin:4px 0">
           <div class="monitor-toolbar-row" style="flex-wrap:wrap">
-            <div style="font-size:9px;color:#888;margin-right:10px"><b style="color:#ffd700">Universal defaults:</b></div>
+            <div style="font-size:9px;color:#888;margin-right:10px" title="Lot size / Lots / Margin are engine-wide and are NOT saved in engine templates."><b style="color:#ffd700">Universal defaults:</b></div>
             <label style="font-size:9px;color:#888;margin-right:8px">Lot size <input type="number" id="astLotSize" step="1" min="1" placeholder="auto" style="width:60px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
             <label style="font-size:9px;color:#888;margin-right:8px">Lots <input type="number" id="astLots" value="1" min="1" step="1" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
             <label style="font-size:9px;color:#888;margin-right:8px">Margin <input type="number" id="astMargin" value="100000" min="0" step="1000" style="width:80px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
@@ -1161,7 +1161,7 @@ window.IST12 = (function () {
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px" title="Overall stop-loss: a fixed % BELOW the entry that protects the capital from a big loss. Works together with Trail SL - the trailing stop only ratchets UP behind the peak and never moves below this overall floor."><input type="checkbox" id="astManualSL" onchange="AISmartTrading.onUniversalInput()"> Overall SL</label>
             <label style="font-size:9px;color:#ccc;margin-right:8px">% <input type="number" id="astManualSLPct" value="1" min="0.01" step="0.01" title="Overall stop-loss percent below the entry, entered directly (e.g. 0.05 = 0.05%, 1 = 1%)" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ff6b6b;margin-right:8px;display:flex;align-items:center;gap:3px" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick - never below the Overall SL floor"><input type="checkbox" id="astManualTrailSL" onchange="AISmartTrading.onUniversalInput()" style="accent-color:#ff6b6b"> Trail SL</label>
-            <label style="font-size:9px;color:#ff6b6b;margin-right:8px">% <input type="number" id="astManualTrailSLPct" value="" placeholder="1" min="0.01" step="0.01" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick, locking in profit" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
+            <label style="font-size:9px;color:#ff6b6b;margin-right:8px">% <input type="number" id="astManualTrailSLPct" value="" placeholder="1" min="0.01" max="100" step="0.01" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick, locking in profit" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astManualTrailTP" onchange="AISmartTrading.onUniversalInput()"> Manual Trail TP</label>
             <label style="font-size:9px;color:#ccc;margin-right:8px">% <input type="number" id="astManualTrailTPPct" value="20" min="1" step="1" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AISmartTrading.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astManualTP" onchange="AISmartTrading.onUniversalInput()"> Manual TP %</label>
@@ -1345,6 +1345,12 @@ window.IST12 = (function () {
             <button class="btn-action" id="astNiftyTrendIndicesAdd" style="width:auto;padding:3px 10px;margin:0 6px 0 4px" onclick="AISmartTrading.addNiftyTrendIndex()">Add</button>
             <span id="astNiftyTrendIndicesList" style="font-size:9px;color:#ccc;display:flex;flex-wrap:wrap;gap:4px;align-items:center"></span>
           </div>
+          <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:4px;align-items:center">
+            <div style="font-size:9px;color:#888;margin-right:10px" title="Add extra indicators that must AGREE with the NIFTY trend call before the engine confirms a side. Bullish NIFTY requires every enabled indicator to be trending up, bearish requires trending down; any opposite indicator holds the previous side instead of flipping. Each indicator is evaluated on NIFTY's own candles."><b style="color:#00d4aa">NIFTY trend confirmation indicators:</b></div>
+            <select id="astNiftyTrendConfIndSelect" style="background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px;font-size:9px;min-width:130px;max-width:180px"></select>
+            <button class="btn-action" id="astNiftyTrendConfIndAdd" style="width:auto;padding:3px 10px;margin:0 6px 0 4px" onclick="AISmartTrading.addNiftyTrendConfirmIndicator()">Add</button>
+            <span id="astNiftyTrendConfIndList" style="font-size:9px;color:#ccc;display:flex;flex-wrap:wrap;gap:4px;align-items:center"></span>
+          </div>
           <div class="monitor-toolbar-row" style="flex-wrap:wrap;margin-top:6px;align-items:center">
             <div style="font-size:9px;color:#b39ddb;margin-right:10px" title="Assign saved AST engine-settings templates to each NIFTY direction. While NIFTY Trend Following is ON, every run start on a confirmed side applies the NEXT assigned template of that side (its saved settings + ticked strategies + saved run mode - strategies / Indicator-filters / AI auto-pick) instead of the manual settings; trend CE/PE picking stays automatic. No template assigned to a side = manual engine settings run as usual."><b style="color:#b39ddb">Assign AST Template to direction:</b></div>
             <label style="font-size:9px;color:#00d4aa;margin-right:6px">NIFTY bullish &rarr; template
@@ -1418,6 +1424,22 @@ window.IST12 = (function () {
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma50_100" onchange="AISmartTrading.onFiltersInput()"> EMA 50 crossed above EMA 100 (overall trend vote: EMA 100)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma100_200" onchange="AISmartTrading.onFiltersInput()"> EMA 100 crossed above EMA 200 (overall trend vote: EMA 200)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 crossed above EMA 300 (overall trend vote: EMA 300)</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">EMA &amp; EMA 1 crossover (Close / EMA1 vs each EMA - cross event)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma1_9" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed above EMA 9 (overall trend vote: EMA 9)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma1_21" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed above EMA 21 (overall trend vote: EMA 21)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma1_35" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed above EMA 35 (overall trend vote: EMA 35)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma1_50" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed above EMA 50 (overall trend vote: EMA 50)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma1_100" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed above EMA 100 (overall trend vote: EMA 100)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma1_200" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed above EMA 200 (overall trend vote: EMA 200)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEma1_300" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed above EMA 300 (overall trend vote: EMA 300)</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">EMA trend (each EMA line's own slope)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEmaTrend9" onchange="AISmartTrading.onFiltersInput()"> EMA 9 bullish (line rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEmaTrend21" onchange="AISmartTrading.onFiltersInput()"> EMA 21 bullish (line rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEmaTrend35" onchange="AISmartTrading.onFiltersInput()"> EMA 35 bullish (line rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEmaTrend50" onchange="AISmartTrading.onFiltersInput()"> EMA 50 bullish (line rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEmaTrend100" onchange="AISmartTrading.onFiltersInput()"> EMA 100 bullish (line rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEmaTrend200" onchange="AISmartTrading.onFiltersInput()"> EMA 200 bullish (line rising)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullEmaTrend300" onchange="AISmartTrading.onFiltersInput()"> EMA 300 bullish (line rising)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) crossed above Supertrend(10,2) (overall trend vote: Supertrend(10,2))</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed above Supertrend(10,3) (overall trend vote: Supertrend(10,3))</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSt1CloseCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed above ST (overall trend vote: Supertrend(10,1))</label>
@@ -1491,6 +1513,22 @@ window.IST12 = (function () {
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma50_100" onchange="AISmartTrading.onFiltersInput()"> EMA 50 crossed below EMA 100 (overall trend vote: EMA 100)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma100_200" onchange="AISmartTrading.onFiltersInput()"> EMA 100 crossed below EMA 200 (overall trend vote: EMA 200)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma200_300" onchange="AISmartTrading.onFiltersInput()"> EMA 200 crossed below EMA 300 (overall trend vote: EMA 300)</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">EMA &amp; EMA 1 crossover (Close / EMA1 vs each EMA - cross event)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma1_9" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed below EMA 9 (overall trend vote: EMA 9)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma1_21" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed below EMA 21 (overall trend vote: EMA 21)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma1_35" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed below EMA 35 (overall trend vote: EMA 35)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma1_50" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed below EMA 50 (overall trend vote: EMA 50)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma1_100" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed below EMA 100 (overall trend vote: EMA 100)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma1_200" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed below EMA 200 (overall trend vote: EMA 200)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEma1_300" onchange="AISmartTrading.onFiltersInput()"> EMA 1 crossed below EMA 300 (overall trend vote: EMA 300)</label>
+                <div style="border-top:1px solid #2d2d50;margin-top:2px;padding-top:3px;font-size:8px;color:#ffd700">EMA trend (each EMA line's own slope)</div>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEmaTrend9" onchange="AISmartTrading.onFiltersInput()"> EMA 9 bearish (line falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEmaTrend21" onchange="AISmartTrading.onFiltersInput()"> EMA 21 bearish (line falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEmaTrend35" onchange="AISmartTrading.onFiltersInput()"> EMA 35 bearish (line falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEmaTrend50" onchange="AISmartTrading.onFiltersInput()"> EMA 50 bearish (line falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEmaTrend100" onchange="AISmartTrading.onFiltersInput()"> EMA 100 bearish (line falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEmaTrend200" onchange="AISmartTrading.onFiltersInput()"> EMA 200 bearish (line falling)</label>
+                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearEmaTrend300" onchange="AISmartTrading.onFiltersInput()"> EMA 300 bearish (line falling)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt10_1_2" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,1) crossed below Supertrend(10,2) (overall trend vote: Supertrend(10,2))</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt10_2_3" onchange="AISmartTrading.onFiltersInput()"> Supertrend(10,2) crossed below Supertrend(10,3) (overall trend vote: Supertrend(10,3))</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSt1CloseCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed below ST (overall trend vote: Supertrend(10,1))</label>
@@ -1910,7 +1948,7 @@ window.IST12 = (function () {
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px" title="Overall stop-loss: a fixed % BELOW the entry that protects the capital from a big loss. Works together with Trail SL - the trailing stop only ratchets UP behind the peak and never moves below this overall floor."><input type="checkbox" id="aeManualSL" onchange="AutoExperiment.onUniversalInput()"> Overall SL</label>
             <label style="font-size:9px;color:#ccc;margin-right:8px">% <input type="number" id="aeManualSLPct" value="1" min="0.01" step="0.01" title="Overall stop-loss percent below the entry, entered directly (e.g. 0.05 = 0.05%, 1 = 1%)" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AutoExperiment.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ff6b6b;margin-right:8px;display:flex;align-items:center;gap:3px" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick - never below the Overall SL floor"><input type="checkbox" id="aeManualTrailSL" onchange="AutoExperiment.onUniversalInput()" style="accent-color:#ff6b6b"> Trail SL</label>
-            <label style="font-size:9px;color:#ff6b6b;margin-right:8px">% <input type="number" id="aeManualTrailSLPct" value="1" min="0.01" step="0.01" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick, locking in profit" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AutoExperiment.onUniversalInput()"></label>
+            <label style="font-size:9px;color:#ff6b6b;margin-right:8px">% <input type="number" id="aeManualTrailSLPct" value="1" min="0.01" max="100" step="0.01" title="Trailing stop-loss percent: once the trade turns green the stop rides the RUNNING PROFIT (peak - entry), keeping (100 - trail%)% of it and sliding up behind it tick by tick, locking in profit" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AutoExperiment.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeManualTrailTP" onchange="AutoExperiment.onUniversalInput()"> Manual Trail TP</label>
             <label style="font-size:9px;color:#ccc;margin-right:8px">% <input type="number" id="aeManualTrailTPPct" value="20" min="1" step="1" style="width:48px;background:#1a1a35;border:1px solid #2d2d50;color:#d0d0d0;border-radius:3px;padding:3px 5px" oninput="AutoExperiment.onUniversalInput()"></label>
             <label style="font-size:9px;color:#ccc;margin-right:8px;display:flex;align-items:center;gap:3px"><input type="checkbox" id="aeManualTP" onchange="AutoExperiment.onUniversalInput()"> Manual TP %</label>
@@ -2788,8 +2826,8 @@ window.IST12 = (function () {
 
 <script src="/static/vlcore.js?v=8"></script>
 <script src="/static/rsidiv_core.js?v=1"></script>
-<script src="/static/indicators.js?v=71"></script>
-<script src="/static/oitrend.js?v=4"></script>
+<script src="/static/indicators.js?v=95"></script>
+<script src="/static/oitrend.js?v=9"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
 
@@ -6370,12 +6408,12 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/aitrades.js?v=2"></script>
 <script src="/static/strategies.js?v=72"></script>
 <script src="/static/trendconfirm.js?v=1"></script>
-<script src="/static/papertrade.js?v=71"></script>
+<script src="/static/papertrade.js?v=74"></script>
 <script src="/static/strategy_container.js?v=16"></script>
- <script src="/static/autoexperiment.v13.js?v=179"></script>
+ <script src="/static/autoexperiment.v13.js?v=180"></script>
 <script src="/static/indextrend.js?v=4"></script>
 <script src="/static/simulator.js?v=3"></script>
-  <script src="/static/aismart.js?v=242"></script>
+  <script src="/static/aismart.js?v=247"></script>
 <script src="/static/paperrun.js?v=26"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6384,7 +6422,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/final_strategy.js?v=4"></script>
 <script src="/static/smart_ntrader.js?v=66"></script>
 <script src="/static/niftybbp_alert.js?v=21"></script>
-<script src="/static/chart_grid.js?v=10"></script>
+<script src="/static/chart_grid.js?v=11"></script>
 <script src="/static/tradestats.js?v=2"></script>
 <script src="/static/backup.js?v=3"></script>
 <script>

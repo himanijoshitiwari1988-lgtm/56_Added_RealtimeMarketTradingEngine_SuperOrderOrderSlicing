@@ -143,6 +143,309 @@
     return { type: type || 'line', color, lineWidth: lineWidth || 1, data };
   }
 
+  /* ---------------- Price Action Structure engine ----------------
+     Swing (pivot) detection + market structure trend: Higher-High + Higher-Low
+     = bullish, Lower-High + Lower-Low = bearish, with break-of-structure flips.
+     A pivot at bar i is only CONFIRMED `pivotLen` bars later, so the trend never
+     repaints (the only cost is a small lag). Shared by the overlay's compute()
+     (colored trailing stop line) and markers() (swing + BOS/CHoCH labels). */
+  function paStructure(c, o) {
+    o = o || {};
+    const n = c ? c.length : 0;
+    const out = { line: [], zig: [], markers: [], trend: 0, level: null };
+    const pl = Math.max(1, Math.round(Number(o.pivotLen)) || 3);
+    if (n < pl * 2 + 2) return out;
+    const atr = wilderArr(trArr(c), Math.max(2, Math.round(Number(o.atrLen)) || 14));
+    const mult = Number(o.atrMult) >= 0 ? Number(o.atrMult) : 0.25;
+    const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+    const pivots = [];
+    for (let i = pl; i < n - pl; i++) {
+      const hi = c[i].high, lo = c[i].low;
+      let isH = true, isL = true;
+      for (let j = i - pl; j <= i + pl; j++) {
+        if (j === i) continue;
+        if (c[j].high >= hi) isH = false;
+        if (c[j].low <= lo) isL = false;
+        if (!isH && !isL) break;
+      }
+      if (isH) pivots.push({ at: i + pl, kind: 'H', price: hi, idx: i });
+      if (isL) pivots.push({ at: i + pl, kind: 'L', price: lo, idx: i });
+    }
+    pivots.sort((a, b) => (a.at - b.at) || (a.idx - b.idx));
+    let pi = 0, lastH = null, prevH = null, lastL = null, prevL = null;
+    let trend = 0;
+    const mkMap = {};
+    const putMk = (m) => { const k = String(m.time); if (!mkMap[k]) mkMap[k] = m; };
+    for (let i = 0; i < n; i++) {
+      while (pi < pivots.length && pivots[pi].at <= i) {
+        const p = pivots[pi++];
+        if (p.kind === 'H') { prevH = lastH; lastH = p.price; }
+        else { prevL = lastL; lastL = p.price; }
+        if (o.showMarkers !== false) {
+          putMk({ time: c[p.idx].time, position: p.kind === 'H' ? 'aboveBar' : 'belowBar', color: p.kind === 'H' ? dn : up, shape: p.kind === 'H' ? 'arrowDown' : 'arrowUp', text: p.kind === 'H' ? 'H' : 'L' });
+        }
+      }
+      const close = c[i].close;
+      const buf = (atr[i] != null && isFinite(atr[i])) ? atr[i] * mult : 0;
+      const prevTrend = trend;
+      if (lastH != null && close > lastH + buf) trend = 1;
+      else if (lastL != null && close < lastL - buf) trend = -1;
+      else if (prevH != null && prevL != null && lastH != null && lastL != null) {
+        if (lastH > prevH && lastL > prevL) trend = 1;
+        else if (lastH < prevH && lastL < prevL) trend = -1;
+      }
+      let lvl = null;
+      if (trend === 1) lvl = (lastL != null) ? lastL : c[i].close;
+      else if (trend === -1) lvl = (lastH != null) ? lastH : c[i].close;
+      if (lvl != null && o.markersOnly !== true) out.line.push({ time: c[i].time, value: lvl, color: trend === 1 ? up : dn });
+      if (trend !== prevTrend && trend !== 0 && o.showMarkers !== false) {
+        putMk({ time: c[i].time, position: trend === 1 ? 'belowBar' : 'aboveBar', color: trend === 1 ? up : dn, shape: trend === 1 ? 'arrowUp' : 'arrowDown', text: prevTrend === 0 ? 'BOS' : 'CHoCH' });
+      }
+      out.trend = trend;
+      out.level = lvl;
+    }
+    /* Zigzag variant: connect the confirmed swing pivots (H/L) with straight
+       segments, green on rising legs and red on falling legs, extended to the
+       live candle. Same pivots that drive the trailing line and the BOS/CHoCH
+       markers, so it is just a different visual of the same structure. */
+    const zig = [];
+    if (o.markersOnly !== true) {
+      const conf = pivots.filter(p => p.at <= n - 1);
+      let pIdx = -1;
+      for (let k = 0; k < conf.length; k++) {
+        const p = conf[k];
+        if (p.idx === pIdx) continue;
+        const prevP = zig.length ? zig[zig.length - 1] : null;
+        zig.push({ time: c[p.idx].time, value: p.price, color: (!prevP || p.price >= prevP.value) ? up : dn });
+        pIdx = p.idx;
+      }
+      if (zig.length) {
+        const lastZ = zig[zig.length - 1];
+        const lastC = c[n - 1];
+        if (lastC.time > lastZ.time) zig.push({ time: lastC.time, value: lastC.close, color: lastC.close >= lastZ.value ? up : dn });
+      }
+    }
+    out.zig = zig;
+    out.markers = Object.keys(mkMap).map(k => mkMap[k]).sort((a, b) => a.time - b.time);
+    return out;
+  }
+
+  /* ---------------- Elliott wave engine ----------------
+     Shared by the 'Elliott Wave Trend' overlay (wavefib). Builds an ATR-ZigZag,
+     reads the trend with strict structure (HH+HL bullish, LH+LL bearish, else
+     HOLD - a counter-trend bounce never flips it), labels the most recent
+     alternating swing run (1-2-3-4-5 impulse, else A-B-C) and returns the last
+     impulse leg for Fibonacci levels. Pivots are confirmed-only, so the trend
+     line never repaints. */
+  function ewAnalyze(c, o) {
+    o = o || {};
+    const cc = [];
+    let prevT = 0;
+    if (c) for (let i = 0; i < c.length; i++) {
+      const x = c[i];
+      if (x && x.time > prevT && isFinite(x.time) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close)) { cc.push(x); prevT = x.time; }
+    }
+    const n = cc.length;
+    const out = { c: cc, piv: [], trend: 0, trendLine: [], labels: [], fib: null };
+    if (n < 3) return out;
+    const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
+    const atrMult = Number(o.atrMult) > 0 ? Number(o.atrMult) : 2;
+    const minPct = Number(o.minPct) >= 0 ? Number(o.minPct) : 0.15;
+    const atr = wilderArr(trArr(cc), atrPer);
+    const th = (i, ref) => {
+      const a = atr[i] != null && isFinite(atr[i]) ? atr[i] * atrMult : 0;
+      const p = Math.abs(ref) * (minPct / 100);
+      return Math.max(a, p);
+    };
+    const piv = [];
+    let dir = 1, ext = cc[0].high, extIdx = 0;
+    for (let i = 1; i < n; i++) {
+      const t = th(i, cc[i].close);
+      if (dir >= 0) {
+        if (cc[i].high > ext) { ext = cc[i].high; extIdx = i; }
+        if (cc[i].low <= ext - t) { piv.push({ type: 'high', price: ext, idx: extIdx, at: i }); dir = -1; ext = cc[i].low; extIdx = i; }
+      } else {
+        if (cc[i].low < ext) { ext = cc[i].low; extIdx = i; }
+        if (cc[i].high >= ext + t) { piv.push({ type: 'low', price: ext, idx: extIdx, at: i }); dir = 1; ext = cc[i].high; extIdx = i; }
+      }
+    }
+    out.piv = piv;
+    if (piv.length < 2) return out;
+    const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350', rg = o.rangeColor || '#9e9e9e';
+    /* Causal trend state: a pivot only affects bars at/after its confirmation
+       bar ('at'), so the step line never rewrites history. Mixed structure
+       HOLDS the previous trend instead of flipping on a bounce. */
+    let lastH = null, prevH = null, lastL = null, prevL = null, trend = 0, pi = 0;
+    for (let i = 0; i < n; i++) {
+      while (pi < piv.length && piv[pi].at <= i) {
+        const p = piv[pi++];
+        if (p.type === 'high') { prevH = lastH; lastH = p.price; }
+        else { prevL = lastL; lastL = p.price; }
+        if (lastH != null && prevH != null && lastL != null && prevL != null) {
+          if (lastH > prevH && lastL > prevL) trend = 1;
+          else if (lastH < prevH && lastL < prevL) trend = -1;
+        }
+      }
+      let lvl;
+      if (trend === 1) lvl = lastL != null ? lastL : cc[i].close;
+      else if (trend === -1) lvl = lastH != null ? lastH : cc[i].close;
+      else lvl = (lastH != null && lastL != null) ? (lastH + lastL) / 2 : cc[i].close;
+      out.trendLine.push({ time: cc[i].time, value: lvl, color: trend === 1 ? up : (trend === -1 ? dn : rg) });
+      out.trend = trend;
+    }
+    /* Wave labels: label the most recent alternating swing run. Prefer a clean
+       5-wave impulse; otherwise fall back to a 3-swing A-B-C. */
+    const alt = (arr) => { for (let k = 1; k < arr.length; k++) if (arr[k].type === arr[k - 1].type) return false; return true; };
+    const labels = [];
+    /* Find the most recent clean 5-wave impulse that matches the trend. */
+    let imp = null;
+    const minStart = Math.max(0, piv.length - 12);
+    for (let start = piv.length - 6; start >= minStart; start--) {
+      if (start < 0) continue;
+      const w = piv.slice(start, start + 6);
+      if (w.length < 6 || !alt(w)) continue;
+      const upW = w[0].type === 'low' && w[5].type === 'high';
+      const dnW = w[0].type === 'high' && w[5].type === 'low';
+      if ((trend === 1 && upW) || (trend === -1 && dnW) || (trend === 0 && (upW || dnW))) { imp = w; break; }
+    }
+    if (imp) {
+      const nm = ['1', '2', '3', '4', '5'];
+      for (let k = 1; k <= 5; k++) labels.push({ idx: imp[k].idx, type: imp[k].type, text: nm[k - 1] });
+    } else {
+      const s3 = piv.slice(-3);
+      if (s3.length === 3 && alt(s3)) {
+        const nm = ['A', 'B', 'C'];
+        for (let k = 0; k < 3; k++) labels.push({ idx: s3[k].idx, type: s3[k].type, text: nm[k] });
+      }
+    }
+    /* Two pivots can confirm off the same bar (a same-bar high+low reversal);
+       keep only the first label per bar so markers never double up on a time. */
+    const seenT = {};
+    out.labels = labels.filter(l => {
+      const t = cc[l.idx] && cc[l.idx].time;
+      if (t == null || seenT[t]) return false;
+      seenT[t] = 1;
+      return true;
+    });
+    /* Last completed impulse leg in the trend direction, for the Fib grid. */
+    let A = null, B = null;
+    for (let k = piv.length - 1; k >= 1; k--) {
+      const b = piv[k], a = piv[k - 1];
+      if (a.idx >= b.idx) continue;
+      const up2 = b.price > a.price;
+      if ((trend === 1 && up2 && a.type === 'low') || (trend === -1 && !up2 && a.type === 'high')) { A = a; B = b; break; }
+    }
+    if (!A) { A = piv[piv.length - 2]; B = piv[piv.length - 1]; }
+    if (A && B && B.idx !== A.idx && Math.abs(B.price - A.price) > 0) out.fib = { A, B };
+    return out;
+  }
+
+  /* ---------------- Support / Resistance engine ----------------
+     Fractal swing pivots. A bar is a swing high/low only if it is the extreme
+     of `strength` bars on BOTH sides, so it is confirmable `strength` bars later
+     (non-repaint). Shared by the Key Levels and Auto Trendline overlays. */
+  function fractalPivots(c, strength) {
+    const s = Math.max(1, Math.round(strength) || 3);
+    const piv = [];
+    for (let i = s; i < c.length - s; i++) {
+      let isH = true, isL = true;
+      for (let k = 1; k <= s; k++) {
+        if (!(c[i].high >= c[i - k].high && c[i].high >= c[i + k].high)) isH = false;
+        if (!(c[i].low <= c[i - k].low && c[i].low <= c[i + k].low)) isL = false;
+        if (!isH && !isL) break;
+      }
+      if (isH) piv.push({ type: 'high', price: c[i].high, idx: i, at: i + s });
+      else if (isL) piv.push({ type: 'low', price: c[i].low, idx: i, at: i + s });
+    }
+    return piv;
+  }
+
+  /* Greedy price clustering: nearby pivots (within `tol`) merge into one level.
+     Each level keeps its average price, touch count and first/last bar. */
+  function clusterLevels(piv, tol) {
+    const arr = piv.map(p => ({ price: p.price, idx: p.idx })).sort((a, b) => a.price - b.price);
+    const cl = [];
+    for (let i = 0; i < arr.length; i++) {
+      const p = arr[i];
+      let placed = false;
+      for (let j = 0; j < cl.length; j++) {
+        if (Math.abs(p.price - cl[j].price) <= tol) {
+          const g = cl[j];
+          g.price = (g.price * g.n + p.price) / (g.n + 1);
+          g.n++;
+          if (p.idx < g.first) g.first = p.idx;
+          if (p.idx > g.last) g.last = p.idx;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) cl.push({ price: p.price, n: 1, first: p.idx, last: p.idx });
+    }
+    return cl;
+  }
+
+  /* Best-fit straight trend line through the most RESPECTED pivot pairs (the
+     S/R method): every candidate line is scored by how often price touched it
+     (touches) minus how often price closed through it (violations), with a
+     small bonus for a longer span. Returns the single highest-scoring support
+     (rising, fitted to swing lows) or resistance (falling, fitted to swing
+     highs) line, or null. */
+  function autoTrendLine(c, piv, opts) {
+    opts = opts || {};
+    const look = Math.max(3, Math.round(opts.look) || 12);
+    const tol = Number(opts.tol) > 0 ? Number(opts.tol) : 0;
+    const lows = [], highs = [];
+    for (let i = 0; i < piv.length; i++) (piv[i].type === 'high' ? highs : lows).push(piv[i]);
+    const evalLine = (p1, p2, kind) => {
+      const di = p2.idx - p1.idx;
+      if (di <= 0) return null;
+      const a = (p2.price - p1.price) / di;
+      const b = p2.price - a * p2.idx;
+      let touches = 0, viol = 0;
+      for (let k = p1.idx; k <= c.length - 1; k++) {
+        const v = a * k + b;
+        const inRange = v <= c[k].high + tol && v >= c[k].low - tol;
+        if (inRange) touches++;
+        if (kind === 'support' && c[k].close < v - tol) viol++;
+        else if (kind === 'resistance' && c[k].close > v + tol) viol++;
+      }
+      return { a, b, p1, p2, kind, touches, viol, span: di, score: touches * 2 - viol * 4 + di / Math.max(1, c.length) };
+    };
+    let best = null;
+    const lz = lows.slice(-look), hz = highs.slice(-look);
+    for (let i = 0; i < lz.length; i++) {
+      for (let j = i + 1; j < lz.length; j++) {
+        if (!(lz[j].price > lz[i].price)) continue;
+        const sc = evalLine(lz[i], lz[j], 'support');
+        if (sc && (!best || sc.score > best.score)) best = sc;
+      }
+    }
+    for (let i = 0; i < hz.length; i++) {
+      for (let j = i + 1; j < hz.length; j++) {
+        if (!(hz[j].price < hz[i].price)) continue;
+        const sc = evalLine(hz[i], hz[j], 'resistance');
+        if (sc && (!best || sc.score > best.score)) best = sc;
+      }
+    }
+    return best;
+  }
+
+  /* Pick the most recent `count` confirmed pivots that strictly alternate
+     high/low. The zigzag already alternates, but a same-bar reversal can repeat
+     a type, so scan back for a clean run. The Pitchfork needs 3 such pivots
+     (A-B-C) and the Gann / Fibonacci fans need 2 (origin -> swing). */
+  function lastAlternatingPivots(piv, count) {
+    if (!piv || piv.length < count) return null;
+    for (let start = piv.length - count; start >= 0; start--) {
+      let ok = true;
+      for (let k = start + 1; k < start + count; k++) {
+        if (piv[k].type === piv[k - 1].type || piv[k].idx <= piv[k - 1].idx) { ok = false; break; }
+      }
+      if (ok) return piv.slice(start, start + count);
+    }
+    return null;
+  }
+
   /* ---------------- Bollinger %B ---------------- */
   /* Population standard deviation via rolling sum/sum-of-squares: O(n) over the
      whole series (the naive per-bar deviation loop is O(n*L)), so BB%b stays
@@ -449,6 +752,456 @@
       }
     },
 
+    pastruct: {
+      id: 'pastruct', name: 'Price Action Trend', fullName: 'Price Action Structure (swing HH/HL + BOS/CHoCH, non-repaint)', cat: 'Trend', type: 'overlay',
+      inputs: [
+        { key: 'pivotLen', label: 'Swing lookback', def: 3, min: 1, max: 20, step: 1 },
+        { key: 'atrLen', label: 'ATR length', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'Break buffer (xATR)', def: 0.25, min: 0, max: 3, step: 0.05 },
+        { key: 'lineMode', label: 'Line style', def: 'zigzag', options: [['zigzag', 'Zigzag (swing to swing)'], ['trail', 'Trailing stop']] },
+        { key: 'showMarkers', label: 'Show swings / BOS', type: 'checkbox', def: true },
+        { key: 'markersOnly', label: 'Markers only (hide line)', type: 'checkbox', def: false }
+      ],
+      style: [
+        { key: 'upColor', label: 'Bullish color', def: '#26a69a' },
+        { key: 'downColor', label: 'Bearish color', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const s = paStructure(c, o);
+        const data = (o.lineMode === 'trail') ? s.line : s.zig;
+        return [{ type: 'line', color: o.upColor || '#26a69a', lineWidth: o.lineWidth || 2, data }];
+      },
+      markers(c, o) {
+        return paStructure(c, o).markers;
+      }
+    },
+
+    /* Standalone PCR pane: Put-Call Ratio + fast/slow EMA of the ratio, built
+       from the OI Trend module's live chain snapshots (window.OITrend). One
+       point per candle (carry-forward), so it rides the same time axis as the
+       chart. Enable the "OI Trend" toggle once so a chain is fetched. */
+    pcr: {
+      id: 'pcr', name: 'PCR EMA', fullName: 'Put-Call Ratio + EMA overlay (pinned to a bottom band)', cat: 'Overlay', type: 'overlay', format: 'decimal',
+      inputs: [
+        { key: 'fast', label: 'Fast EMA', def: 9, min: 1, max: 100, step: 1 },
+        { key: 'slow', label: 'Slow EMA', def: 21, min: 1, max: 200, step: 1 }
+      ],
+      style: [
+        { key: 'pcrColor', label: 'PCR color', def: '#9e9e9e' },
+        { key: 'fastColor', label: 'Fast EMA', def: '#00d4aa' },
+        { key: 'slowColor', label: 'Slow EMA', def: '#ff9800' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 4, step: 1 }
+      ],
+      compute(c, o) {
+        const H = (window.OITrend && window.OITrend.getPcrHist) ? window.OITrend.getPcrHist() : [];
+        const lw = o.lineWidth || 1;
+        const mkSlot = (arr, color, extra) => Object.assign({
+          type: 'line', color, lineWidth: lw,
+          data: (c && arr) ? c.map((x, i) => (arr[i] == null ? null : { time: x.time, value: arr[i] })).filter(Boolean) : []
+        }, extra || {});
+        const n = (c ? c.length : 0);
+        const raw = new Array(n).fill(null), fast = new Array(n).fill(null), slow = new Array(n).fill(null);
+        if (H && H.length && n) {
+          let hi = 0, cur = null;
+          for (let i = 0; i < n; i++) {
+            while (hi < H.length && H[hi].time <= c[i].time) { cur = H[hi].pcr; hi++; }
+            raw[i] = cur;
+          }
+          let i0 = 0;
+          while (i0 < n && raw[i0] == null) i0++;
+          if (i0 < n) {
+            const vals = raw.slice(i0);
+            const fArr = emaArr(vals, Math.max(1, Math.round(Number(o.fast)) || 9));
+            const sArr = emaArr(vals, Math.max(1, Math.round(Number(o.slow)) || 21));
+            for (let k = 0; k < vals.length; k++) { fast[i0 + k] = fArr[k]; slow[i0 + k] = sArr[k]; }
+          }
+        }
+        /* PCR is drawn as an overlay pinned to the bottom ~20% of the candle
+           chart on its own hidden-ish price scale (same trick as the volume
+           histogram), so it shares the price chart without squashing the price
+           axis. Raw PCR keeps a dot per snapshot and a 1.0 baseline. */
+        const scale = {
+          priceScaleId: 'pcr',
+          priceScaleOpts: { scaleMargins: { top: 0.8, bottom: 0.02 } },
+          priceFormat: { type: 'custom', formatter: v => (v == null ? '' : Number(v).toFixed(2)) }
+        };
+        return [
+          mkSlot(raw, o.pcrColor || '#9e9e9e', Object.assign({ pointMarkers: true, lastValueVisible: true }, scale, {
+            priceLine: { price: 1, color: '#607d8b', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'PCR 1.0' }
+          })),
+          mkSlot(fast, o.fastColor || '#00d4aa', Object.assign({ lastValueVisible: false }, scale)),
+          mkSlot(slow, o.slowColor || '#ff9800', Object.assign({ lastValueVisible: false }, scale))
+        ];
+      }
+    },
+
+    /* OI support/resistance rails overlay: strongest CE wall (resistance),
+       strongest PE wall (support), max-pain and the ATM-IV expected range, all
+       drawn as right-extended price lines from the live chain snapshot. */
+    pcrrail: {
+      id: 'pcrrail', name: 'OI Rails', fullName: 'OI Support/Resistance Rails + PCR (right-extended)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 4, step: 1 }
+      ],
+      style: [],
+      compute(c, o) {
+        const S = (window.OITrend && window.OITrend.snapshot) ? window.OITrend.snapshot() : null;
+        const lw = o.lineWidth || 1;
+        const mkSlot = (price, color, title, style) => {
+          const has = price != null && c && c.length;
+          const s = {
+            type: 'line', color, lineWidth: lw, lineStyle: style,
+            data: has ? c.map(x => ({ time: x.time, value: price })) : []
+          };
+          if (has) s.priceLine = { price, color, lineWidth: lw, lineStyle: style, axisLabelVisible: true, title };
+          return s;
+        };
+        return [
+          mkSlot(S ? S.resWall : null, '#ff5252', 'RES OI ' + (S ? S.resWall : ''), 2),
+          mkSlot(S ? S.supWall : null, '#00d4aa', 'SUP OI ' + (S ? S.supWall : ''), 2),
+          mkSlot(S ? S.maxPain : null, '#b39ddb', 'MAX PAIN ' + (S ? S.maxPain : ''), 3),
+          mkSlot(S ? S.expHi : null, '#4fc3f7', 'EXP HI', 2),
+          mkSlot(S ? S.expLo : null, '#4fc3f7', 'EXP LO', 2)
+        ];
+      }
+    },
+
+    /* Straight trend-line projection, styled like the Supply Demand overlay:
+       a straight best-fit line through the most recent confirmed ATR-ZigZag
+       pivots, drawn SOLID over the recent past and continued as a DASHED
+       straight line into the FUTURE (beyond the last candle). Non-repaint: the
+       past segment uses only confirmed pivots; only the future tail updates as
+       new pivots confirm. */
+    projline: {
+      id: 'projline', name: 'Trend Projection', fullName: 'Straight trend-line projection (pivot fit, extended into the future)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ATR mult', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'mode', label: 'Line mode', def: 'trendline', options: [['trendline', 'Trendline (highs/lows)'], ['regression', 'Best-fit (all swings)']] },
+        { key: 'pivots', label: 'Swings to fit', def: 3, min: 2, max: 12, step: 1 },
+        { key: 'fwd', label: 'Forward bars', def: 30, min: 1, max: 200, step: 1 }
+      ],
+      style: [
+        { key: 'histColor', label: 'Trend line', def: '#7ee0ff' },
+        { key: 'projColor', label: 'Projection', def: '#b388ff' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        if (c) {
+          const cc = [];
+          let prevT = 0;
+          for (let i = 0; i < c.length; i++) {
+            const x = c[i];
+            if (x && x.time > prevT && isFinite(x.time) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close)) {
+              cc.push(x); prevT = x.time;
+            }
+          }
+          c = cc;
+        }
+        const n = c ? c.length : 0;
+        if (n < 3) return [];
+        const lw = Math.max(1, Math.round(o.lineWidth) || 1);
+        const histColor = o.histColor || '#7ee0ff';
+        const projColor = o.projColor || '#b388ff';
+        const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
+        const atrMult = Number(o.atrMult) > 0 ? Number(o.atrMult) : 2;
+        const minPct = Number(o.minPct) >= 0 ? Number(o.minPct) : 0.15;
+        const fwd = Math.max(1, Math.round(o.fwd) || 30);
+        const wantPiv = Math.max(2, Math.round(o.pivots) || 3);
+        const mode = (o.mode === 'regression') ? 'regression' : 'trendline';
+        const empty = () => ({ type: 'line', color: '#000000', lineWidth: lw, data: [] });
+        /* ATR-scaled ZigZag - same engine as the Supply Demand indicator. */
+        const atr = wilderArr(trArr(c), atrPer);
+        const th = (i, ref) => {
+          const a = atr[i] != null && isFinite(atr[i]) ? atr[i] * atrMult : 0;
+          const p = Math.abs(ref) * (minPct / 100);
+          return Math.max(a, p);
+        };
+        const piv = [];
+        let dir = 1, ext = c[0].high, extIdx = 0;
+        for (let i = 1; i < n; i++) {
+          const t = th(i, c[i].close);
+          if (dir >= 0) {
+            if (c[i].high > ext) { ext = c[i].high; extIdx = i; }
+            if (c[i].low <= ext - t) { piv.push({ type: 'high', price: ext, idx: extIdx }); dir = -1; ext = c[i].low; extIdx = i; }
+          } else {
+            if (c[i].low < ext) { ext = c[i].low; extIdx = i; }
+            if (c[i].high >= ext + t) { piv.push({ type: 'low', price: ext, idx: extIdx }); dir = 1; ext = c[i].high; extIdx = i; }
+          }
+        }
+        if (piv.length < 2) return [empty(), empty()];
+        /* Pick the swing set the straight line runs through.
+           - 'trendline' (default): a real trendline. Market structure from the
+             last two highs and last two lows decides direction; the line is then
+             fitted through the SAME-SIDE extremes - lower highs for a downtrend,
+             higher lows for an uptrend - so a small counter-trend bounce can no
+             longer flip a bearish chart to a bullish projection.
+           - 'regression': plain least-squares through the last N swings. */
+        let used;
+        if (mode === 'regression') {
+          used = piv.slice(Math.max(0, piv.length - wantPiv));
+        } else {
+          const H = [], L = [];
+          for (let k = 0; k < piv.length; k++) (piv[k].type === 'high' ? H : L).push(piv[k]);
+          const hh = H.length >= 2 ? H[H.length - 1].price > H[H.length - 2].price : null;
+          const hl = L.length >= 2 ? L[L.length - 1].price > L[L.length - 2].price : null;
+          let side;
+          if (hh === true && hl === true) side = 'low';        /* higher highs + higher lows -> uptrend: run along lows */
+          else if (hh === false && hl === false) side = 'high'; /* lower highs + lower lows -> downtrend: run along highs */
+          else side = (piv[piv.length - 1].type === 'high') ? 'high' : 'low';
+          const arr = (side === 'high') ? H : L;
+          used = arr.slice(Math.max(0, arr.length - wantPiv));
+          if (used.length < 2) used = piv.slice(Math.max(0, piv.length - wantPiv));
+        }
+        if (!used || used.length < 2) return [empty(), empty()];
+        /* Least-squares straight line through the chosen swings. */
+        let sx = 0, sy = 0, sxx = 0, sxy = 0;
+        const m = used.length;
+        for (let k = 0; k < m; k++) {
+          const p = used[k];
+          sx += p.idx; sy += p.price; sxx += p.idx * p.idx; sxy += p.idx * p.price;
+        }
+        const den = m * sxx - sx * sx;
+        let a, b;
+        if (Math.abs(den) < 1e-9) {
+          const p1 = used[0], p2 = used[m - 1];
+          const di = Math.max(1, p2.idx - p1.idx);
+          a = (p2.price - p1.price) / di;
+          b = p2.price - a * p2.idx;
+        } else {
+          a = (m * sxy - sx * sy) / den;
+          b = (sy - a * sx) / m;
+        }
+        const startIdx = Math.max(0, used[0].idx);
+        const valAt = idx => a * idx + b;
+        /* Past: solid straight line from the oldest fitted pivot to now. */
+        const hist = [];
+        for (let i = startIdx; i <= n - 1; i++) {
+          const v = valAt(i);
+          if (isFinite(v)) hist.push({ time: c[i].time, value: v });
+        }
+        /* Future: the same straight line continued `fwd` bars beyond the last
+           candle. Future timestamps keep the projection on the chart's time
+           scale so it draws past the last bar. */
+        let interval = 60;
+        if (n >= 3) {
+          const d = c[n - 1].time - c[n - 2].time;
+          if (d > 0) interval = d;
+        }
+        const lastT = c[n - 1].time;
+        const fut = [{ time: lastT, value: valAt(n - 1) }];
+        for (let k = 1; k <= fwd; k++) {
+          const v = valAt(n - 1 + k);
+          if (isFinite(v)) fut.push({ time: lastT + k * interval, value: v });
+        }
+        return [
+          { type: 'line', color: histColor, lineWidth: lw, data: hist },
+          { type: 'line', color: projColor, lineWidth: lw, lineStyle: 2, data: fut }
+        ];
+      }
+    },
+
+    /* Elliott Wave Trend (standalone overlay): ATR-ZigZag wave structure with
+       1-2-3-4-5 / A-B-C labels, colored legs, a confirmed step trend line that
+       HOLDS through counter-trend bounces (never flips on a small pullback),
+       and a Fibonacci retracement/extension grid. Non-repaint: only confirmed
+       pivots drive the trend line. */
+    wavefib: {
+      id: 'wavefib', name: 'Elliott Wave Trend', fullName: 'Elliott wave structure: 1-2-3-4-5 / A-B-C labels + a single zigzag wave line', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ATR mult', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'showLabels', label: 'Show wave labels', type: 'checkbox', def: true },
+        { key: 'showTrend', label: 'Show zigzag line', type: 'checkbox', def: true },
+        { key: 'showFib', label: 'Show retracement', type: 'checkbox', def: false },
+        { key: 'showExt', label: 'Show extension', type: 'checkbox', def: false }
+      ],
+      style: [
+        { key: 'upColor', label: 'Up legs', def: '#26a69a' },
+        { key: 'downColor', label: 'Down legs', def: '#ef5350' },
+        { key: 'rangeColor', label: 'Range line', def: '#9e9e9e' },
+        { key: 'fibColor', label: 'Fib retracement', def: '#ffd54f' },
+        { key: 'fibExtColor', label: 'Fib extension', def: '#ff8a65' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const a = ewAnalyze(c, o);
+        const lw = Math.max(1, Math.round(o.lineWidth) || 2);
+        const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350', rg = o.rangeColor || '#9e9e9e';
+        const empty = () => ({ type: 'line', color: rg, lineWidth: lw, data: [] });
+        if (!a || a.c.length < 3 || a.piv.length < 2) return [empty()];
+        const cc = a.c, piv = a.piv;
+        /* ONE zigzag line: straight segments connecting the confirmed ATR-ZigZag
+           pivots, green on up-legs and red on down-legs. This is the actual wave
+           path (not a projection), so it hugs price and never floats away. Only
+           confirmed pivots are used, so the line never repaints intrabar. */
+        const zig = [];
+        if (o.showTrend !== false) {
+          for (let k = 0; k < piv.length; k++) {
+            const nx = piv[k + 1] || piv[k];
+            zig.push({ time: cc[piv[k].idx].time, value: piv[k].price, color: nx.price >= piv[k].price ? up : dn });
+          }
+          /* Extend the zigzag to the LIVE candle so the ongoing leg is drawn all
+             the way to the current bar. The last confirmed pivot can be hours old
+             during a one-way move (no reversal to confirm a new pivot), which
+             used to leave the right half of the chart with no line. Only this
+             final tail moves tick to tick; every confirmed pivot before it stays
+             fixed (non-repaint). */
+          if (zig.length && cc.length) {
+            const lastPiv = piv[piv.length - 1];
+            const lastC = cc[cc.length - 1];
+            const lastZigT = zig[zig.length - 1].time;
+            if (lastC.time > lastZigT) {
+              zig.push({ time: lastC.time, value: lastC.close, color: lastC.close >= lastPiv.price ? up : dn });
+            }
+          }
+        }
+        /* Optional Fibonacci grid off the last completed impulse leg. */
+        const fibLines = [];
+        if (a.fib && (o.showFib || o.showExt)) {
+          const A = a.fib.A, B = a.fib.B;
+          const lvl = pct => A.price + (B.price - A.price) * (pct / 100);
+          const fibColor = o.fibColor || '#ffd54f';
+          const fibExtColor = o.fibExtColor || '#ff8a65';
+          if (o.showFib) [23.6, 38.2, 50, 61.8, 78.6].forEach(pct => fibLines.push({
+            price: lvl(pct), color: fibColor, lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: pct.toFixed(1) + '%'
+          }));
+          if (o.showExt) [100, 127.2, 161.8, 200].forEach(pct => fibLines.push({
+            price: lvl(pct), color: fibExtColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: pct.toFixed(1) + '%'
+          }));
+        }
+        return [{ type: 'line', color: up, lineWidth: lw, data: zig, priceLines: fibLines }];
+      },
+      markers(c, o) {
+        const a = ewAnalyze(c, o);
+        if (!a || o.showLabels === false) return [];
+        const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+        return a.labels.map(l => ({
+          time: a.c[l.idx].time,
+          position: l.type === 'high' ? 'aboveBar' : 'belowBar',
+          color: l.type === 'high' ? dn : up,
+          shape: 'circle',
+          text: l.text
+        }));
+      }
+    },
+
+    keylevel: {
+      id: 'keylevel', name: 'Key Levels', fullName: 'Key Levels (support/resistance zones scored by how often price respected them)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'strength', label: 'Swing strength', def: 5, min: 2, max: 30, step: 1 },
+        { key: 'zones', label: 'Levels to show', def: 5, min: 1, max: 10, step: 1 },
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'tolMult', label: 'Zone width (x ATR)', def: 0.6, min: 0.1, max: 5, step: 0.1 },
+        { key: 'minPct', label: 'Zone width % (min)', def: 0.08, min: 0.01, max: 2, step: 0.01 }
+      ],
+      style: [
+        { key: 'c1', label: 'Level 1 (strongest)', def: '#2962ff' },
+        { key: 'c2', label: 'Level 2', def: '#ff9800' },
+        { key: 'c3', label: 'Level 3', def: '#ef5350' },
+        { key: 'c4', label: 'Level 4', def: '#26a69a' },
+        { key: 'c5', label: 'Level 5', def: '#ab47bc' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 4, step: 1 }
+      ],
+      compute(c, o) {
+        const cc = (c || []).filter(x => x && isFinite(x.high) && isFinite(x.low) && isFinite(x.close) && isFinite(x.time));
+        const empty = () => ({ type: 'line', color: '#000000', lineWidth: 1, data: [] });
+        if (cc.length < 10) return [empty()];
+        const piv = fractalPivots(cc, o.strength);
+        if (piv.length < 3) return [empty()];
+        const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
+        const atr = wilderArr(trArr(cc), atrPer);
+        let atrLast = 0;
+        for (let i = atr.length - 1; i >= 0; i--) { if (atr[i] != null && isFinite(atr[i])) { atrLast = atr[i]; break; } }
+        const lastClose = cc[cc.length - 1].close;
+        const minPct = Number(o.minPct) >= 0 ? Number(o.minPct) : 0.08;
+        let tol = Math.max(atrLast * (Number(o.tolMult) > 0 ? Number(o.tolMult) : 0.6), Math.abs(lastClose) * (minPct / 100));
+        if (!(tol > 0)) tol = Math.abs(lastClose) * 0.001 || 1;
+        const cl = clusterLevels(piv, tol);
+        cl.sort((a, b) => (b.n - a.n) || (b.last - a.last));
+        const want = Math.max(1, Math.round(o.zones) || 5);
+        /* Keep the strongest levels but spread them: skip any level too close
+           to one already picked, so the 5 lines cover the range instead of
+           stacking into one thick band. */
+        let pmin = Infinity, pmax = -Infinity;
+        for (let i = 0; i < cl.length; i++) { if (cl[i].price < pmin) pmin = cl[i].price; if (cl[i].price > pmax) pmax = cl[i].price; }
+        const minSep = Math.max(tol * 2.5, (pmax - pmin) * 0.04);
+        const shown = [];
+        for (let i = 0; i < cl.length && shown.length < want; i++) {
+          if (shown.every(p => Math.abs(p.price - cl[i].price) >= minSep)) shown.push(cl[i]);
+        }
+        const maxN = shown.length ? shown[0].n : 1;
+        const cols = [o.c1 || '#2962ff', o.c2 || '#ff9800', o.c3 || '#ef5350', o.c4 || '#26a69a', o.c5 || '#ab47bc'];
+        const lw = Math.max(1, Math.round(o.lineWidth) || 2);
+        /* Each level is drawn as its own horizontal line SERIES (not a price
+           line on an empty series): lightweight-charts does not render price
+           lines on a series that has no data, which is why the levels were
+           invisible. A 2-point flat line always renders and autoscales. */
+        return shown.map((lvl, k) => {
+          const i1 = cc.length - 1;
+          let i0 = Math.max(0, Math.min(i1, lvl.first));
+          if (i0 >= i1) i0 = Math.max(0, i1 - 1);
+          return {
+            type: 'line',
+            color: cols[k % cols.length],
+            lineWidth: lw,
+            title: Math.round(lvl.n / maxN * 100) + '%',
+            priceLineVisible: false,
+            data: [
+              { time: cc[i0].time, value: lvl.price },
+              { time: cc[i1].time, value: lvl.price }
+            ]
+          };
+        });
+      }
+    },
+
+    autotrend: {
+      id: 'autotrend', name: 'Auto Trendline', fullName: 'Auto Trendline (best-respected support/resistance line through swing pivots)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'strength', label: 'Swing strength', def: 5, min: 2, max: 30, step: 1 },
+        { key: 'look', label: 'Swings to test', def: 60, min: 3, max: 200, step: 1 },
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'tolMult', label: 'Touch tolerance (x ATR)', def: 0.5, min: 0.1, max: 3, step: 0.1 },
+        { key: 'minPct', label: 'Touch tolerance % (min)', def: 0.05, min: 0.01, max: 2, step: 0.01 },
+        { key: 'fullSpan', label: 'Span whole chart', type: 'checkbox', def: true }
+      ],
+      style: [
+        { key: 'upColor', label: 'Support (bullish)', def: '#26a69a' },
+        { key: 'downColor', label: 'Resistance (bearish)', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const cc = (c || []).filter(x => x && isFinite(x.high) && isFinite(x.low) && isFinite(x.close) && isFinite(x.time));
+        const empty = () => ({ type: 'line', color: '#888888', lineWidth: 1, data: [] });
+        if (cc.length < 12) return [empty()];
+        const piv = fractalPivots(cc, o.strength);
+        if (piv.length < 3) return [empty()];
+        const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
+        const atr = wilderArr(trArr(cc), atrPer);
+        let atrLast = 0;
+        for (let i = atr.length - 1; i >= 0; i--) { if (atr[i] != null && isFinite(atr[i])) { atrLast = atr[i]; break; } }
+        const lastClose = cc[cc.length - 1].close;
+        const minPct = Number(o.minPct) >= 0 ? Number(o.minPct) : 0.05;
+        let tol = Math.max(atrLast * (Number(o.tolMult) > 0 ? Number(o.tolMult) : 0.5), Math.abs(lastClose) * (minPct / 100));
+        if (!(tol > 0)) tol = Math.abs(lastClose) * 0.001 || 1;
+        const best = autoTrendLine(cc, piv, { look: o.look, tol });
+        if (!best) return [empty()];
+        const lw = Math.max(1, Math.round(o.lineWidth) || 2);
+        const col = best.kind === 'support' ? (o.upColor || '#26a69a') : (o.downColor || '#ef5350');
+        const data = [];
+        const startIdx = (o.fullSpan === false) ? Math.max(0, best.p1.idx) : 0;
+        for (let i = startIdx; i <= cc.length - 1; i++) {
+          const v = best.a * i + best.b;
+          if (isFinite(v)) data.push({ time: cc[i].time, value: v });
+        }
+        return [{ type: 'line', color: col, lineWidth: lw, data }];
+      }
+    },
+
     obv: {
       id: 'obv', name: 'OBV', fullName: 'On-Balance Volume', cat: 'Volume', type: 'pane',
       inputs: [
@@ -568,11 +1321,14 @@
       inputs: [
         { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
         { key: 'atrMult', label: 'ATR mult', def: 2.0, min: 0.1, max: 10, step: 0.1 },
-        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 }
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'touchLine', label: 'Last-touch straight line', type: 'checkbox', def: true }
       ],
       style: [
         { key: 'resColor', label: 'Resistance (last high)', def: '#26a69a' },
         { key: 'supColor', label: 'Support (last low)', def: '#ef5350' },
+        { key: 'touchUpColor', label: 'Line: support to resistance', def: '#26a69a' },
+        { key: 'touchDownColor', label: 'Line: resistance to support', def: '#ef5350' },
         { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
       ],
       compute(c, o) {
@@ -642,7 +1398,303 @@
         });
         out.push(mkOut(res, resColor, trend === 'up', 'RES'));
         out.push(mkOut(sup, supColor, trend === 'down', 'SUP'));
+        /* Straight "last-touch" trendline: when price trends from support toward
+           resistance (up-leg) the line is anchored at the most recent candle that
+           touched the support and runs straight to the live candle, cutting
+           through the candles of the move; when price trends from resistance
+           toward support it is anchored on the resistance instead. One straight
+           two-point line (never a zig-zag), so it is the diagonal of the current
+           leg. */
+        if (o.touchLine !== false && n >= 2) {
+          const up = (trend !== 'down');
+          const level = up ? sup : res;
+          let k = -1;
+          /* The level IS the swing that started the current leg, so anchor there
+             (more reliable than a range scan, which can land on the forming
+             candle and produce no line at all). */
+          if (lastPivot && lastPivot.idx >= 0 && lastPivot.idx < n - 1 &&
+              ((up && lastPivot.type === 'low') || (!up && lastPivot.type === 'high'))) {
+            k = lastPivot.idx;
+          } else {
+            const tol = Math.abs(level) * 0.0005;
+            for (let i = n - 2; i >= 0; i--) {
+              if (c[i].low - tol <= level && c[i].high + tol >= level) { k = i; break; }
+            }
+          }
+          if (k >= 0 && k < n - 1) {
+            out.push({
+              type: 'line',
+              color: up ? (o.touchUpColor || '#26a69a') : (o.touchDownColor || '#ef5350'),
+              lineWidth: lw + 1,
+              lineStyle: 0,
+              lastValueVisible: false,
+              priceLineVisible: false,
+              data: [
+                { time: c[k].time, value: level },
+                { time: c[n - 1].time, value: c[n - 1].close }
+              ]
+            });
+          }
+        }
         return out;
+      }
+    },
+
+    /* ATR ZigZag structure + straight pivot-fit trendline in ONE overlay.
+       The zigzag connects the confirmed ATR-ZigZag swing pivots (higher-high /
+       higher-low structure), and a straight line is fitted through the same
+       pivots - rising support through the higher-lows in an uptrend, falling
+       resistance through the lower-highs in a downtrend - drawn across the chart
+       so it visibly intersects the candles as dynamic support/resistance. BOS/
+       CHoCH arrows mark where the structure flips. Both lines come from the same
+       confirmed-only pivots, so nothing repaints intrabar. */
+    zzline: {
+      id: 'zzline', name: 'ZigZag Trendline', fullName: 'ATR ZigZag structure + straight pivot-fit intersection trendline (non-repaint)', cat: 'Trend', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'pivotLook', label: 'Pivots to fit line', def: 8, min: 2, max: 40, step: 1 },
+        { key: 'showZig', label: 'Show zigzag structure', type: 'checkbox', def: true },
+        { key: 'showLine', label: 'Show straight trendline', type: 'checkbox', def: true },
+        { key: 'showBreaks', label: 'Show BOS / CHoCH', type: 'checkbox', def: true },
+        { key: 'fullSpan', label: 'Trendline spans whole chart', type: 'checkbox', def: true }
+      ],
+      style: [
+        { key: 'upColor', label: 'Bullish', def: '#26a69a' },
+        { key: 'downColor', label: 'Bearish', def: '#ef5350' },
+        { key: 'trendColor', label: 'Trendline (fallback)', def: '#2962ff' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const a = ewAnalyze(c, o);
+        const lw = Math.max(1, Math.round(o.lineWidth) || 2);
+        const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+        const emptyZ = { type: 'line', color: up, lineWidth: lw, data: [] };
+        const emptyL = { type: 'line', color: o.trendColor || '#2962ff', lineWidth: lw, data: [] };
+        const cc = a.c || [], piv = a.piv || [];
+        if (cc.length < 3 || piv.length < 2) return [emptyZ, emptyL];
+        /* 1) ZigZag structure: straight segments pivot-to-pivot, green up / red
+              down, extended to the live candle. */
+        const zig = [];
+        if (o.showZig !== false) {
+          for (let k = 0; k < piv.length; k++) {
+            const nx = piv[k + 1] || piv[k];
+            zig.push({ time: cc[piv[k].idx].time, value: piv[k].price, color: nx.price >= piv[k].price ? up : dn });
+          }
+          const lastC = cc[cc.length - 1], lastP = piv[piv.length - 1];
+          if (zig.length && lastC.time > zig[zig.length - 1].time) {
+            zig.push({ time: lastC.time, value: lastC.close, color: lastC.close >= lastP.price ? up : dn });
+          }
+        }
+        /* 2) Straight pivot-fit trendline: autoTrendLine scores pivot pairs by
+              touches minus violations, so it lands on the higher-lows (support)
+              in an uptrend or the lower-highs (resistance) in a downtrend, and
+              is drawn across the whole chart so it cuts through the candles. */
+        const line = [];
+        let lineColor = o.trendColor || '#2962ff';
+        if (o.showLine !== false) {
+          const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
+          const atr = wilderArr(trArr(cc), atrPer);
+          let atrLast = 0;
+          for (let i = atr.length - 1; i >= 0; i--) { if (atr[i] != null && isFinite(atr[i])) { atrLast = atr[i]; break; } }
+          const lastClose = cc[cc.length - 1].close;
+          const minPct = Number(o.minPct) >= 0 ? Number(o.minPct) : 0.15;
+          let tol = Math.max(atrLast * 0.5, Math.abs(lastClose) * (minPct / 100));
+          if (!(tol > 0)) tol = Math.abs(lastClose) * 0.001 || 1;
+          const best = autoTrendLine(cc, piv, { look: o.pivotLook, tol });
+          if (best) {
+            lineColor = best.kind === 'support' ? up : dn;
+            const startIdx = (o.fullSpan === false) ? Math.max(0, best.p1.idx) : 0;
+            for (let i = startIdx; i <= cc.length - 1; i++) {
+              const v = best.a * i + best.b;
+              if (isFinite(v)) line.push({ time: cc[i].time, value: v });
+            }
+          }
+        }
+        return [
+          { type: 'line', color: up, lineWidth: lw, data: zig },
+          { type: 'line', color: lineColor, lineWidth: lw, data: line }
+        ];
+      },
+      markers(c, o) {
+        if (o.showBreaks === false) return [];
+        const a = ewAnalyze(c, o);
+        const cc = a.c || [], piv = a.piv || [];
+        if (piv.length < 3) return [];
+        const up = o.upColor || '#26a69a', dn = o.downColor || '#ef5350';
+        let lastH = null, prevH = null, lastL = null, prevL = null, trend = 0;
+        const mk = [], seen = {};
+        for (let k = 0; k < piv.length; k++) {
+          const p = piv[k];
+          if (p.type === 'high') { prevH = lastH; lastH = p.price; }
+          else { prevL = lastL; lastL = p.price; }
+          let nt = trend;
+          if (lastH != null && prevH != null && lastL != null && prevL != null) {
+            if (lastH > prevH && lastL > prevL) nt = 1;
+            else if (lastH < prevH && lastL < prevL) nt = -1;
+          }
+          if (nt !== trend && nt !== 0) {
+            const t = cc[p.idx].time;
+            if (!seen[t]) {
+              seen[t] = 1;
+              mk.push({ time: t, position: nt === 1 ? 'belowBar' : 'aboveBar', color: nt === 1 ? up : dn, shape: nt === 1 ? 'arrowUp' : 'arrowDown', text: trend === 0 ? 'BOS' : 'CHoCH' });
+            }
+          }
+          trend = nt;
+        }
+        return mk;
+      }
+    },
+
+    /* Andrews Pitchfork: from the last three confirmed swings (A-B-C) the median
+       line runs from B through the midpoint of A-C, with two parallel lines
+       through A and C. Three straight lines = one mean-reversion channel; price
+       tends to drift to the median, and the outer parallels act as support /
+       resistance. Uses the same confirmed ATR-ZigZag pivots as the rest, so it
+       never repaints intrabar. */
+    pitchfork: {
+      id: 'pitchfork', name: 'Pitchfork', fullName: 'Andrews Pitchfork (median + parallel channel from 3 confirmed swings)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'minSpan', label: 'Min fork span (bars)', def: 12, min: 3, max: 200, step: 1 },
+        { key: 'fullSpan', label: 'Extend left to chart start', type: 'checkbox', def: false }
+      ],
+      style: [
+        { key: 'medianColor', label: 'Median line', def: '#2962ff' },
+        { key: 'upperColor', label: 'Upper line', def: '#ef5350' },
+        { key: 'lowerColor', label: 'Lower line', def: '#26a69a' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const lw = Math.max(1, Math.round(o.lineWidth) || 1);
+        const med = o.medianColor || '#2962ff';
+        const e = () => ({ type: 'line', color: med, lineWidth: lw, data: [] });
+        const a = ewAnalyze(c, o);
+        const cc = a.c || [], piv = a.piv || [];
+        if (cc.length < 3) return [e(), e(), e()];
+        const minSpan = Math.max(3, Math.round(o.minSpan) || 12);
+        let rng = 0;
+        { let hi = -Infinity, lo = Infinity; for (let i = 0; i < cc.length; i++) { if (cc[i].high > hi) hi = cc[i].high; if (cc[i].low < lo) lo = cc[i].low; } rng = hi - lo; }
+        /* Pick the most recent alternating A-B-C where A and C are the same
+           swing type, B is strictly between them, the A-C span is wide enough,
+           and the median is not near-vertical. The old code took any 3 pivots,
+           so a tiny 2-bar swing with B at its midpoint produced a vertical line
+           with no trend angle. A fork whose median would climb more than the
+           whole candle range across its own A-C span is rejected too. */
+        let A = null, B = null, C = null, slope = 0;
+        for (let end = piv.length - 1; end >= 2; end--) {
+          const c3 = piv[end], b2 = piv[end - 1], a1 = piv[end - 2];
+          if (a1.type === b2.type || b2.type === c3.type) continue;
+          if (!(a1.idx < b2.idx && b2.idx < c3.idx)) continue;
+          const span = c3.idx - a1.idx;
+          if (span < minSpan) continue;
+          const mx0 = (a1.idx + c3.idx) / 2;
+          if (Math.abs(mx0 - b2.idx) < Math.max(2, span * 0.15)) continue;
+          const my0 = (a1.price + c3.price) / 2;
+          const sl = (my0 - b2.price) / (mx0 - b2.idx);
+          if (!isFinite(sl) || Math.abs(sl) * span > rng * 0.8) continue;
+          A = a1; B = b2; C = c3; slope = sl; break;
+        }
+        if (!A) return [e(), e(), e()];
+        const startIdx = (o.fullSpan === true) ? 0 : Math.min(A.idx, B.idx, C.idx);
+        const mk = (base) => {
+          const d = [];
+          for (let i = startIdx; i <= cc.length - 1; i++) {
+            const v = base.price + slope * (i - base.idx);
+            if (isFinite(v)) d.push({ time: cc[i].time, value: v });
+          }
+          return d;
+        };
+        return [
+          { type: 'line', color: med, lineWidth: lw, data: mk(B), excludeAutoscale: true },
+          { type: 'line', color: o.upperColor || '#ef5350', lineWidth: lw, data: mk(A), excludeAutoscale: true },
+          { type: 'line', color: o.lowerColor || '#26a69a', lineWidth: lw, data: mk(C), excludeAutoscale: true }
+        ];
+      }
+    },
+
+    /* Fibonacci Fan: rays from the origin of the last confirmed swing through the
+       fib ratios of that swing (23.6 / 38.2 / 50 / 61.8 / 78.6%). The rays fan out
+       to the right and act as dynamic angle + retracement support/resistance. */
+    fibfan: {
+      id: 'fibfan', name: 'Fibonacci Fan', fullName: 'Fibonacci Fan (rays from a confirmed swing through fib ratios)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 }
+      ],
+      style: [
+        { key: 'fanColor', label: 'Fan color', def: '#ab47bc' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const lw = Math.max(1, Math.round(o.lineWidth) || 1);
+        const col = o.fanColor || '#ab47bc';
+        const ratios = [0.236, 0.382, 0.5, 0.618, 0.786];
+        const empty = () => ratios.map(() => ({ type: 'line', color: col, lineWidth: lw, data: [] }));
+        const a = ewAnalyze(c, o);
+        const cc = a.c || [], piv = a.piv || [];
+        if (cc.length < 3) return empty();
+        const t = lastAlternatingPivots(piv, 2);
+        if (!t) return empty();
+        const P0 = t[0], P1 = t[1];
+        const dx = P1.idx - P0.idx;
+        if (!(dx > 0)) return empty();
+        const dy = P1.price - P0.price;
+        return ratios.map(r => {
+          const slope = (r * dy) / dx;
+          const d = [];
+          for (let i = P0.idx; i <= cc.length - 1; i++) {
+            const v = P0.price + slope * (i - P0.idx);
+            if (isFinite(v)) d.push({ time: cc[i].time, value: v });
+          }
+          return { type: 'line', color: col, lineWidth: lw, data: d, excludeAutoscale: true };
+        });
+      }
+    },
+
+    /* Gann Fan: nine rays from the last confirmed swing origin at the classic
+       Gann angles (1x8 ... 8x1), the swing itself defining the 1x1 reference
+       slope. Scale-dependent by nature, so the 1x1 here is anchored to the
+       actual swing (not an absolute price-per-day unit) which keeps it usable
+       across symbols and timeframes. */
+    gannfan: {
+      id: 'gannfan', name: 'Gann Fan', fullName: 'Gann Fan (1x8 ... 8x1 rays scaled to the confirmed swing)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 }
+      ],
+      style: [
+        { key: 'fanColor', label: 'Fan color', def: '#607d8b' },
+        { key: 'lineWidth', label: 'Line width', def: 1, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const lw = Math.max(1, Math.round(o.lineWidth) || 1);
+        const col = o.fanColor || '#607d8b';
+        const mult = [8, 4, 3, 2, 1, 0.5, 1 / 3, 0.25, 0.125];
+        const empty = () => mult.map(() => ({ type: 'line', color: col, lineWidth: lw, data: [] }));
+        const a = ewAnalyze(c, o);
+        const cc = a.c || [], piv = a.piv || [];
+        if (cc.length < 3) return empty();
+        const t = lastAlternatingPivots(piv, 2);
+        if (!t) return empty();
+        const P0 = t[0], P1 = t[1];
+        const dx = P1.idx - P0.idx;
+        if (!(dx > 0)) return empty();
+        const base = (P1.price - P0.price) / dx;
+        return mult.map(m => {
+          const slope = m * base;
+          const d = [];
+          for (let i = P0.idx; i <= cc.length - 1; i++) {
+            const v = P0.price + slope * (i - P0.idx);
+            if (isFinite(v)) d.push({ time: cc[i].time, value: v });
+          }
+          return { type: 'line', color: col, lineWidth: lw, data: d, excludeAutoscale: true };
+        });
       }
     },
 
@@ -1993,6 +3045,11 @@
   /* ---------------- engine state ---------------- */
   let chart = null, candleSeries = null, volSeries = null, cw, ck;
   let paneCharts = []; /* {uid, def, chart, container} */
+  /* Extra blank bars reserved to the right of the last candle so a forward
+     projection overlay (projline) can draw its future tail on screen. Default
+     2 matches the old rightOffset. */
+  let projPad = 2;
+  let lastProjPad = 2;
   let candles = [];
   let indicators = []; /* {uid, def, settings} */
   let uidCounter = 1;
@@ -2162,9 +3219,10 @@
     if (!chart || !candles.length) return;
     const last = candles.length - 1;
     const n = Math.min(200, candles.length);
+    const pad = Math.max(0, projPad);
     try {
-      chart.timeScale().applyOptions({ barSpacing: 8, rightOffset: 2 });
-      chart.timeScale().setVisibleLogicalRange({ from: last - n + 1, to: last });
+      chart.timeScale().applyOptions({ barSpacing: 8, rightOffset: pad + 1 });
+      chart.timeScale().setVisibleLogicalRange({ from: last - n + 1, to: last + pad });
     } catch (e) {}
     /* Repositioning the main chart alone leaves every pane on its PREVIOUS
        visible window (setData() synced them to the old range). After a
@@ -2211,15 +3269,53 @@
     }
   });
 
-  /* Sync a series' price lines to the compute output (replace existing) */
+  /* Sync a series' price lines to the compute output (replace existing).
+     Accepts either a single `priceLine` or an array `priceLines` (used by the
+     Wave mode's Fibonacci retracement/extension grid). */
   function applyPriceLine(s, o) {
     if (!s || !o) return;
+    const list = [];
+    if (o.priceLine) list.push(o.priceLine);
+    if (Array.isArray(o.priceLines)) o.priceLines.forEach(pl => { if (pl) list.push(pl); });
+    /* Cheap change-detection: identical level sets (e.g. a realtime tick that
+       did not create a new pivot) must NOT tear down and rebuild every line,
+       which would flicker and waste work. */
+    let sig = '';
+    for (let k = 0; k < list.length; k++) {
+      const pl = list[k];
+      sig += pl.price + '|' + pl.color + '|' + (pl.lineWidth || '') + '|' + (pl.lineStyle || '') + '|' + (pl.title || '') + ';';
+    }
+    if (s.__plSig === sig) return;
+    s.__plSig = sig;
     try {
       if (s.priceLines) s.priceLines().forEach(pl => { try { s.removePriceLine(pl); } catch (e) {} });
     } catch (e) {}
-    if (o.priceLine && s.createPriceLine) {
-      try { s.createPriceLine(o.priceLine); } catch (e) {}
+    if (!s.createPriceLine) return;
+    list.forEach(pl => { try { s.createPriceLine(pl); } catch (e) {} });
+  }
+
+  /* Defensive sanitize: a line/histogram series must be fed strictly-ascending,
+     finite points. Pivot-derived overlays can legitimately emit two points on
+     the same bar (a same-bar high+low reversal), and lightweight-charts rejects
+     a duplicate timestamp with "Value is null" during draw - which blanks the
+     entire chart (only the axes survive). Drop null/NaN values and collapse
+     duplicate timestamps here once, for every indicator and on BOTH the initial
+     render (applySeries) and the realtime tick path (setData), so a single bad
+     pivot can never take the whole chart down. */
+  function saneSeriesData(data) {
+    if (!Array.isArray(data)) return data || [];
+    const clean = [];
+    let lastT = -Infinity;
+    for (let k = 0; k < data.length; k++) {
+      const p = data[k];
+      if (!p || p.value == null || !isFinite(p.value)) continue;
+      if (typeof p.time === 'number') {
+        if (!(p.time > lastT)) continue;
+        lastT = p.time;
+      }
+      clean.push(p);
     }
+    return clean;
   }
 
   /* Create a series from a compute output, applying data + optional price line.
@@ -2229,9 +3325,28 @@
       color: o.color || '#888', lineWidth: o.lineWidth || 1,
       ...(o.lineStyle != null ? { lineStyle: o.lineStyle } : {}),
       ...(o.type === 'histogram' ? { base: 0 } : {}),
+      ...(o.pointMarkers === true ? { pointMarkersVisible: true, pointMarkersRadius: 2 } : {}),
+      ...(o.priceScaleId ? { priceScaleId: o.priceScaleId } : {}),
+      ...(o.lastValueVisible === false ? { lastValueVisible: false } : {}),
+      ...(o.priceLineVisible === false ? { priceLineVisible: false } : {}),
+      ...(o.excludeAutoscale ? { autoscaleInfoProvider: () => null } : {}),
+      ...(o.title ? { title: o.title } : {}),
+      ...(o.priceFormat ? { priceFormat: o.priceFormat } : {}),
       ...(fmtKind ? { priceFormat: { type: 'custom', formatter: v => fmtReading(v, fmtKind) } } : {})
     });
-    s.setData(o.data);
+    /* Extra (non-price) overlay scale, e.g. PCR pinned to a bottom band so it can
+       share the candle chart without squashing the price axis. */
+    if (o.priceScaleId && host.priceScale) {
+      try { host.priceScale(o.priceScaleId).applyOptions(o.priceScaleOpts || { scaleMargins: { top: 0.82, bottom: 0 } }); } catch (e) {}
+    }
+    /* Defensive sanitize: a series must be fed strictly-ascending, finite
+       points. Pivot-derived overlays can legitimately emit two points on the
+       same bar (a same-bar high+low reversal), and lightweight-charts rejects
+       a duplicate timestamp with "Value is null" during draw - which blanks the
+       entire chart (only the axes survive). Drop null/NaN values and collapse
+       duplicate timestamps here once, for every indicator, so a single bad
+       pivot can never take the whole chart down. */
+    s.setData(saneSeriesData(o.data));
     applyPriceLine(s, o);
     return s;
   }
@@ -2324,6 +3439,28 @@
         });
       });
 
+    /* Standalone PCR indicators feed off the live option chain. Keep that chain
+       warm even when the OI Trend overlay toggle is off, and let it go when no
+       PCR consumer is deployed. */
+    try {
+      if (window.OITrend && window.OITrend.setDataMode) {
+        window.OITrend.setDataMode(indicators.some(i => i.def && (i.def.id === 'pcr' || i.def.id === 'pcrrail')));
+      }
+    } catch (e) {}
+
+    /* Forward projection overlays need blank bars reserved on the right, else
+       the future tail (beyond the last candle) sits off-screen. */
+    let wantPad = 2;
+    indicators.forEach(i => {
+      if (i.def && i.def.id === 'projline') {
+        const f = Math.max(1, Math.round(Number(i.settings && i.settings.fwd) || 30));
+        wantPad = Math.max(wantPad, f + 2);
+      }
+    });
+    const projChanged = (wantPad !== lastProjPad);
+    projPad = wantPad;
+    lastProjPad = wantPad;
+
     const saneC = candles.filter(x => x && isFinite(x.open) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close) && isFinite(x.time));
     candleSeries.setData(saneC.map(x => ({ time: x.time, open: x.open, high: x.high, low: x.low, close: x.close })));
     volSeries.setData(saneC.map(x => ({ time: x.time, value: x.volume, color: x.close >= x.open ? '#00d4aa40' : '#ff525240' })));
@@ -2332,7 +3469,8 @@
        The OI overlay re-paints its own arrow on its next cycle. */
     Object.keys(candleMkOwners).forEach(k => delete candleMkOwners[k]);
     applyIndicatorMarkers();
-    if (vr) chart.timeScale().setVisibleRange(vr); else fitToRecent();
+    if (vr && !(wantPad > 2 && projChanged)) chart.timeScale().setVisibleRange(vr);
+    else fitToRecent();
     updateLegend();
     syncRanges(chart);
     requestAnimationFrame(resizeAll);
@@ -2415,7 +3553,7 @@
           try { s.setData([]); } catch (e) {}
           return;
         }
-        try { s.setData(out[i].data); } catch (e) { return; }
+        try { s.setData(saneSeriesData(out[i].data)); } catch (e) { return; }
         try { applyPriceLine(s, out[i]); } catch (e) {}
       });
       if (ind._alertLines && ind._alertLines.length && ind._series[0]) applyAlertLines(ind._series[0], ind);
@@ -2527,7 +3665,18 @@
       case 'bbpct': return [['v0', 'BB%b']];
       case 'ppo': return [['v0', 'PPO'], ['v1', 'Signal'], ['v2', 'Histogram']];
       case 'pc': return [['v0', 'Upper'], ['v1', 'Middle'], ['v2', 'Lower']];
-      case 'autosr': return [['v0', 'Resistance'], ['v1', 'Support']];
+      case 'autosr': return [['v0', 'Resistance'], ['v1', 'Support'], ['v2', 'Trend line']];
+      case 'pastruct': return [['v0', 'Structure']];
+      case 'pcr': return [['v0', 'PCR'], ['v1', 'EMA fast'], ['v2', 'EMA slow']];
+      case 'pcrrail': return [['v0', 'Resistance'], ['v1', 'Support'], ['v2', 'Max Pain'], ['v3', 'Exp High'], ['v4', 'Exp Low']];
+      case 'projline': return [['v0', 'Trend line'], ['v1', 'Projection']];
+      case 'wavefib': return [['v0', 'Wave legs']];
+      case 'keylevel': return [['v0', 'Key levels']];
+      case 'autotrend': return [['v0', 'Trend line']];
+      case 'zzline': return [['v0', 'ZigZag'], ['v1', 'Trendline']];
+      case 'pitchfork': return [['v0', 'Median'], ['v1', 'Upper'], ['v2', 'Lower']];
+      case 'fibfan': return [['v0', '23.6%'], ['v1', '38.2%'], ['v2', '50%'], ['v3', '61.8%'], ['v4', '78.6%']];
+      case 'gannfan': return [['v0', '1x8'], ['v1', '1x4'], ['v2', '1x3'], ['v3', '1x2'], ['v4', '1x1'], ['v5', '2x1'], ['v6', '3x1'], ['v7', '4x1'], ['v8', '8x1']];
       case 'supplydemand': return [['v0', 'Structure']];
       case 'obv': return [['v0', 'OBV'], ['v1', 'Smoothed MA']];
       case 'smf': return [['v0', 'SMF'], ['v1', 'Signal'], ['v2', 'Histogram']];
@@ -3222,6 +4371,12 @@
       if (realtimeOn) startRealtime();
     },
     resize() { resizeAll(); },
+    /* Force an in-place recompute of every deployed indicator without rebuilding
+       the charts. Used by the OI module when a fresh chain snapshot arrives in
+       data-only mode (OI Trend toggle off): candles may not have changed, so the
+       realtime poll would not call setData() on its own and the PCR pane / OI
+       Rails would stay blank. */
+    repaint() { if (chart) setData(); },
     hasChart() { return !!chart; },
     getLastBarTime() { return candles.length ? candles[candles.length - 1].time : 0; },
     /* Tick-by-tick in-place candle BUILDER. Called from the WebSocket push

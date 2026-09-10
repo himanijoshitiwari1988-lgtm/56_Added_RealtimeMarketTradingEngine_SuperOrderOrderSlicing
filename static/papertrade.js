@@ -315,11 +315,13 @@ window.createPaperTrade = function (suffix) {
 
   function unrealizedPnl() {
     let sum = 0;
-    const q = currentQuote();
-    if (state.position && q && q.ltp) sum += pnlFor(state.position, Number(q.ltp));
+    if (state.position) {
+      const m = markPriceFor(state.position, currentQuote());
+      if (m !== null) sum += pnlFor(state.position, m);
+    }
     for (const ap of autoPositionsList()) {
-      const aq = quoteFor({ id: ap.symbolId, exch: ap.symbolExch });
-      if (aq && aq.ltp) sum += pnlFor(ap, Number(aq.ltp));
+      const m = markPriceFor(ap, quoteFor({ id: ap.symbolId, exch: ap.symbolExch }));
+      if (m !== null) sum += pnlFor(ap, m);
     }
     return sum;
   }
@@ -328,11 +330,13 @@ window.createPaperTrade = function (suffix) {
      P&L card shows the real (net-of-charges) picture while a position is open. */
   function unrealizedPnlNet() {
     let sum = 0;
-    const q = currentQuote();
-    if (state.position && q && q.ltp) sum += pnlFor(state.position, Number(q.ltp)) - chargesTotalForOpen(state.position, Number(q.ltp));
+    if (state.position) {
+      const m = markPriceFor(state.position, currentQuote());
+      if (m !== null) sum += pnlFor(state.position, m) - chargesTotalForOpen(state.position, m);
+    }
     for (const ap of autoPositionsList()) {
-      const aq = quoteFor({ id: ap.symbolId, exch: ap.symbolExch });
-      if (aq && aq.ltp) sum += pnlFor(ap, Number(aq.ltp)) - chargesTotalForOpen(ap, Number(aq.ltp));
+      const m = markPriceFor(ap, quoteFor({ id: ap.symbolId, exch: ap.symbolExch }));
+      if (m !== null) sum += pnlFor(ap, m) - chargesTotalForOpen(ap, m);
     }
     return sum;
   }
@@ -351,7 +355,7 @@ window.createPaperTrade = function (suffix) {
     }
     tbody.innerHTML = rows.map(r => {
       const p = r.p;
-      const cur = (r.quote && r.quote.live && r.quote.ltp != null) ? Number(r.quote.ltp) : null;
+      const cur = markPriceFor(p, r.quote);
       const pnl = cur !== null ? pnlFor(p, cur) : null;
       const pnlPct = pnl !== null ? pnlPctFor(p, pnl) : null;
       /* Running/open trades show GROSS P&L only — no broker-charge deduction
@@ -828,7 +832,7 @@ window.createPaperTrade = function (suffix) {
       return;
     }
     const q = currentQuote();
-    const cur = (q && q.ltp) ? Number(q.ltp) : null;
+    const cur = markPriceFor(p, q);
     const pnl = cur !== null ? pnlFor(p, cur) : null;
     const pnlColor = !pnl ? '#888' : (pnl >= 0 ? '#00d4aa' : '#ef5350');
     const isLong = p.side === 'BUY';
@@ -853,12 +857,49 @@ window.createPaperTrade = function (suffix) {
     if (btn) btn.style.display = 'block';
   }
 
+  /* THE single canonical current-price for an open position's running P&L,
+     shared with the chart's live-P&L line label and the AST Running Trades rows
+     (index.html positionMarkPrice: live-feed quote first, chart/candle-close
+     fallback). Only falls back to the caller-supplied live quote LTP for
+     positions that carry no symbolId (the manual chart position), so every view
+     reads the exact same mark and P&L can never drift apart again. */
+  function markPriceFor(p, quote) {
+    if (typeof window.positionMarkPrice === 'function') {
+      try {
+        const m = window.positionMarkPrice(p);
+        if (m != null && m > 0) return m;
+      } catch (e) {}
+    }
+    return (quote && quote.ltp != null && Number(quote.ltp) > 0) ? Number(quote.ltp) : null;
+  }
+
+  /* Money P&L via the shared canonical formula (index.html positionMoneyPnl),
+     with a local fallback so a missing helper can never blank a row. */
   function pnlFor(p, cur) {
+    if (typeof window.positionMoneyPnl === 'function') {
+      try {
+        const m = window.positionMoneyPnl(p, cur);
+        if (m != null) return m;
+      } catch (e) {}
+    }
     return p.side === 'BUY' ? (cur - p.entryPrice) * p.qty : (p.entryPrice - cur) * p.qty;
   }
 
   function pnlPctFor(p, pnl) {
     return p.entryPrice && p.qty ? (pnl / (p.entryPrice * p.qty)) * 100 : 0;
+  }
+
+  /* A trailing-SL percent above 100 is invalid: the ratchet formula
+     (entry + peakProfit*(1 - trail/100)) would place the stop BELOW entry while
+     the trade is in profit, so as the peak climbs the stop walks the WRONG way
+     and the "stop only moves up" guard freezes it near entry - giving back the
+     entire run-up (e.g. a +700 peak cut back to breakeven on a 110% trail).
+     Clamp every read to the valid 0-100 band so no stored value can ever invert
+     the trail again; 100 means "give back all profit" (breakeven floor). */
+  function trailPctEff(v) {
+    const n = Number(v);
+    if (!isFinite(n) || n <= 0) return 0;
+    return n > 100 ? 100 : n;
   }
 
   function currentSymbolInfo() {
@@ -980,6 +1021,7 @@ window.createPaperTrade = function (suffix) {
   function checkTargetSl() {
     const p = state.position;
     if (!p) return;
+    p.slTrailPct = trailPctEff(p.slTrailPct);
     const q = currentQuote();
     let cur = (q && q.live && q.ltp) ? Number(q.ltp) : null;
     /* Same canonical-price rule as checkAutoTargetSl: when the chart symbol's
@@ -1389,7 +1431,7 @@ window.createPaperTrade = function (suffix) {
       const tp = (opts.tpPct != null) ? Number(opts.tpPct) : targetPct();
       const sl = (opts.slPct != null) ? Number(opts.slPct) : slPct();
       const ftp = (opts.fixedTpPct != null) ? Number(opts.fixedTpPct) : 0;
-      const slTrail = (opts.slTrailPct != null) ? Math.max(0, Number(opts.slTrailPct) || 0) : 0;
+      const slTrail = (opts.slTrailPct != null) ? Math.min(100, Math.max(0, Number(opts.slTrailPct) || 0)) : 0;
       /* Auto-trailing-SL positions (AST default) trail by the SAME distance as
          the fixed stop (slPct % of entry), so the badge / row shows the trail
          % that governs the ratchet even though the paper engine consumes the
@@ -1560,6 +1602,7 @@ window.createPaperTrade = function (suffix) {
     for (const key of Object.keys(state.autoPositions || {})) {
       const p = state.autoPositions[key];
       if (!p) continue;
+      p.slTrailPct = trailPctEff(p.slTrailPct);
       const q = quoteFor({ id: p.symbolId, exch: p.symbolExch });
       let cur = (q && q.ltp) ? Number(q.ltp) : null;
       /* The engine's SL / trailing-SL / trail-TP price must be the SAME number

@@ -303,12 +303,23 @@
     var p = cd.pos;
     var txt;
     if (p) {
+      /* Exec rows share the single canonical mark + money-P&L with the chart's
+         running-P&L label and the AST Running Trades rows (live feed first,
+         chart/candle-close fallback), so the same open position is worth the
+         exact same number in every view. Falls back to this row's live quote. */
+      var mark = (typeof window.positionMarkPrice === 'function') ? window.positionMarkPrice(p) : null;
+      if (!(mark > 0)) mark = disp;
       var side = (p.side || 'BUY').toUpperCase();
       var qty = Number(p.qty) || 0;
       var entry = Number(p.entryPrice);
-      var pnl = (disp != null && entry > 0 && qty > 0)
-        ? ((side === 'BUY' ? 1 : -1) * (disp - entry)) * qty : null;
-      txt = 'LTP ' + fmtPx(disp) + ' | ' + side + ' ' + qty + ' @ ' + fmtPx(entry) +
+      var pnl;
+      if (typeof window.positionMoneyPnl === 'function') {
+        pnl = window.positionMoneyPnl(p, mark);
+      } else {
+        pnl = (mark != null && entry > 0 && qty > 0)
+          ? ((side === 'BUY' ? 1 : -1) * (mark - entry)) * qty : null;
+      }
+      txt = 'LTP ' + fmtPx(mark) + ' | ' + side + ' ' + qty + ' @ ' + fmtPx(entry) +
         ' | P&L ' + (pnl == null ? '\u2026' : (pnl >= 0 ? '+' : '') + fmtMoney(pnl));
       if (Number(p.stopLoss) > 0) txt += ' | ' + (p.slTrailed ? 'TRAIL SL' : 'SL') + ' ' + fmtPx(p.stopLoss);
       if (Number(p.tpPct) > 0) txt += ' | TP ' + Number(p.tpPct) + '%';

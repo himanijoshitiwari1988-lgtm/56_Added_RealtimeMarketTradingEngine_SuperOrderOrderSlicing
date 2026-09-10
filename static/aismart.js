@@ -271,7 +271,7 @@ window.createAISmartTrading = function (suffix) {
     const nm = d ? d.name : raw;
     return nm + ' main-vs-signal gap ' + (/^bull/.test(k) ? 'holding/widening upward (level)' : 'holding/widening downward (level)');
   }
-  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'].concat(PB_BULL_KEYS, PB_BEAR_KEYS, OB_BULL_KEYS, OB_BEAR_KEYS, MEET_BULL_KEYS, MEET_BEAR_KEYS, PBG_BULL_KEYS, PBG_BEAR_KEYS);
+  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullEma1_9', 'bearEma1_9', 'bullEma1_21', 'bearEma1_21', 'bullEma1_35', 'bearEma1_35', 'bullEma1_50', 'bearEma1_50', 'bullEma1_100', 'bearEma1_100', 'bullEma1_200', 'bearEma1_200', 'bullEma1_300', 'bearEma1_300', 'bullEmaTrend9', 'bearEmaTrend9', 'bullEmaTrend21', 'bearEmaTrend21', 'bullEmaTrend35', 'bearEmaTrend35', 'bullEmaTrend50', 'bearEmaTrend50', 'bullEmaTrend100', 'bearEmaTrend100', 'bullEmaTrend200', 'bearEmaTrend200', 'bullEmaTrend300', 'bearEmaTrend300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'].concat(PB_BULL_KEYS, PB_BEAR_KEYS, OB_BULL_KEYS, OB_BEAR_KEYS, MEET_BULL_KEYS, MEET_BEAR_KEYS, PBG_BULL_KEYS, PBG_BEAR_KEYS);
   /* Armed-entry gate flags: NOT indicator filters. Each toggles whether that
      side (Bullish / Bearish) of the indicator-filter lists only allows an entry
      on the FIRST bar the side's whole enabled filter set simultaneously holds
@@ -282,8 +282,8 @@ window.createAISmartTrading = function (suffix) {
      sub-options. Used to strip the opposite-direction filters before they are
      appended to a running strategy (a bullish strategy never receives bearish
      filter gates and vice versa). */
-  const BULL_FILTER_KEYS = ['incUp', 'crossUp', 'gapUp', 'incUpAll', 'gtUp', 'ltUp', 'bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bullGreenCandle', 'paneCrossUp', 'paneIncUpAll', 'bullBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bullSmf', 'bullVl', 'bullAsr', 'bullOit', 'bullEma9_21', 'bullEma21_35', 'bullEma35_50', 'bullEma50_100', 'bullEma100_200', 'bullEma200_300', 'bullSt10_1_2', 'bullSt10_2_3', 'bullSt1CloseCrossAbove', 'bullVwapCloseCrossAbove', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bullMeetCloseSt', 'bullMeetCloseVwap', 'bullMeetPaneCross', 'bullMeetCross', 'bullMeetCloseBb', 'bullMeetClosePc', 'bullMeetVl'].concat(PB_BULL_KEYS, OB_BULL_KEYS, MEET_BULL_KEYS, PBG_BULL_KEYS);
-  const BEAR_FILTER_KEYS = ['incDown', 'crossDown', 'gapDown', 'incDownAll', 'gtDown', 'ltDown', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bearRedCandle', 'paneCrossDown', 'paneIncDownAll', 'bearBbwInc', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bearSmf', 'bearVl', 'bearAsr', 'bearOit', 'bearEma9_21', 'bearEma21_35', 'bearEma35_50', 'bearEma50_100', 'bearEma100_200', 'bearEma200_300', 'bearSt10_1_2', 'bearSt10_2_3', 'bearSt1CloseCrossBelow', 'bearVwapCloseCrossBelow', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bearMeetCloseSt', 'bearMeetCloseVwap', 'bearMeetPaneCross', 'bearMeetCross', 'bearMeetCloseBb', 'bearMeetClosePc', 'bearMeetVl'].concat(PB_BEAR_KEYS, OB_BEAR_KEYS, MEET_BEAR_KEYS, PBG_BEAR_KEYS);
+  const BULL_FILTER_KEYS = ['incUp', 'crossUp', 'gapUp', 'incUpAll', 'gtUp', 'ltUp', 'bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bullGreenCandle', 'paneCrossUp', 'paneIncUpAll', 'bullBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bullSmf', 'bullVl', 'bullAsr', 'bullOit', 'bullEma9_21', 'bullEma21_35', 'bullEma35_50', 'bullEma50_100', 'bullEma100_200', 'bullEma200_300', 'bullEma1_9', 'bullEma1_21', 'bullEma1_35', 'bullEma1_50', 'bullEma1_100', 'bullEma1_200', 'bullEma1_300', 'bullEmaTrend9', 'bullEmaTrend21', 'bullEmaTrend35', 'bullEmaTrend50', 'bullEmaTrend100', 'bullEmaTrend200', 'bullEmaTrend300', 'bullSt10_1_2', 'bullSt10_2_3', 'bullSt1CloseCrossAbove', 'bullVwapCloseCrossAbove', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bullMeetCloseSt', 'bullMeetCloseVwap', 'bullMeetPaneCross', 'bullMeetCross', 'bullMeetCloseBb', 'bullMeetClosePc', 'bullMeetVl'].concat(PB_BULL_KEYS, OB_BULL_KEYS, MEET_BULL_KEYS, PBG_BULL_KEYS);
+  const BEAR_FILTER_KEYS = ['incDown', 'crossDown', 'gapDown', 'incDownAll', 'gtDown', 'ltDown', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bearRedCandle', 'paneCrossDown', 'paneIncDownAll', 'bearBbwInc', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bearSmf', 'bearVl', 'bearAsr', 'bearOit', 'bearEma9_21', 'bearEma21_35', 'bearEma35_50', 'bearEma50_100', 'bearEma100_200', 'bearEma200_300', 'bearEma1_9', 'bearEma1_21', 'bearEma1_35', 'bearEma1_50', 'bearEma1_100', 'bearEma1_200', 'bearEma1_300', 'bearEmaTrend9', 'bearEmaTrend21', 'bearEmaTrend35', 'bearEmaTrend50', 'bearEmaTrend100', 'bearEmaTrend200', 'bearEmaTrend300', 'bearSt10_1_2', 'bearSt10_2_3', 'bearSt1CloseCrossBelow', 'bearVwapCloseCrossBelow', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bearMeetCloseSt', 'bearMeetCloseVwap', 'bearMeetPaneCross', 'bearMeetCross', 'bearMeetCloseBb', 'bearMeetClosePc', 'bearMeetVl'].concat(PB_BEAR_KEYS, OB_BEAR_KEYS, MEET_BEAR_KEYS, PBG_BEAR_KEYS);
   const VALID_MODES = ['above', 'below', 'both_atm', 'above_atm', 'below_atm', 'both_atm_inc', 'atm'];
   const VALID_TYPES = ['both', 'CE', 'PE'];
   const ALL_TIMEFRAMES = ['1min', '5min'];
@@ -951,7 +951,7 @@ window.createAISmartTrading = function (suffix) {
      strict-AND entry forever. */
   function buildFilterConditions(tpl, filters, o) {
     const f = filters || {};
-    const enabled = (f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || pbrOn(f, 'bull'))) || (f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || pbrOn(f, 'bear')));
+    const enabled = (f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullEma1_9 || f.bullEma1_21 || f.bullEma1_35 || f.bullEma1_50 || f.bullEma1_100 || f.bullEma1_200 || f.bullEma1_300 || f.bullEmaTrend9 || f.bullEmaTrend21 || f.bullEmaTrend35 || f.bullEmaTrend50 || f.bullEmaTrend100 || f.bullEmaTrend200 || f.bullEmaTrend300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || pbrOn(f, 'bull'))) || (f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearEma1_9 || f.bearEma1_21 || f.bearEma1_35 || f.bearEma1_50 || f.bearEma1_100 || f.bearEma1_200 || f.bearEma1_300 || f.bearEmaTrend9 || f.bearEmaTrend21 || f.bearEmaTrend35 || f.bearEmaTrend50 || f.bearEmaTrend100 || f.bearEmaTrend200 || f.bearEmaTrend300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || pbrOn(f, 'bear')));
     if (!enabled) return [];
     /* "Overall Bullish/Bearish idea" (indicator-filter mode only, toggle default
        ON): the single-line DIRECTION / facing logic is lifted out of the strict-
@@ -1176,6 +1176,38 @@ window.createAISmartTrading = function (suffix) {
       if (f['bearMeetEma' + fast + '_' + slow]) {
         out.push(cond({ indId: 'ema', indSettings: { length: fast, source: 'close' }, valueKey: 'v0', logic: 'lt', cmpType: 'indicator', cmpIndId: 'ema', cmpSettings: { length: slow, source: 'close' }, cmpValueKey: 'v0' }));
         const c = cond({ indId: 'ema', indSettings: { length: slow, source: 'close' }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
+      }
+    });
+    /* EMA 1 (close) vs each EMA crossover rows (the "EMA & EMA 1 crossover"
+       section) and per-EMA own-slope rows (the "EMA trend" section).
+       Cross rows: the close (EMA 1) must cross above/below EMA(L) on this bar
+       (a true prev->current flip; the EMA(L) line is the primary operand, so a
+       bullish "EMA 1 crossed above EMA L" is EMA(L) crossing below the close).
+       Like the EMA ladder, each row also carries the EMA(L) facing gate
+       (bull = EMA(L) rising) and, with the Overall Bullish/Bearish idea ON, that
+       single-line facing is released into the vote set while the cross gate
+       stays strict. Trend rows: EMA(L)'s own line direction (bull = rising,
+       bear = falling) - one single-line direction gate that feeds the same
+       Overall idea vote (strict gate when the idea is OFF). */
+    const emaVsCloseLens = [9, 21, 35, 50, 100, 200, 300];
+    emaVsCloseLens.forEach(function (L) {
+      if (f.bullish && f['bullEma1_' + L]) {
+        out.push(cond({ indId: 'ema', indSettings: { length: L, source: 'close' }, valueKey: 'v0', logic: 'crossDownNow', cmpType: 'candle', candleKey: 'close' }));
+        const c = cond({ indId: 'ema', indSettings: { length: L, source: 'close' }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
+      }
+      if (f.bearish && f['bearEma1_' + L]) {
+        out.push(cond({ indId: 'ema', indSettings: { length: L, source: 'close' }, valueKey: 'v0', logic: 'crossUpNow', cmpType: 'candle', candleKey: 'close' }));
+        const c = cond({ indId: 'ema', indSettings: { length: L, source: 'close' }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
+      }
+      if (f.bullish && f['bullEmaTrend' + L]) {
+        const c = cond({ indId: 'ema', indSettings: { length: L, source: 'close' }, valueKey: 'v0', logic: 'incUp', cmpType: 'number' });
+        if (dropVotes) dropVotes.push(c); else out.push(c);
+      }
+      if (f.bearish && f['bearEmaTrend' + L]) {
+        const c = cond({ indId: 'ema', indSettings: { length: L, source: 'close' }, valueKey: 'v0', logic: 'incDown', cmpType: 'number' });
         if (dropVotes) dropVotes.push(c); else out.push(c);
       }
     });
@@ -1476,7 +1508,8 @@ window.createAISmartTrading = function (suffix) {
   }
   function strategyOwnTrailSl(s) {
     if (!s || s.refTrailSlPct == null) return null;
-    return Number(s.refTrailSlPct) > 0 ? Number(s.refTrailSlPct) : null;
+    const v = Number(s.refTrailSlPct);
+    return v > 0 ? Math.min(100, v) : null;
   }
   function strategyOwnFilters(s) {
     return !!((s && s.entryExtra && s.entryExtra.length));
@@ -1774,8 +1807,8 @@ window.createAISmartTrading = function (suffix) {
     const op = trendOperativeSide();
     if (op) return op;
     const f = state.filters || {};
-    const bull = f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || hasStreamFlags(f, 'bull') || pbrOn(f, 'bull'));
-    const bear = f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || hasStreamFlags(f, 'bear') || pbrOn(f, 'bear'));
+    const bull = f.bullish && (f.incUp || f.crossUp || f.gapUp || f.incUpAll || f.gtUp || f.ltUp || f.bullVolUp || f.bullVolDown || f.bullFakeBreakout || f.bullReversal || f.paneCrossUp || f.paneIncUpAll || f.bullBbwInc || f.bullBbCrossBelow || f.bullBbCrossAbove || f.bullPcCrossBelow || f.bullPcCrossAbove || f.bullSmf || f.bullVl || f.bullAsr || f.bullOit || f.bullEma9_21 || f.bullEma21_35 || f.bullEma35_50 || f.bullEma50_100 || f.bullEma100_200 || f.bullEma200_300 || f.bullEma1_9 || f.bullEma1_21 || f.bullEma1_35 || f.bullEma1_50 || f.bullEma1_100 || f.bullEma1_200 || f.bullEma1_300 || f.bullEmaTrend9 || f.bullEmaTrend21 || f.bullEmaTrend35 || f.bullEmaTrend50 || f.bullEmaTrend100 || f.bullEmaTrend200 || f.bullEmaTrend300 || f.bullSt10_1_2 || f.bullSt10_2_3 || f.bullSt1CloseCrossAbove || f.bullVwapCloseCrossAbove || f.bullMeetEma9_21 || f.bullMeetEma21_35 || f.bullMeetEma35_50 || f.bullMeetEma50_100 || f.bullMeetEma100_200 || f.bullMeetEma200_300 || f.bullMeetSt10_1_2 || f.bullMeetSt10_2_3 || f.bullMeetCloseSt || f.bullMeetCloseVwap || f.bullMeetPaneCross || f.bullMeetCross || f.bullMeetCloseBb || f.bullMeetClosePc || f.bullMeetVl || f.bullGreenCandle || hasStreamFlags(f, 'bull') || pbrOn(f, 'bull'));
+    const bear = f.bearish && (f.incDown || f.crossDown || f.gapDown || f.incDownAll || f.gtDown || f.ltDown || f.bearVolUp || f.bearVolDown || f.bearFakeBreakout || f.bearReversal || f.paneCrossDown || f.paneIncDownAll || f.bearBbwInc || f.bearBbCrossBelow || f.bearBbCrossAbove || f.bearPcCrossBelow || f.bearPcCrossAbove || f.bearSmf || f.bearVl || f.bearAsr || f.bearOit || f.bearEma9_21 || f.bearEma21_35 || f.bearEma35_50 || f.bearEma50_100 || f.bearEma100_200 || f.bearEma200_300 || f.bearEma1_9 || f.bearEma1_21 || f.bearEma1_35 || f.bearEma1_50 || f.bearEma1_100 || f.bearEma1_200 || f.bearEma1_300 || f.bearEmaTrend9 || f.bearEmaTrend21 || f.bearEmaTrend35 || f.bearEmaTrend50 || f.bearEmaTrend100 || f.bearEmaTrend200 || f.bearEmaTrend300 || f.bearSt10_1_2 || f.bearSt10_2_3 || f.bearSt1CloseCrossBelow || f.bearVwapCloseCrossBelow || f.bearMeetEma9_21 || f.bearMeetEma21_35 || f.bearMeetEma35_50 || f.bearMeetEma50_100 || f.bearMeetEma100_200 || f.bearMeetEma200_300 || f.bearMeetSt10_1_2 || f.bearMeetSt10_2_3 || f.bearMeetCloseSt || f.bearMeetCloseVwap || f.bearMeetPaneCross || f.bearMeetCross || f.bearMeetCloseBb || f.bearMeetClosePc || f.bearMeetVl || f.bearRedCandle || hasStreamFlags(f, 'bear') || pbrOn(f, 'bear'));
     if (bull && !bear) return 'bullish';
     if (bear && !bull) return 'bearish';
     return null;
@@ -2504,10 +2537,10 @@ window.createAISmartTrading = function (suffix) {
       groups: GROUP_KEYS.slice(),
       symbols: [],
       movers: { enabled: false, gainers: 5, losers: 5, indices: [], picked: [], gainerTpls: [], loserTpls: [] }, // top gainers/losers universe (per-direction: gainers = bullish, losers = bearish; per-direction assigned AST engine-settings template cycles)
-      niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] }, // NIFTY trend-following F&O picker (per-direction: F&O stocks above a daily change% threshold OR auto top-N gainers/losers; optional indices + per-direction assigned AST engine-settings template cycles)
+      niftyTrend: { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] }, // NIFTY trend-following F&O picker (per-direction: F&O stocks above a daily change% threshold OR auto top-N gainers/losers; optional indices + per-direction assigned AST engine-settings template cycles)
       sim: { enabled: false }, // market-off simulation chart: trades the synthetic SIM 900001 stream instead of real strikes
       commodity: { enabled: false, sids: [] }, // MCX commodity futures paper trading: trades each +Add-ed FUTCOM contract directly (spot mode), alongside stocks/F&O
-      filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bullGreenCandle: false, bearRedCandle: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullOit: false, bearOit: false, bullEma9_21: false, bearEma9_21: false, bullEma21_35: false, bearEma21_35: false, bullEma35_50: false, bearEma35_50: false, bullEma50_100: false, bearEma50_100: false, bullEma100_200: false, bearEma100_200: false, bullEma200_300: false, bearEma200_300: false, bullSt10_1_2: false, bearSt10_1_2: false, bullSt10_2_3: false, bearSt10_2_3: false, bullSt1CloseCrossAbove: false, bearSt1CloseCrossBelow: false, bullVwapCloseCrossAbove: false, bullMeetEma9_21: false, bullMeetEma21_35: false, bullMeetEma35_50: false, bullMeetEma50_100: false, bullMeetEma100_200: false, bullMeetEma200_300: false, bullMeetSt10_1_2: false, bullMeetSt10_2_3: false, bullMeetCloseSt: false, bullMeetCloseVwap: false, bullMeetPaneCross: false, bullMeetCross: false, bullMeetCloseBb: false, bullMeetClosePc: false, bullMeetVl: false, bearMeetVl: false, bearVwapCloseCrossBelow: false, bearMeetEma9_21: false, bearMeetEma21_35: false, bearMeetEma35_50: false, bearMeetEma50_100: false, bearMeetEma100_200: false, bearMeetEma200_300: false, bearMeetSt10_1_2: false, bearMeetSt10_2_3: false, bearMeetCloseSt: false, bearMeetCloseVwap: false, bearMeetPaneCross: false, bearMeetCross: false, bearMeetCloseBb: false, bearMeetClosePc: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false, bullArmedGate: false, bearArmedGate: false,
+      filters: { bullish: false, bearish: false, incUp: false, incDown: false, gapUp: false, gapDown: false, incUpAll: false, incDownAll: false, crossUp: false, crossDown: false, gtUp: false, ltUp: false, gtDown: false, ltDown: false, paneCrossUp: false, paneCrossDown: false, paneIncUpAll: false, paneIncDownAll: false, bullVolUp: false, bullVolDown: false, bullFakeBreakout: false, bullReversal: false, bullGreenCandle: false, bearRedCandle: false, bearVolUp: false, bearVolDown: false, bearFakeBreakout: false, bearReversal: false, bullBbwInc: false, bearBbwInc: false, bullBbCrossBelow: false, bullBbCrossAbove: false, bullPcCrossBelow: false, bullPcCrossAbove: false, bearBbCrossBelow: false, bearBbCrossAbove: false, bearPcCrossBelow: false, bearPcCrossAbove: false, bullSmf: false, bearSmf: false, bullVl: false, bearVl: false, bullAsr: false, bearAsr: false, bullOit: false, bearOit: false, bullEma9_21: false, bearEma9_21: false, bullEma21_35: false, bearEma21_35: false, bullEma35_50: false, bearEma35_50: false, bullEma50_100: false, bearEma50_100: false, bullEma100_200: false, bearEma100_200: false, bullEma200_300: false, bearEma200_300: false, bullEma1_9: false, bearEma1_9: false, bullEma1_21: false, bearEma1_21: false, bullEma1_35: false, bearEma1_35: false, bullEma1_50: false, bearEma1_50: false, bullEma1_100: false, bearEma1_100: false, bullEma1_200: false, bearEma1_200: false, bullEma1_300: false, bearEma1_300: false, bullEmaTrend9: false, bearEmaTrend9: false, bullEmaTrend21: false, bearEmaTrend21: false, bullEmaTrend35: false, bearEmaTrend35: false, bullEmaTrend50: false, bearEmaTrend50: false, bullEmaTrend100: false, bearEmaTrend100: false, bullEmaTrend200: false, bearEmaTrend200: false, bullEmaTrend300: false, bearEmaTrend300: false, bullSt10_1_2: false, bearSt10_1_2: false, bullSt10_2_3: false, bearSt10_2_3: false, bullSt1CloseCrossAbove: false, bearSt1CloseCrossBelow: false, bullVwapCloseCrossAbove: false, bullMeetEma9_21: false, bullMeetEma21_35: false, bullMeetEma35_50: false, bullMeetEma50_100: false, bullMeetEma100_200: false, bullMeetEma200_300: false, bullMeetSt10_1_2: false, bullMeetSt10_2_3: false, bullMeetCloseSt: false, bullMeetCloseVwap: false, bullMeetPaneCross: false, bullMeetCross: false, bullMeetCloseBb: false, bullMeetClosePc: false, bullMeetVl: false, bearMeetVl: false, bearVwapCloseCrossBelow: false, bearMeetEma9_21: false, bearMeetEma21_35: false, bearMeetEma35_50: false, bearMeetEma50_100: false, bearMeetEma100_200: false, bearMeetEma200_300: false, bearMeetSt10_1_2: false, bearMeetSt10_2_3: false, bearMeetCloseSt: false, bearMeetCloseVwap: false, bearMeetPaneCross: false, bearMeetCross: false, bearMeetCloseBb: false, bearMeetClosePc: false, bullCandle: false, bullElliott: false, bullIndicator: false, bullPane: false, bullSymmetry: false, bullStructure: false, bullAtr: false, bearCandle: false, bearElliott: false, bearIndicator: false, bearPane: false, bearSymmetry: false, bearStructure: false, bearAtr: false, bullArmedGate: false, bearArmedGate: false,
       /* AI Brain (single merged AUTO confluence analyst, see the engine block):
          'off' = filters stay strict AND gates; 'auto' (also saved legacy
          'analysis'/'decision') = the brain merges both old rules - weighted-
@@ -2753,8 +2786,19 @@ window.createAISmartTrading = function (suffix) {
       if (!Array.isArray(s.niftyTrend.bearTpls)) s.niftyTrend.bearTpls = [];
       s.niftyTrend.bullTpls = s.niftyTrend.bullTpls.map(x => String(x)).filter(Boolean);
       s.niftyTrend.bearTpls = s.niftyTrend.bearTpls.map(x => String(x)).filter(Boolean);
+      /* Extra NIFTY-trend CONFIRMATION indicators: each selected indicator must
+         agree with the NIFTY bias (its own trend must not point the other way)
+         before the confirmed direction is allowed. Stored as [{ id, on }]; dead
+         ids and duplicates are dropped so an old saved state can never reference
+         a removed indicator. */
+      if (!Array.isArray(s.niftyTrend.confirmIndicators)) s.niftyTrend.confirmIndicators = [];
+      const _confOk = { supplydemand: 1, oitrend: 1, vlcore: 1 };
+      const _seen = {};
+      s.niftyTrend.confirmIndicators = s.niftyTrend.confirmIndicators
+        .map(x => ({ id: String((x && x.id) || ''), on: !(x && x.on === false) }))
+        .filter(x => _confOk[x.id] && !_seen[x.id] && (_seen[x.id] = 1));
     } else if (s) {
-      s.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
+      s.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] };
     }
     if (s && s.filters) {
       ['bullish', 'bearish', 'incUp', 'incDown', 'gapUp', 'gapDown', 'incUpAll', 'incDownAll', 'crossUp', 'crossDown', 'gtUp', 'ltUp', 'gtDown', 'ltDown'].concat(FILTER_EXTRA_KEYS, STREAM_FLAG_KEYS, FILTER_ARM_KEYS).forEach(k => {
@@ -3465,6 +3509,36 @@ window.createAISmartTrading = function (suffix) {
   /* ---------------- NIFTY trend-following UI ---------------- */
   const NIFTY_TREND_INDEXES = ['NIFTY 50', 'SENSEX', 'MIDCPNIFTY', 'BANK NIFTY', 'FINNIFTY'];
 
+  /* ---------------- NIFTY trend CONFIRMATION indicators ----------------
+     Optional extra indicators the user can +Add to the NIFTY trend-following
+     section. Each selected indicator is evaluated on NIFTY's OWN candles (same
+     timeframe as the bias) and must NOT disagree with the NIFTY call: for a
+     bullish NIFTY call no selected indicator may be trending down, and for a
+     bearish call none may be trending up. A disagreement makes the raw NIFTY
+     candidate NEUTRAL for that poll (the confirmed direction then simply holds
+     its previous side instead of flipping), so the engine never turns on an
+     indicator's opposing trend. */
+  const NIFTY_CONF_INDICATORS = [
+    { id: 'supplydemand', name: 'Supply Demand' },
+    { id: 'oitrend', name: 'OI Trend' },
+    { id: 'vlcore', name: 'Trend Core' }
+  ];
+  /* Default settings per confirmation indicator - mirrors the AST filter rows
+     (oitDef) and the indicator library defaults so the NIFTY evaluation uses
+     exactly the same lines the user sees on the chart. */
+  const NIFTY_CONF_IND_SETTINGS = {
+    supplydemand: { atrPeriod: 14, atrMult: 2.0, minPct: 0.15, eqTol: 25 },
+    oitrend: { fast: 9, slow: 21, enterK: 0.45, exitK: 0.12 },
+    vlcore: { length: 21, atrLength: 14, gap: 1.0, confirm: 2, wickLen: 3, straightLine: true, useVolume: true }
+  };
+  function _niftyConfIndName(id) {
+    const it = NIFTY_CONF_INDICATORS.find(x => x.id === id);
+    return it ? it.name : String(id || '');
+  }
+  /* Cached NIFTY candles for the confirmation gate so the poll-rate refresh does
+     not refetch on every pass (the bias itself is cached 60s). */
+  const _niftyConfCandCache = {};
+
   function niftyTrendIndicesList() {
     const list = (typeof SYMBOLS !== 'undefined' && Array.isArray(SYMBOLS)) ? SYMBOLS : [];
     const want = {};
@@ -3492,7 +3566,7 @@ window.createAISmartTrading = function (suffix) {
     if (!el || !el.value) { log('Select an index to add', 'warn'); return; }
     let it;
     try { it = JSON.parse(el.value); } catch (e) { return; }
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] };
     if (!Array.isArray(state.niftyTrend.indices)) state.niftyTrend.indices = [];
     const exists = state.niftyTrend.indices.some(s => String(s.id) === String(it.id) && String(s.exch || '') === String(it.exch || ''));
     if (!exists) {
@@ -3512,7 +3586,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function removeNiftyTrendIndex(id, exch) {
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] };
     state.niftyTrend.indices = (state.niftyTrend.indices || []).filter(s => !(String(s.id) === String(id) && String(s.exch || '') === String(exch || '')));
     save();
     _resetTrendScan();
@@ -3530,10 +3604,66 @@ window.createAISmartTrading = function (suffix) {
     ).join('');
   }
 
+  /* Confirmation-indicator dropdown + chips (add / remove / enable each). */
+  function populateNiftyTrendConfIndUI() {
+    const el = $id('astNiftyTrendConfIndSelect');
+    if (!el || el.dataset.populated) return;
+    NIFTY_CONF_INDICATORS.forEach(it => {
+      const o = document.createElement('option');
+      o.value = it.id;
+      o.textContent = it.name;
+      el.appendChild(o);
+    });
+    el.dataset.populated = '1';
+  }
+
+  function addNiftyTrendConfirmIndicator() {
+    const el = $id('astNiftyTrendConfIndSelect');
+    if (!el || !el.value) { log('Select a confirmation indicator to add', 'warn'); return; }
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] };
+    if (!Array.isArray(state.niftyTrend.confirmIndicators)) state.niftyTrend.confirmIndicators = [];
+    if (!state.niftyTrend.confirmIndicators.some(x => x.id === el.value)) {
+      state.niftyTrend.confirmIndicators.push({ id: el.value, on: true });
+      save();
+      _resetTrendScan();
+      applyNiftyTrendToUI();
+      log('NIFTY trend confirmation indicator added: ' + _niftyConfIndName(el.value) + ' (must agree with the NIFTY call)', 'ok');
+    }
+  }
+
+  function removeNiftyTrendConfirmIndicator(id) {
+    if (!state.niftyTrend || !Array.isArray(state.niftyTrend.confirmIndicators)) return;
+    state.niftyTrend.confirmIndicators = state.niftyTrend.confirmIndicators.filter(x => x.id !== id);
+    save();
+    _resetTrendScan();
+    renderNiftyTrendConfirmIndList();
+    log('NIFTY trend confirmation indicator removed: ' + _niftyConfIndName(id), '');
+  }
+
+  function toggleNiftyTrendConfirmIndicator(id, on) {
+    if (!state.niftyTrend || !Array.isArray(state.niftyTrend.confirmIndicators)) return;
+    const it = state.niftyTrend.confirmIndicators.find(x => x.id === id);
+    if (it) { it.on = !!on; save(); _resetTrendScan(); renderNiftyTrendConfirmIndList(); }
+  }
+
+  function renderNiftyTrendConfirmIndList() {
+    const el = $id('astNiftyTrendConfIndList');
+    if (!el) return;
+    const nt = state.niftyTrend || {};
+    const list = Array.isArray(nt.confirmIndicators) ? nt.confirmIndicators : [];
+    if (!list.length) { el.innerHTML = '<span style="color:#666">none - add indicators to confirm the NIFTY trend</span>'; return; }
+    el.innerHTML = list.map(it =>
+      '<span style="background:#1a1a35;border:1px solid #2d2d50;border-radius:3px;padding:2px 6px;display:inline-flex;align-items:center;gap:4px">' +
+      '<input type="checkbox" ' + (it.on === false ? '' : 'checked') + ' onchange="AISmartTrading.toggleNiftyTrendConfirmIndicator(\'' + it.id + '\', this.checked)" style="accent-color:#00d4aa" title="ON: this indicator must agree with the NIFTY call. OFF: paused (not required).">' +
+      _niftyConfIndName(it.id) +
+      ' <a href="javascript:void(0)" style="color:#ef5350;text-decoration:none;font-weight:700" onclick="AISmartTrading.removeNiftyTrendConfirmIndicator(\'' + it.id + '\')" title="Remove">&times;</a></span>'
+    ).join('');
+  }
+
   function readNiftyTrendUI() {
     const onEl = $id('astNiftyTrendEnabled'), pctEl = $id('astNiftyTrendPct'), incEl = $id('astNiftyTrendIndices');
     const pctOnEl = $id('astNiftyTrendPctOn'), topNEl = $id('astNiftyTrendTopN'), topNCountEl = $id('astNiftyTrendTopNCount');
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] };
     /* `enabled` is owned by the "Trend Follow" toggle button (toggleNiftyTrend) -
        there is no astNiftyTrendEnabled checkbox. NEVER clear it here: this reader
        runs on every pct / topN / indices / pick-mode change, and defaulting a
@@ -3553,7 +3683,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function applyNiftyTrendToUI() {
-    const nt = state.niftyTrend || (state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] });
+    const nt = state.niftyTrend || (state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] });
     if (!Array.isArray(nt.indices)) nt.indices = [];
     const ck = (id, v) => { const el = $id(id); if (el) el.checked = !!v; };
     const set = (id, v) => { const el = $id(id); if (el) el.value = v; };
@@ -3570,6 +3700,8 @@ window.createAISmartTrading = function (suffix) {
     }
     populateNiftyTrendIndicesUI();
     renderNiftyTrendIndicesList();
+    populateNiftyTrendConfIndUI();
+    renderNiftyTrendConfirmIndList();
     const on = !!nt.enabled;
     const simOn = !!(state.sim && state.sim.enabled);
     const active = on && !simOn;
@@ -3579,6 +3711,7 @@ window.createAISmartTrading = function (suffix) {
       if (el) { el.disabled = !!off; el.style.opacity = off ? '0.5' : '1'; }
     };
     ['astNiftyTrendIndices', 'astNiftyTrendIndicesSelect', 'astNiftyTrendIndicesAdd',
+     'astNiftyTrendConfIndSelect', 'astNiftyTrendConfIndAdd',
      'astNiftyTrendBullTplSel', 'astNiftyTrendBullTplAdd', 'astNiftyTrendBearTplSel', 'astNiftyTrendBearTplAdd'].forEach(id => {
       const el = $id(id);
       if (el) { el.disabled = !active; el.style.opacity = active ? '1' : '0.5'; }
@@ -3623,7 +3756,7 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function toggleNiftyTrend() {
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] };
     state.niftyTrend.enabled = !state.niftyTrend.enabled;
     /* Mutually exclusive with Top Gainers / Losers + Indices: enabling trend
        following switches the paper engine into trend mode, so the movers
@@ -3820,6 +3953,27 @@ window.createAISmartTrading = function (suffix) {
   /* Live preview of the symbols the NIFTY trend-following mode would pick right
      now (trend + qualifying F&O stocks above the threshold + included indices),
      refreshed every poll tick alongside the movers list. */
+  /* Compact readout of the extra confirmation indicators for the trend list. */
+  function niftyConfStatusHtml() {
+    const nt = state.niftyTrend || {};
+    const list = Array.isArray(nt.confirmIndicators) ? nt.confirmIndicators : [];
+    if (!list.length) return '';
+    const info = _lastNiftyConfInfo;
+    const chip = (it) => {
+      let tr = 0, known = false;
+      if (info && Array.isArray(info.trends)) {
+        const f = info.trends.find(t => t.id === it.id);
+        if (f) { tr = f.tr; known = true; }
+      }
+      const col = (!it.on || !known) ? '#888' : (tr > 0 ? '#00d4aa' : tr < 0 ? '#ef5350' : '#ffd700');
+      const txt = !it.on ? 'paused' : !known ? '...' : (tr > 0 ? 'up' : tr < 0 ? 'down' : 'flat');
+      return '<span style="background:#1a1a35;border:1px solid #2d2d50;border-radius:3px;padding:1px 5px;margin:0 3px 3px 0">' + _niftyConfIndName(it.id) + ' <b style="color:' + col + '">' + txt + '</b></span>';
+    };
+    const veto = info && info.veto;
+    const note = veto ? ' <b style="color:#e67e22">veto - NIFTY call held neutral this poll</b>' : '';
+    return '<div style="color:#888;font-size:9px;margin-top:3px">Confirmation: ' + list.map(chip).join('') + note + '</div>';
+  }
+
   function renderNiftyTrendList() {
     const host = $id('astNiftyTrendList');
     if (!host) return;
@@ -3841,9 +3995,9 @@ window.createAISmartTrading = function (suffix) {
       if (nb && nb.overall && nb.current) {
         const o = nb.overall === 'BULL' ? 'Bullish' : nb.overall === 'BEAR' ? 'Bearish' : 'Range';
         const c = nb.current === 'BULL' ? 'Bullish' : nb.current === 'BEAR' ? 'Bearish' : 'Flat';
-        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend is <b style="color:#e67e22">' + o + ' (overall) / ' + c + ' (current)</b> - the two layers do NOT agree, so there is <b style="color:#e67e22">no directional bias</b> right now (waiting for overall + current to agree) - no directional F&O stocks picked' + idxNote + '.</div>' + trendTplStatusHtml();
+        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend is <b style="color:#e67e22">' + o + ' (overall) / ' + c + ' (current)</b> - the two layers do NOT agree, so there is <b style="color:#e67e22">no directional bias</b> right now (waiting for overall + current to agree) - no directional F&O stocks picked' + idxNote + '.</div>' + trendTplStatusHtml() + niftyConfStatusHtml();
       } else {
-        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend unknown yet (waiting for the live feed) - no directional F&O stocks picked' + idxNote + '.</div>' + trendTplStatusHtml();
+        host.innerHTML = '<div style="color:#888;font-size:9px;margin-bottom:2px">NIFTY trend unknown yet (waiting for the live feed) - no directional F&O stocks picked' + idxNote + '.</div>' + trendTplStatusHtml() + niftyConfStatusHtml();
       }
       return;
     }
@@ -3896,7 +4050,7 @@ window.createAISmartTrading = function (suffix) {
     const idx = (nt.includeIndices && Array.isArray(nt.indices)) ? nt.indices.map(s => displayName(s)) : [];
     if (idx.length) html += '<div style="color:#888;font-size:9px;margin-top:2px">Indices included: ' + idx.join(', ') + '</div>';
     host.style.display = '';
-    host.innerHTML = html + trendTplStatusHtml();
+    host.innerHTML = html + trendTplStatusHtml() + niftyConfStatusHtml();
   }
 
 
@@ -3923,6 +4077,82 @@ window.createAISmartTrading = function (suffix) {
      existing 3-session depth; 15 min needs more bars for the same indicator
      warm-up so it mirrors the 7 days the HTF regime confirmation already uses. */
   function niftyCandleDays(tf) { return tf === '15min' ? 7 : 3; }
+  /* Last confirmation verdict for the status readout: { at, dir, veto, trends }.
+     trends = [{ id, name, tr }] with tr: +1 up / -1 down / 0 flat. */
+  let _lastNiftyConfInfo = null;
+  /* Per-indicator trend of the selected confirmation indicator on NIFTY candles:
+     +1 = bullish/rising, -1 = bearish/falling, 0 = flat/unavailable.
+       - Trend Core exposes its native regime (res.dir) - the exact line colour
+         the chart draws.
+       - Supply Demand: the LIVE leg (v1) vs the last confirmed structure pivot
+         (v0) - current leg direction.
+       - OI Trend: its regime line (v0) slope over a short lookback so one noisy
+         bar cannot flip the confirmation. */
+  function niftyConfirmIndicatorTrend(id, candles) {
+    const n = candles ? candles.length : 0;
+    if (n < 30) return 0;
+    const i = n - 1;
+    const settings = NIFTY_CONF_IND_SETTINGS[id] || {};
+    if (id === 'vlcore') {
+      try {
+        const eng = (window.VLCore && window.VLCore.engine) ? window.VLCore.engine(candles, settings) : null;
+        if (eng && eng.dir) {
+          const d = eng.dir[i];
+          if (d === 1) return 1;
+          if (d === -1) return -1;
+          return 0;
+        }
+      } catch (e) {}
+      return 0;
+    }
+    if (id === 'supplydemand') {
+      const live = readTwo('supplydemand', settings, 'v1', i, candles);
+      const struct = readTwo('supplydemand', settings, 'v0', i, candles);
+      const va = (live && live.last != null) ? live.last : null;
+      const vb = (struct && struct.last != null) ? struct.last : null;
+      if (va == null || vb == null || !isFinite(va) || !isFinite(vb) || va === vb) return 0;
+      return va > vb ? 1 : -1;
+    }
+    const back = 3;
+    const a = readTwo(id, settings, 'v0', i, candles);
+    const b = readTwo(id, settings, 'v0', i - back, candles);
+    const va = (a && a.last != null) ? a.last : null;
+    const vb = (b && b.last != null) ? b.last : null;
+    if (va == null || vb == null || !isFinite(va) || !isFinite(vb) || va === vb) return 0;
+    return va > vb ? 1 : -1;
+  }
+  /* Returns true when the selected confirmation indicators VETO the candidate
+     NIFTY direction (>=1 enabled indicator trending the opposite way). A veto
+     turns the candidate neutral so the confirmed direction holds instead of
+     flipping; fetch/unavailable failures never veto. */
+  async function niftyConfirmVeto(candDir, tf) {
+    const nt = state.niftyTrend || {};
+    const list = (Array.isArray(nt.confirmIndicators) ? nt.confirmIndicators : []).filter(x => x && x.on !== false);
+    if (!candDir || !list.length) return false;
+    const SE = window.StratEngine;
+    if (!SE || !SE.fetchCandlesFor) return false;
+    const et = (tf === '1min' || tf === '5min' || tf === '15min') ? tf : '5min';
+    let candles = null;
+    const now = Date.now();
+    const ce = _niftyConfCandCache[et];
+    if (ce && (now - ce.at) < 25000 && ce.candles && ce.candles.length) {
+      candles = ce.candles;
+    } else {
+      try { candles = await SE.fetchCandlesFor(NIFTY_IDX, et, niftyCandleDays(et)); } catch (e) { return false; }
+      if (candles && candles.length) _niftyConfCandCache[et] = { at: now, candles: candles };
+    }
+    if (!candles || candles.length < 30) return false;
+    const want = candDir === 'bullish' ? 1 : -1;
+    let veto = false;
+    const trends = [];
+    for (const it of list) {
+      const tr = niftyConfirmIndicatorTrend(it.id, candles);
+      trends.push({ id: it.id, name: _niftyConfIndName(it.id), tr: tr });
+      if (tr !== 0 && tr !== want) veto = true;
+    }
+    _lastNiftyConfInfo = { at: now, dir: candDir, veto: veto, tf: et, trends: trends };
+    return veto;
+  }
   const _niftyBiasCache = {};
   /* Most recent NIFTY trend direction observed by this engine (updated by the
      paper poll). Drives the NIFTY trend-following symbol picker without
@@ -4473,10 +4703,15 @@ window.createAISmartTrading = function (suffix) {
   async function refreshConfirmedNifty(bias) {
     const prev = _lastNiftyDir;
     if (!window.TrendConfirm) {
-      _lastNiftyDir = niftyPickDir(bias);
+      let d = niftyPickDir(bias);
+      /* Confirmation veto: a selected indicator trending the other way makes the
+         raw pick neutral for this poll (the confirmed direction then holds). */
+      if (d && await niftyConfirmVeto(d, bias && bias.tf)) d = null;
+      _lastNiftyDir = d;
     } else {
       if (!_niftyConf) _niftyConf = window.TrendConfirm.create();
-      const fast = niftyOperativeDir(bias); /* 'bullish' | 'bearish' | null */
+      let fast = niftyOperativeDir(bias); /* 'bullish' | 'bearish' | null */
+      if (fast && await niftyConfirmVeto(fast, bias && bias.tf)) fast = null;
       const fastL = fast === 'bullish' ? 'BULL' : fast === 'bearish' ? 'BEAR' : null;
       const htf = await niftyHtfDir();
       window.TrendConfirm.step(_niftyConf, fastL, htf, Date.now());
@@ -5921,7 +6156,7 @@ window.createAISmartTrading = function (suffix) {
           const aiTpOn = !manualTrailTPOn && u.aiTp !== false;
           const aiTPOn = !manualTPOn && u.aiTP !== false;
           const slPct = manualSLOn ? (ownSl != null ? ownSl : (Number(u.manualSLPct) || 0)) : (aiSlOn ? (s.autoSlPct != null ? s.autoSlPct : autoSLPct(candles)) : 0);
-          const slTrailPct = manualTrailSLOn ? (ownTrailSl != null ? ownTrailSl : (Number(u.manualTrailSLPct) || 0)) : 0;
+          const slTrailPct = manualTrailSLOn ? Math.min(100, Math.max(0, ownTrailSl != null ? ownTrailSl : (Number(u.manualTrailSLPct) || 0))) : 0;
           const tpPct = manualTrailTPOn ? (Number(u.manualTrailTPPct) || 0) : (aiTpOn ? (u.manualTrail === false ? 1 : u.tpPct) : 0);
           const fixedTpPct = (u.rrEnabled === true && Number(u.rrValue) > 0 && slPct > 0)
             ? slPct * Number(u.rrValue)   // reward = risk x RR (overrides manual + AI TP)
@@ -7013,7 +7248,7 @@ window.createAISmartTrading = function (suffix) {
           const aiTpOn = !manualTrailTPOn && u.aiTp !== false;
           const aiTPOn = !manualTPOn && u.aiTP !== false;
           const slPct = manualSLOn ? (ownSl != null ? ownSl : (Number(u.manualSLPct) || 0)) : (aiSlOn ? (s.autoSlPct != null ? s.autoSlPct : autoSLPct(candles)) : 0);
-          const slTrailPct = manualTrailSLOn ? (ownTrailSl != null ? ownTrailSl : (Number(u.manualTrailSLPct) || 0)) : 0;
+          const slTrailPct = manualTrailSLOn ? Math.min(100, Math.max(0, ownTrailSl != null ? ownTrailSl : (Number(u.manualTrailSLPct) || 0))) : 0;
           const tpPct = manualTrailTPOn ? (Number(u.manualTrailTPPct) || 0) : (aiTpOn ? (u.manualTrail === false ? 1 : u.tpPct) : 0);
           const fixedTpPct = (u.rrEnabled === true && Number(u.rrValue) > 0 && slPct > 0)
             ? slPct * Number(u.rrValue)   // reward = risk x RR (overrides manual + AI TP)
@@ -7508,7 +7743,7 @@ window.createAISmartTrading = function (suffix) {
     state.universal.manualSL = mslEl ? mslEl.checked : false;
     state.universal.manualSLPct = mslPctEl ? (Number(mslPctEl.value) || 0) : 0;
     state.universal.manualTrailSL = mtslEl ? mtslEl.checked : false;
-    state.universal.manualTrailSLPct = mtslPctEl ? (Number(mtslPctEl.value) || 0) : 0;
+    state.universal.manualTrailSLPct = mtslPctEl ? Math.min(100, Math.max(0, Number(mtslPctEl.value) || 0)) : 0;
     state.universal.manualTrailTP = mttEl ? mttEl.checked : false;
     state.universal.manualTrailTPPct = mttPctEl ? (Number(mttPctEl.value) || 0) : 0;
     state.universal.manualTP = mtpEl ? mtpEl.checked : false;
@@ -7743,8 +7978,8 @@ window.createAISmartTrading = function (suffix) {
     syncFilterSections({ bullish: prevMaster.bullish && !state.filters.bullish, bearish: prevMaster.bearish && !state.filters.bearish });
     _workingCache.clear();
     save();
-    const any = (state.filters.bullish && (state.filters.incUp || state.filters.crossUp || state.filters.gapUp || state.filters.incUpAll || state.filters.gtUp || state.filters.ltUp || state.filters.bullVolUp || state.filters.bullVolDown || state.filters.bullFakeBreakout || state.filters.bullReversal || state.filters.paneCrossUp || state.filters.paneIncUpAll || state.filters.bullBbwInc || state.filters.bullBbCrossBelow || state.filters.bullBbCrossAbove || state.filters.bullPcCrossBelow || state.filters.bullPcCrossAbove || state.filters.bullSmf || state.filters.bullVl || state.filters.bullAsr || state.filters.bullOit || state.filters.bullEma9_21 || state.filters.bullEma21_35 || state.filters.bullEma35_50 || state.filters.bullEma50_100 || state.filters.bullEma100_200 || state.filters.bullEma200_300 || state.filters.bullSt10_1_2 || state.filters.bullSt10_2_3 || state.filters.bullSt1CloseCrossAbove || state.filters.bullVwapCloseCrossAbove || state.filters.bullMeetEma9_21 || state.filters.bullMeetEma21_35 || state.filters.bullMeetEma35_50 || state.filters.bullMeetEma50_100 || state.filters.bullMeetEma100_200 || state.filters.bullMeetEma200_300 || state.filters.bullMeetSt10_1_2 || state.filters.bullMeetSt10_2_3 || state.filters.bullMeetCloseSt || state.filters.bullMeetCloseVwap || state.filters.bullMeetPaneCross || state.filters.bullMeetCross || state.filters.bullMeetCloseBb || state.filters.bullMeetClosePc || state.filters.bullMeetVl || state.filters.bullGreenCandle || hasStreamFlags(state.filters, 'bull') || pbrOn(state.filters, 'bull'))) ||
-                (state.filters.bearish && (state.filters.incDown || state.filters.crossDown || state.filters.gapDown || state.filters.incDownAll || state.filters.gtDown || state.filters.ltDown || state.filters.bearVolUp || state.filters.bearVolDown || state.filters.bearFakeBreakout || state.filters.bearReversal || state.filters.paneCrossDown || state.filters.paneIncDownAll || state.filters.bearBbwInc || state.filters.bearBbCrossBelow || state.filters.bearBbCrossAbove || state.filters.bearPcCrossBelow || state.filters.bearPcCrossAbove || state.filters.bearSmf || state.filters.bearVl || state.filters.bearAsr || state.filters.bearOit || state.filters.bearEma9_21 || state.filters.bearEma21_35 || state.filters.bearEma35_50 || state.filters.bearEma50_100 || state.filters.bearEma100_200 || state.filters.bearEma200_300 || state.filters.bearSt10_1_2 || state.filters.bearSt10_2_3 || state.filters.bearSt1CloseCrossBelow || state.filters.bearVwapCloseCrossBelow || state.filters.bearMeetEma9_21 || state.filters.bearMeetEma21_35 || state.filters.bearMeetEma35_50 || state.filters.bearMeetEma50_100 || state.filters.bearMeetEma100_200 || state.filters.bearMeetEma200_300 || state.filters.bearMeetSt10_1_2 || state.filters.bearMeetSt10_2_3 || state.filters.bearMeetCloseSt || state.filters.bearMeetCloseVwap || state.filters.bearMeetPaneCross || state.filters.bearMeetCross || state.filters.bearMeetCloseBb || state.filters.bearMeetClosePc || state.filters.bearMeetVl || state.filters.bearRedCandle || hasStreamFlags(state.filters, 'bear') || pbrOn(state.filters, 'bear')));
+    const any = (state.filters.bullish && (state.filters.incUp || state.filters.crossUp || state.filters.gapUp || state.filters.incUpAll || state.filters.gtUp || state.filters.ltUp || state.filters.bullVolUp || state.filters.bullVolDown || state.filters.bullFakeBreakout || state.filters.bullReversal || state.filters.paneCrossUp || state.filters.paneIncUpAll || state.filters.bullBbwInc || state.filters.bullBbCrossBelow || state.filters.bullBbCrossAbove || state.filters.bullPcCrossBelow || state.filters.bullPcCrossAbove || state.filters.bullSmf || state.filters.bullVl || state.filters.bullAsr || state.filters.bullOit || state.filters.bullEma9_21 || state.filters.bullEma21_35 || state.filters.bullEma35_50 || state.filters.bullEma50_100 || state.filters.bullEma100_200 || state.filters.bullEma200_300 || state.filters.bullEma1_9 || state.filters.bullEma1_21 || state.filters.bullEma1_35 || state.filters.bullEma1_50 || state.filters.bullEma1_100 || state.filters.bullEma1_200 || state.filters.bullEma1_300 || state.filters.bullEmaTrend9 || state.filters.bullEmaTrend21 || state.filters.bullEmaTrend35 || state.filters.bullEmaTrend50 || state.filters.bullEmaTrend100 || state.filters.bullEmaTrend200 || state.filters.bullEmaTrend300 || state.filters.bullSt10_1_2 || state.filters.bullSt10_2_3 || state.filters.bullSt1CloseCrossAbove || state.filters.bullVwapCloseCrossAbove || state.filters.bullMeetEma9_21 || state.filters.bullMeetEma21_35 || state.filters.bullMeetEma35_50 || state.filters.bullMeetEma50_100 || state.filters.bullMeetEma100_200 || state.filters.bullMeetEma200_300 || state.filters.bullMeetSt10_1_2 || state.filters.bullMeetSt10_2_3 || state.filters.bullMeetCloseSt || state.filters.bullMeetCloseVwap || state.filters.bullMeetPaneCross || state.filters.bullMeetCross || state.filters.bullMeetCloseBb || state.filters.bullMeetClosePc || state.filters.bullMeetVl || state.filters.bullGreenCandle || hasStreamFlags(state.filters, 'bull') || pbrOn(state.filters, 'bull'))) ||
+                (state.filters.bearish && (state.filters.incDown || state.filters.crossDown || state.filters.gapDown || state.filters.incDownAll || state.filters.gtDown || state.filters.ltDown || state.filters.bearVolUp || state.filters.bearVolDown || state.filters.bearFakeBreakout || state.filters.bearReversal || state.filters.paneCrossDown || state.filters.paneIncDownAll || state.filters.bearBbwInc || state.filters.bearBbCrossBelow || state.filters.bearBbCrossAbove || state.filters.bearPcCrossBelow || state.filters.bearPcCrossAbove || state.filters.bearSmf || state.filters.bearVl || state.filters.bearAsr || state.filters.bearOit || state.filters.bearEma9_21 || state.filters.bearEma21_35 || state.filters.bearEma35_50 || state.filters.bearEma50_100 || state.filters.bearEma100_200 || state.filters.bearEma200_300 || state.filters.bearEma1_9 || state.filters.bearEma1_21 || state.filters.bearEma1_35 || state.filters.bearEma1_50 || state.filters.bearEma1_100 || state.filters.bearEma1_200 || state.filters.bearEma1_300 || state.filters.bearEmaTrend9 || state.filters.bearEmaTrend21 || state.filters.bearEmaTrend35 || state.filters.bearEmaTrend50 || state.filters.bearEmaTrend100 || state.filters.bearEmaTrend200 || state.filters.bearEmaTrend300 || state.filters.bearSt10_1_2 || state.filters.bearSt10_2_3 || state.filters.bearSt1CloseCrossBelow || state.filters.bearVwapCloseCrossBelow || state.filters.bearMeetEma9_21 || state.filters.bearMeetEma21_35 || state.filters.bearMeetEma35_50 || state.filters.bearMeetEma50_100 || state.filters.bearMeetEma100_200 || state.filters.bearMeetEma200_300 || state.filters.bearMeetSt10_1_2 || state.filters.bearMeetSt10_2_3 || state.filters.bearMeetCloseSt || state.filters.bearMeetCloseVwap || state.filters.bearMeetPaneCross || state.filters.bearMeetCross || state.filters.bearMeetCloseBb || state.filters.bearMeetClosePc || state.filters.bearMeetVl || state.filters.bearRedCandle || hasStreamFlags(state.filters, 'bear') || pbrOn(state.filters, 'bear')));
     log('Entry filters ' + (any ? 'enabled: ' + filterSummary() : 'disabled'), any ? 'ok' : 'warn');
   }
 
@@ -7761,8 +7996,8 @@ window.createAISmartTrading = function (suffix) {
       if (!f[sec]) return;
       items.forEach(n => { if (n) out.push((sec === 'bullish' ? 'Bullish' : 'Bearish') + ': ' + n); });
     };
-    add('bullish', [f.incUp ? 'Detect bullish trend' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Detect bullish trend (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Detect bullish trend (pane lines, all)' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close (EMA1) crossed above BB middle band (upper+lower expanding, overall trend vote: BB middle)' : null, f.bullPcCrossAbove ? 'Close (EMA1) crossed above price channel middle line (overall trend vote: PC middle)' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullOit ? 'Detect bullish trend (OI Trend)' : null, f.bullEma9_21 ? 'EMA 9 crossed above EMA 21 (overall trend vote: EMA 21)' : null, f.bullEma21_35 ? 'EMA 21 crossed above EMA 35 (overall trend vote: EMA 35)' : null, f.bullEma35_50 ? 'EMA 35 crossed above EMA 50 (overall trend vote: EMA 50)' : null, f.bullEma50_100 ? 'EMA 50 crossed above EMA 100 (overall trend vote: EMA 100)' : null, f.bullEma100_200 ? 'EMA 100 crossed above EMA 200 (overall trend vote: EMA 200)' : null, f.bullEma200_300 ? 'EMA 200 crossed above EMA 300 (overall trend vote: EMA 300)' : null, f.bullSt10_1_2 ? 'Supertrend(10,1) crossed above Supertrend(10,2) (overall trend vote: Supertrend(10,2))' : null, f.bullSt10_2_3 ? 'Supertrend(10,2) crossed above Supertrend(10,3) (overall trend vote: Supertrend(10,3))' : null, f.bullSt1CloseCrossAbove ? 'Close (EMA1) crossed above ST (overall trend vote: Supertrend(10,1))' : null, f.bullVwapCloseCrossAbove ? 'Close (EMA1) crossed above VWAP (overall trend vote: VWAP)' : null, f.bullMeetEma9_21 ? 'EMA 9 above EMA 21 (level, overall trend vote: EMA 21)' : null, f.bullMeetEma21_35 ? 'EMA 21 above EMA 35 (level, overall trend vote: EMA 35)' : null, f.bullMeetEma35_50 ? 'EMA 35 above EMA 50 (level, overall trend vote: EMA 50)' : null, f.bullMeetEma50_100 ? 'EMA 50 above EMA 100 (level, overall trend vote: EMA 100)' : null, f.bullMeetEma100_200 ? 'EMA 100 above EMA 200 (level, overall trend vote: EMA 200)' : null, f.bullMeetEma200_300 ? 'EMA 200 above EMA 300 (level, overall trend vote: EMA 300)' : null, f.bullMeetSt10_1_2 ? 'Supertrend(10,1) above Supertrend(10,2) (level, overall trend vote: Supertrend(10,2))' : null, f.bullMeetSt10_2_3 ? 'Supertrend(10,2) above Supertrend(10,3) (level, overall trend vote: Supertrend(10,3))' : null, f.bullMeetCloseSt ? 'Close (EMA1) above Supertrend (level, overall trend vote: Supertrend(10,1))' : null, f.bullMeetCloseVwap ? 'Close (EMA1) above VWAP (level, overall trend vote: VWAP)' : null, f.bullMeetPaneCross ? 'Pane main line above signal' : null, f.bullMeetCross ? 'Primary above twin line' : null, f.bullMeetCloseBb ? 'Close (EMA1) above BB middle (level, overall trend vote: BB middle)' : null, f.bullMeetClosePc ? 'Close (EMA1) above PC middle line (level, overall trend vote: PC middle)' : null, f.bullMeetVl ? 'Volume Line above Signal' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null, f.bullGreenCandle ? 'Green candle entry (entry only while forming candle is green)' : null].filter(Boolean));
-    add('bearish', [f.incDown ? 'Detect bearish trend' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Detect bearish trend (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Detect bearish trend (pane lines, all)' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close (EMA1) crossed below BB middle band (upper+lower expanding, overall trend vote: BB middle)' : null, f.bearPcCrossBelow ? 'Close (EMA1) crossed below price channel middle line (overall trend vote: PC middle)' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearOit ? 'Detect bearish trend (OI Trend)' : null, f.bearEma9_21 ? 'EMA 9 crossed below EMA 21 (overall trend vote: EMA 21)' : null, f.bearEma21_35 ? 'EMA 21 crossed below EMA 35 (overall trend vote: EMA 35)' : null, f.bearEma35_50 ? 'EMA 35 crossed below EMA 50 (overall trend vote: EMA 50)' : null, f.bearEma50_100 ? 'EMA 50 crossed below EMA 100 (overall trend vote: EMA 100)' : null, f.bearEma100_200 ? 'EMA 100 crossed below EMA 200 (overall trend vote: EMA 200)' : null, f.bearEma200_300 ? 'EMA 200 crossed below EMA 300 (overall trend vote: EMA 300)' : null, f.bearSt10_1_2 ? 'Supertrend(10,1) crossed below Supertrend(10,2) (overall trend vote: Supertrend(10,2))' : null, f.bearSt10_2_3 ? 'Supertrend(10,2) crossed below Supertrend(10,3) (overall trend vote: Supertrend(10,3))' : null, f.bearSt1CloseCrossBelow ? 'Close (EMA1) crossed below ST (overall trend vote: Supertrend(10,1))' : null, f.bearVwapCloseCrossBelow ? 'Close (EMA1) crossed below VWAP (overall trend vote: VWAP)' : null, f.bearMeetEma9_21 ? 'EMA 9 below EMA 21 (level, overall trend vote: EMA 21)' : null, f.bearMeetEma21_35 ? 'EMA 21 below EMA 35 (level, overall trend vote: EMA 35)' : null, f.bearMeetEma35_50 ? 'EMA 35 below EMA 50 (level, overall trend vote: EMA 50)' : null, f.bearMeetEma50_100 ? 'EMA 50 below EMA 100 (level, overall trend vote: EMA 100)' : null, f.bearMeetEma100_200 ? 'EMA 100 below EMA 200 (level, overall trend vote: EMA 200)' : null, f.bearMeetEma200_300 ? 'EMA 200 below EMA 300 (level, overall trend vote: EMA 300)' : null, f.bearMeetSt10_1_2 ? 'Supertrend(10,1) below Supertrend(10,2) (level, overall trend vote: Supertrend(10,2))' : null, f.bearMeetSt10_2_3 ? 'Supertrend(10,2) below Supertrend(10,3) (level, overall trend vote: Supertrend(10,3))' : null, f.bearMeetCloseSt ? 'Close (EMA1) below Supertrend (level, overall trend vote: Supertrend(10,1))' : null, f.bearMeetCloseVwap ? 'Close (EMA1) below VWAP (level, overall trend vote: VWAP)' : null, f.bearMeetPaneCross ? 'Pane main line below signal' : null, f.bearMeetCross ? 'Primary below twin line' : null, f.bearMeetCloseBb ? 'Close (EMA1) below BB middle (level, overall trend vote: BB middle)' : null, f.bearMeetClosePc ? 'Close (EMA1) below PC middle line (level, overall trend vote: PC middle)' : null, f.bearMeetVl ? 'Volume Line below Signal' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null, f.bearRedCandle ? 'Red candle entry (entry only while forming candle is red)' : null].filter(Boolean));
+    add('bullish', [f.incUp ? 'Detect bullish trend' : null, f.gapUp ? 'Gap increasing' : null, f.incUpAll ? 'Detect bullish trend (all)' : null, f.gtUp ? 'Greater than' : null, f.ltUp ? 'Less than' : null, f.crossUp ? 'Crossed above' : null, f.paneCrossUp ? 'Pane crossover' : null, f.paneIncUpAll ? 'Detect bullish trend (pane lines, all)' : null, f.bullBbwInc ? 'BBW increasing' : null, f.bullBbCrossAbove ? 'Close (EMA1) crossed above BB middle band (upper+lower expanding, overall trend vote: BB middle)' : null, f.bullPcCrossAbove ? 'Close (EMA1) crossed above price channel middle line (overall trend vote: PC middle)' : null, f.bullSmf ? 'Smart Money Flow bullish' : null, f.bullVl ? 'Volume Line rising' : null, f.bullAsr ? 'Support gap widening (price rising away from support)' : null, f.bullOit ? 'Detect bullish trend (OI Trend)' : null, f.bullEma9_21 ? 'EMA 9 crossed above EMA 21 (overall trend vote: EMA 21)' : null, f.bullEma21_35 ? 'EMA 21 crossed above EMA 35 (overall trend vote: EMA 35)' : null, f.bullEma35_50 ? 'EMA 35 crossed above EMA 50 (overall trend vote: EMA 50)' : null, f.bullEma50_100 ? 'EMA 50 crossed above EMA 100 (overall trend vote: EMA 100)' : null, f.bullEma100_200 ? 'EMA 100 crossed above EMA 200 (overall trend vote: EMA 200)' : null, f.bullEma200_300 ? 'EMA 200 crossed above EMA 300 (overall trend vote: EMA 300)' : null, f.bullEma1_9 ? 'EMA 1 crossed above EMA 9 (overall trend vote: EMA 9)' : null, f.bullEma1_21 ? 'EMA 1 crossed above EMA 21 (overall trend vote: EMA 21)' : null, f.bullEma1_35 ? 'EMA 1 crossed above EMA 35 (overall trend vote: EMA 35)' : null, f.bullEma1_50 ? 'EMA 1 crossed above EMA 50 (overall trend vote: EMA 50)' : null, f.bullEma1_100 ? 'EMA 1 crossed above EMA 100 (overall trend vote: EMA 100)' : null, f.bullEma1_200 ? 'EMA 1 crossed above EMA 200 (overall trend vote: EMA 200)' : null, f.bullEma1_300 ? 'EMA 1 crossed above EMA 300 (overall trend vote: EMA 300)' : null, f.bullEmaTrend9 ? 'EMA 9 bullish (line rising)' : null, f.bullEmaTrend21 ? 'EMA 21 bullish (line rising)' : null, f.bullEmaTrend35 ? 'EMA 35 bullish (line rising)' : null, f.bullEmaTrend50 ? 'EMA 50 bullish (line rising)' : null, f.bullEmaTrend100 ? 'EMA 100 bullish (line rising)' : null, f.bullEmaTrend200 ? 'EMA 200 bullish (line rising)' : null, f.bullEmaTrend300 ? 'EMA 300 bullish (line rising)' : null, f.bullSt10_1_2 ? 'Supertrend(10,1) crossed above Supertrend(10,2) (overall trend vote: Supertrend(10,2))' : null, f.bullSt10_2_3 ? 'Supertrend(10,2) crossed above Supertrend(10,3) (overall trend vote: Supertrend(10,3))' : null, f.bullSt1CloseCrossAbove ? 'Close (EMA1) crossed above ST (overall trend vote: Supertrend(10,1))' : null, f.bullVwapCloseCrossAbove ? 'Close (EMA1) crossed above VWAP (overall trend vote: VWAP)' : null, f.bullMeetEma9_21 ? 'EMA 9 above EMA 21 (level, overall trend vote: EMA 21)' : null, f.bullMeetEma21_35 ? 'EMA 21 above EMA 35 (level, overall trend vote: EMA 35)' : null, f.bullMeetEma35_50 ? 'EMA 35 above EMA 50 (level, overall trend vote: EMA 50)' : null, f.bullMeetEma50_100 ? 'EMA 50 above EMA 100 (level, overall trend vote: EMA 100)' : null, f.bullMeetEma100_200 ? 'EMA 100 above EMA 200 (level, overall trend vote: EMA 200)' : null, f.bullMeetEma200_300 ? 'EMA 200 above EMA 300 (level, overall trend vote: EMA 300)' : null, f.bullMeetSt10_1_2 ? 'Supertrend(10,1) above Supertrend(10,2) (level, overall trend vote: Supertrend(10,2))' : null, f.bullMeetSt10_2_3 ? 'Supertrend(10,2) above Supertrend(10,3) (level, overall trend vote: Supertrend(10,3))' : null, f.bullMeetCloseSt ? 'Close (EMA1) above Supertrend (level, overall trend vote: Supertrend(10,1))' : null, f.bullMeetCloseVwap ? 'Close (EMA1) above VWAP (level, overall trend vote: VWAP)' : null, f.bullMeetPaneCross ? 'Pane main line above signal' : null, f.bullMeetCross ? 'Primary above twin line' : null, f.bullMeetCloseBb ? 'Close (EMA1) above BB middle (level, overall trend vote: BB middle)' : null, f.bullMeetClosePc ? 'Close (EMA1) above PC middle line (level, overall trend vote: PC middle)' : null, f.bullMeetVl ? 'Volume Line above Signal' : null, f.bullVolUp ? 'Volume increasing' : null, f.bullVolDown ? 'Volume decreasing' : null, f.bullFakeBreakout ? 'Fake breakout' : null, f.bullReversal ? 'Reversal' : null, f.bullGreenCandle ? 'Green candle entry (entry only while forming candle is green)' : null].filter(Boolean));
+    add('bearish', [f.incDown ? 'Detect bearish trend' : null, f.gapDown ? 'Gap decreasing' : null, f.incDownAll ? 'Detect bearish trend (all)' : null, f.gtDown ? 'Greater than' : null, f.ltDown ? 'Less than' : null, f.crossDown ? 'Crossed below' : null, f.paneCrossDown ? 'Pane crossover' : null, f.paneIncDownAll ? 'Detect bearish trend (pane lines, all)' : null, f.bearBbwInc ? 'BBW increasing' : null, f.bearBbCrossBelow ? 'Close (EMA1) crossed below BB middle band (upper+lower expanding, overall trend vote: BB middle)' : null, f.bearPcCrossBelow ? 'Close (EMA1) crossed below price channel middle line (overall trend vote: PC middle)' : null, f.bearSmf ? 'Smart Money Flow bearish' : null, f.bearVl ? 'Volume Line falling' : null, f.bearAsr ? 'Resistance gap widening (price falling away below resistance)' : null, f.bearOit ? 'Detect bearish trend (OI Trend)' : null, f.bearEma9_21 ? 'EMA 9 crossed below EMA 21 (overall trend vote: EMA 21)' : null, f.bearEma21_35 ? 'EMA 21 crossed below EMA 35 (overall trend vote: EMA 35)' : null, f.bearEma35_50 ? 'EMA 35 crossed below EMA 50 (overall trend vote: EMA 50)' : null, f.bearEma50_100 ? 'EMA 50 crossed below EMA 100 (overall trend vote: EMA 100)' : null, f.bearEma100_200 ? 'EMA 100 crossed below EMA 200 (overall trend vote: EMA 200)' : null, f.bearEma200_300 ? 'EMA 200 crossed below EMA 300 (overall trend vote: EMA 300)' : null, f.bearEma1_9 ? 'EMA 1 crossed below EMA 9 (overall trend vote: EMA 9)' : null, f.bearEma1_21 ? 'EMA 1 crossed below EMA 21 (overall trend vote: EMA 21)' : null, f.bearEma1_35 ? 'EMA 1 crossed below EMA 35 (overall trend vote: EMA 35)' : null, f.bearEma1_50 ? 'EMA 1 crossed below EMA 50 (overall trend vote: EMA 50)' : null, f.bearEma1_100 ? 'EMA 1 crossed below EMA 100 (overall trend vote: EMA 100)' : null, f.bearEma1_200 ? 'EMA 1 crossed below EMA 200 (overall trend vote: EMA 200)' : null, f.bearEma1_300 ? 'EMA 1 crossed below EMA 300 (overall trend vote: EMA 300)' : null, f.bearEmaTrend9 ? 'EMA 9 bearish (line falling)' : null, f.bearEmaTrend21 ? 'EMA 21 bearish (line falling)' : null, f.bearEmaTrend35 ? 'EMA 35 bearish (line falling)' : null, f.bearEmaTrend50 ? 'EMA 50 bearish (line falling)' : null, f.bearEmaTrend100 ? 'EMA 100 bearish (line falling)' : null, f.bearEmaTrend200 ? 'EMA 200 bearish (line falling)' : null, f.bearEmaTrend300 ? 'EMA 300 bearish (line falling)' : null, f.bearSt10_1_2 ? 'Supertrend(10,1) crossed below Supertrend(10,2) (overall trend vote: Supertrend(10,2))' : null, f.bearSt10_2_3 ? 'Supertrend(10,2) crossed below Supertrend(10,3) (overall trend vote: Supertrend(10,3))' : null, f.bearSt1CloseCrossBelow ? 'Close (EMA1) crossed below ST (overall trend vote: Supertrend(10,1))' : null, f.bearVwapCloseCrossBelow ? 'Close (EMA1) crossed below VWAP (overall trend vote: VWAP)' : null, f.bearMeetEma9_21 ? 'EMA 9 below EMA 21 (level, overall trend vote: EMA 21)' : null, f.bearMeetEma21_35 ? 'EMA 21 below EMA 35 (level, overall trend vote: EMA 35)' : null, f.bearMeetEma35_50 ? 'EMA 35 below EMA 50 (level, overall trend vote: EMA 50)' : null, f.bearMeetEma50_100 ? 'EMA 50 below EMA 100 (level, overall trend vote: EMA 100)' : null, f.bearMeetEma100_200 ? 'EMA 100 below EMA 200 (level, overall trend vote: EMA 200)' : null, f.bearMeetEma200_300 ? 'EMA 200 below EMA 300 (level, overall trend vote: EMA 300)' : null, f.bearMeetSt10_1_2 ? 'Supertrend(10,1) below Supertrend(10,2) (level, overall trend vote: Supertrend(10,2))' : null, f.bearMeetSt10_2_3 ? 'Supertrend(10,2) below Supertrend(10,3) (level, overall trend vote: Supertrend(10,3))' : null, f.bearMeetCloseSt ? 'Close (EMA1) below Supertrend (level, overall trend vote: Supertrend(10,1))' : null, f.bearMeetCloseVwap ? 'Close (EMA1) below VWAP (level, overall trend vote: VWAP)' : null, f.bearMeetPaneCross ? 'Pane main line below signal' : null, f.bearMeetCross ? 'Primary below twin line' : null, f.bearMeetCloseBb ? 'Close (EMA1) below BB middle (level, overall trend vote: BB middle)' : null, f.bearMeetClosePc ? 'Close (EMA1) below PC middle line (level, overall trend vote: PC middle)' : null, f.bearMeetVl ? 'Volume Line below Signal' : null, f.bearVolUp ? 'Volume increasing' : null, f.bearVolDown ? 'Volume decreasing' : null, f.bearFakeBreakout ? 'Fake breakout' : null, f.bearReversal ? 'Reversal' : null, f.bearRedCandle ? 'Red candle entry (entry only while forming candle is red)' : null].filter(Boolean));
     PB_BULL_KEYS.forEach(k => { if (f.bullish && f[k]) out.push('Bullish: ' + pbrName(k)); });
     PB_BEAR_KEYS.forEach(k => { if (f.bearish && f[k]) out.push('Bearish: ' + pbrName(k)); });
     PBG_BULL_KEYS.forEach(k => { if (f.bullish && f[k]) out.push('Bullish: ' + pbgName(k)); });
@@ -8226,7 +8461,7 @@ window.createAISmartTrading = function (suffix) {
     const mslEl = $id('astManualSL'); if (mslEl) mslEl.checked = u.manualSL === true;
     const mslPctEl = $id('astManualSLPct'); if (mslPctEl) mslPctEl.value = (Number(u.manualSLPct) > 0 ? u.manualSLPct : 1);
     const mtslEl = $id('astManualTrailSL'); if (mtslEl) mtslEl.checked = u.manualTrailSL === true;
-    const mtslPctEl = $id('astManualTrailSLPct'); if (mtslPctEl) mtslPctEl.value = (Number(u.manualTrailSLPct) > 0 ? u.manualTrailSLPct : '');
+    const mtslPctEl = $id('astManualTrailSLPct'); if (mtslPctEl) { const tv = Number(u.manualTrailSLPct); mtslPctEl.value = (tv > 0 ? Math.min(100, tv) : ''); }
     const mttEl = $id('astManualTrailTP'); if (mttEl) mttEl.checked = u.manualTrailTP === true;
     const mttPctEl = $id('astManualTrailTPPct'); if (mttPctEl) mttPctEl.value = (Number(u.manualTrailTPPct) > 0 ? u.manualTrailTPPct : 20);
     const mtpEl = $id('astManualTP'); if (mtpEl) mtpEl.checked = u.manualTP === true;
@@ -10206,7 +10441,7 @@ window.createAISmartTrading = function (suffix) {
       if (!state.movers) state.movers = { enabled: false, gainers: 5, losers: 5, indices: [], picked: [], gainerTpls: [], loserTpls: [] };
       return state.movers;
     }
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] };
     return state.niftyTrend;
   }
   /* Next template in a side's assigned cycle: cursor = the id used by the last
@@ -10305,7 +10540,7 @@ window.createAISmartTrading = function (suffix) {
     const t = tplLoad().find(x => String(x.id) === id);
     if (!t) return;
     const key = side === 'bearish' ? 'bearTpls' : 'bullTpls';
-    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [] };
+    if (!state.niftyTrend) state.niftyTrend = { enabled: false, pct: 2.5, includeIndices: false, indices: [], useTopN: false, topN: 5, bullTpls: [], bearTpls: [], confirmIndicators: [] };
     if (!Array.isArray(state.niftyTrend[key])) state.niftyTrend[key] = [];
     if (state.niftyTrend[key].indexOf(id) >= 0) {
       log('Template "' + t.name + '" is already assigned to the NIFTY ' + _trendTplSideName(side) + ' side', 'warn');
@@ -11096,8 +11331,18 @@ window.createAISmartTrading = function (suffix) {
   }
 
   function captureEngineSettings() {
+    /* Universal defaults - Lot size / Lots / Margin are ENGINE-WIDE settings,
+       NOT part of a template: they are stripped from the captured universal
+       snapshot so saving a template never stores them. Applying a template then
+       leaves the live lot / lots / margin the user set untouched. */
+    const universalSnap = JSON.parse(JSON.stringify(state.universal));
+    if (universalSnap && typeof universalSnap === 'object') {
+      delete universalSnap.lotSize;
+      delete universalSnap.lots;
+      delete universalSnap.margin;
+    }
     return {
-      universal: JSON.parse(JSON.stringify(state.universal)),
+      universal: universalSnap,
       strike: JSON.parse(JSON.stringify(state.strike)),
       runIn: JSON.parse(JSON.stringify(state.runIn)),
       tradeIn: JSON.parse(JSON.stringify(state.tradeIn)),
@@ -11168,7 +11413,32 @@ window.createAISmartTrading = function (suffix) {
 
   function applyEngineSettings(s) {
     if (!s) return;
-    if (s.universal) state.universal = Object.assign(state.universal || {}, JSON.parse(JSON.stringify(s.universal)));
+    if (s.universal) {
+      /* Universal defaults Lot size / Lots / Margin are engine-wide and are
+         deliberately NEVER restored from a template (see captureEngineSettings).
+         Templates saved before this change still carry them - strip them here so
+         applying an old template can never clobber the live lot / lots / margin. */
+      const uni = JSON.parse(JSON.stringify(s.universal));
+      if (uni && typeof uni === 'object') {
+        delete uni.lotSize;
+        delete uni.lots;
+        delete uni.margin;
+        /* Percent risk inputs are validated on restore too: a template saved
+           before the 0-100 input guard (or an imported snapshot) could carry an
+           out-of-range value like 110. For the trailing SL that is not cosmetic:
+           stop = entry + (peak - entry) * (1 - trail/100) puts the stop at/below
+           the entry once trail >= 100, so a trade in profit gives the whole run
+           back (stop at entry) - the reported "15% set but it gave back ~80-100%"
+           symptom. Clamp every percent field to its valid 0-100 range here so a
+           stale template can never re-inject it. */
+        ['manualSLPct', 'manualTrailSLPct', 'manualTrailTPPct', 'manualTPPct'].forEach(k => {
+          if (uni[k] == null) return;
+          const v = Number(uni[k]);
+          uni[k] = isFinite(v) ? Math.min(100, Math.max(0, v)) : 0;
+        });
+      }
+      state.universal = Object.assign(state.universal || {}, uni);
+    }
     if (s.strike) state.strike = Object.assign(state.strike || {}, JSON.parse(JSON.stringify(s.strike)));
     if (s.runIn) state.runIn = Object.assign(state.runIn || {}, JSON.parse(JSON.stringify(s.runIn)));
     if (s.tradeIn) state.tradeIn = Object.assign(state.tradeIn || {}, JSON.parse(JSON.stringify(s.tradeIn)));
@@ -11468,6 +11738,9 @@ window.createAISmartTrading = function (suffix) {
     onCommodityInput() { applyCommodityToUI(); },
     addNiftyTrendIndex,
     removeNiftyTrendIndex,
+    addNiftyTrendConfirmIndicator,
+    removeNiftyTrendConfirmIndicator,
+    toggleNiftyTrendConfirmIndicator,
     renderNiftyTrendList,
     assignTrendTemplate,
     removeTrendTemplate,

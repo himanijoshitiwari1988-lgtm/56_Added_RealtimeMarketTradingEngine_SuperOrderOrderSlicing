@@ -610,6 +610,11 @@
   };
   let enabled = false;
   try { enabled = localStorage.getItem(LS_KEY) === '1'; } catch (e) {}
+  /* Set when a standalone PCR consumer (PCR EMA pane / OI Rails overlay) is on
+     the chart. Those indicators need the live chain + snapshot even when the
+     OI Trend direction overlay itself is switched off, so this keeps the chain
+     fetch alive independently of the toolbar toggle. */
+  let _wantData = false;
   let _under = null;          /* {ocId,ocExch,name,id,exch,inst} underlying context */
   let _chartKind = 'spot';    /* 'spot' | 'opt' */
   let _chain = null;          /* {ctxKey, records, expiry, spot, at} */
@@ -622,16 +627,68 @@
   let _lastSig = null;        /* last candle signature drawn */
   let _lastLvlDraw = null;    /* last time OC level lines were (re)computed */
   let _lastState = null;
+  let _lastLvl = null;        /* last levelData snapshot (PCR/walls) for the PCR indicators */
+  const _pcrHist = [];        /* [{time, at, pcr, pcrChg, resWall, supWall, maxPain, expHi, expLo, spot}] */
+  const PCR_HIST_MAX = 600;
+  const PCR_LS = 'oitrend.pcrHist.v1';
+  let _pcrHistKey = null;     /* under + expiry the in-memory history belongs to */
+  let _pcrSaveT = null;
+  function pcrCtxKey() { return underKey() + '|' + (_chain && _chain.expiry ? _chain.expiry : ''); }
+  function _loadPcrHist(ck) {
+    try {
+      const raw = localStorage.getItem(PCR_LS);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d && d.key === ck && Array.isArray(d.arr)) {
+        for (let i = 0; i < d.arr.length; i++) { const r = d.arr[i]; if (r && r.time != null) _pcrHist.push(r); }
+      }
+    } catch (e) {}
+  }
+  function _savePcrHist() {
+    try { if (_pcrHistKey) localStorage.setItem(PCR_LS, JSON.stringify({ key: _pcrHistKey, arr: _pcrHist })); } catch (e) {}
+  }
+  function _schedulePcrSave() { if (_pcrSaveT) return; _pcrSaveT = setTimeout(function () { _pcrSaveT = null; _savePcrHist(); }, 1500); }
+  /* Drop the tracking series when the chain context changes (symbol or expiry)
+     so the PCR indicators never carry a stale series into a new chart. History
+     is persisted per context, so returning to the same symbol/expiry restores
+     the PCR EMA instead of starting from a single dot after a reload. */
+  function resetOiSeriesCaches() { _pcrHist.length = 0; _lastLvl = null; _pcrHistKey = null; _fallbackExpiry = null; }
   let _prevKind = null;
   let _legEl = null;          /* trend-state legend chip over the chart */
 
   function docEl(id) { try { return document.getElementById(id); } catch (e) { return null; } }
+  let _fallbackExpiry = null;   /* nearest expiry resolved from /api/expiries when the dropdown is empty */
+  let _expFallbackBusy = false;
+  let _expFallbackCool = 0;
   function ocExpiry() {
     const el = docEl('ocExpirySelect');
     const v = el ? el.value : '';
     if (v && !/^(--|Loading)/.test(v)) return v;
     try { const s = JSON.parse(localStorage.getItem('nifty_deck_save') || 'null'); if (s && s.ocExpiry) return s.ocExpiry; } catch (e) {}
-    return null;
+    return _fallbackExpiry;
+  }
+  /* The standalone PCR indicators may be used without ever opening the option
+     chain panel, so the expiry dropdown can still be empty. Resolve the nearest
+     expiry ourselves and retry the fetch. */
+  function ensureFallbackExpiry() {
+    if (_fallbackExpiry || _expFallbackBusy || !_under) return;
+    if (Date.now() < _expFallbackCool) return;
+    _expFallbackBusy = true;
+    _expFallbackCool = Date.now() + 60000;
+    fetch('/api/expiries', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        security_id: _under.ocId || _under.id,
+        exchange_segment: _under.ocExch || (_under.inst === 'INDEX' ? 'IDX_I' : 'NSE_EQ'),
+        symbol_name: _under.name
+      })
+    }).then(r => r.json()).then(d => {
+      if (d && d.status === 'success' && Array.isArray(d.data) && d.data.length) {
+        _fallbackExpiry = d.data[0];
+        _expFallbackCool = 0;
+        fetchChain(true);
+      }
+    }).catch(() => {}).finally(() => { _expFallbackBusy = false; });
   }
   function currentSpot() {
     try {
@@ -657,15 +714,16 @@
   /* Cache-busting chain fetch that obeys the server's rate limits: full chain
      is expensive (~20s REST / 120s server cache), so we never hammer it. */
   function fetchChain(force) {
-    if (!enabled || !_under) return;
+    if ((!enabled && !_wantData) || !_under) return;
     const now = Date.now();
     if (!force && _chainBusy) return;
     if (!force && now < _chainCool) return;
     if (!force && _chain && _chain.ctxKey === underKey() && (now - _chain.at) < CFG.refreshMs) return;
     const expiry = ocExpiry();
-    if (!expiry) return;
+    if (!expiry) { ensureFallbackExpiry(); return; }
     const ctxKey = underKey() + '|' + expiry;
     if (_chain && _chain.ctxKey === ctxKey && !force && _chain.records) return;
+    if (_chain && _chain.ctxKey !== ctxKey) resetOiSeriesCaches();
     const seq = ++_chainSeq;
     const spot = _chartKind === 'spot' ? currentSpot() : null;
     const body = {
@@ -694,6 +752,9 @@
         _chainFails = 0;
         _scheduleRefresh(CFG.refreshMs);
         if (_chartKind === 'opt') drawStrip(); else drawLevels();
+        /* Data-only mode (toolbar OI Trend off, standalone PCR indicators on):
+           drawDir() will not run, so snapshot the chain here instead. */
+        if (!enabled) recordSnapshotFromChain(spot);
       } else if (d && (d.status === 'loading' || d.status === 'partial')) {
         _scheduleRefresh(30000);
       } else {
@@ -727,10 +788,11 @@
          of the same underlying are toggled. */
       const ocId = (sym.ocId != null && sym.ocId !== '' && String(sym.ocId) !== 'null') ? sym.ocId : null;
       const ocExch = sym.ocExch || sym.exch || 'NSE_FNO';
-      if (ocId == null) { _under = null; _chain = null; return; }
+      if (ocId == null) { _under = null; _chain = null; resetOiSeriesCaches(); return; }
       const key = String(ocId) + '|' + ocExch;
       if (!_under || _under.key !== key) {
         _lastSig = null; _lastState = null; _lastLvlDraw = null;
+        resetOiSeriesCaches();
         _under = {
           key, id: sym.id, exch: sym.exch, inst: sym.inst, name: sym.name,
           ocId, ocExch
@@ -743,6 +805,7 @@
     const key = (sym.ocId || sym.id) + '|' + (sym.ocExch || sym.exch);
     if (!_under || _under.key !== key) {
       _lastSig = null; _lastState = null; _lastLvlDraw = null;
+      resetOiSeriesCaches();
       _under = {
         key, id: sym.id, exch: sym.exch, inst: sym.inst, name: sym.name,
         ocId: sym.ocId, ocExch: sym.ocExch
@@ -824,6 +887,55 @@
     } catch (e) { return 7; }
   }
 
+  /* Strongest CE/PE OI wall strike of a side (used by the PCR rails indicator). */
+  function topWall(lvl, kind) {
+    if (!lvl || !lvl.walls || !lvl.walls.length) return null;
+    const w = lvl.walls.find(x => x.kind === kind);
+    return w ? w.strike : null;
+  }
+  /* Keep a small time series of PCR / OI-wall snapshots so the standalone PCR
+     indicator can plot a PCR EMA line and right-extended rails even though the
+     chain itself is only refreshed periodically. One entry per candle time. */
+  function recordPcrSnapshot(lvl, time) {
+    if (!lvl) return;
+    _lastLvl = lvl;
+    if (lvl.pcr == null || time == null) return;
+    /* Adopt the persisted series the first time this chart context records a
+       snapshot, so a reload resumes the same PCR history instead of a dot. */
+    const ck = pcrCtxKey();
+    if (ck !== _pcrHistKey) { _pcrHist.length = 0; _pcrHistKey = ck; _loadPcrHist(ck); }
+    const rec = {
+      time: time, at: Date.now(), pcr: lvl.pcr, pcrChg: lvl.pcrChg,
+      resWall: topWall(lvl, 'res'), supWall: topWall(lvl, 'sup'),
+      maxPain: lvl.maxPain != null ? lvl.maxPain : null,
+      expHi: lvl.expHi != null ? lvl.expHi : null, expLo: lvl.expLo != null ? lvl.expLo : null,
+      spot: lvl.spot != null ? lvl.spot : null
+    };
+    const last = _pcrHist[_pcrHist.length - 1];
+    if (last && last.time === time) _pcrHist[_pcrHist.length - 1] = rec;
+    else { _pcrHist.push(rec); if (_pcrHist.length > PCR_HIST_MAX) _pcrHist.splice(0, _pcrHist.length - PCR_HIST_MAX); }
+    _schedulePcrSave();
+  }
+
+  /* Record a snapshot straight from the fetched chain. Used when the OI Trend
+     direction overlay is off but a standalone PCR indicator still needs data
+     (drawDir would otherwise be the only caller of recordPcrSnapshot). */
+  function recordSnapshotFromChain(spot) {
+    try {
+      if (_chartKind !== 'spot') return;
+      const cs = IC() ? IC().getCandles() : [];
+      if (!cs || cs.length < 40) return;
+      const lb = cs[cs.length - 1];
+      const s = currentSpot() || (_chain && _chain.spot) || spot || (lb && lb.close);
+      if (!(s > 0)) return;
+      const lvl = levelData(_chain.records, s, { maxWalls: CFG.maxWallsAll, dteDays: dteFromExpiry(_chain.expiry) });
+      recordPcrSnapshot(lvl, lb.time);
+      /* Candles may be unchanged (closed market), so nudge the indicator engine
+         to recompute the PCR pane / OI Rails from the fresh snapshot. */
+      if (IC() && IC().repaint) { try { IC().repaint(); } catch (e) {} }
+    } catch (e) {}
+  }
+
   /* Recompute & repaint the EMA-like direction line + arrow markers. */
   function drawDir() {
     if (!IC() || !IC().setDirSeries || !IC().setDirMarkers) return;
@@ -841,6 +953,7 @@
     } else {
       lvl = { spot: currentSpot() || (cs[cs.length - 1] || {}).close, pcr: null, walls: [] };
     }
+    recordPcrSnapshot(lvl, lb.time);
     const ctx = contextOf(cs, lvl, {});
     const st = classify(R.last, ctx, {});
     _lastState = { st, R };
@@ -1169,10 +1282,13 @@
   /* tick(): called by the dashboard render loop on every live quote (~250ms).
      Kept extremely cheap: identical candle signature -> no recompute. */
   function onTick() {
-    if (!enabled || !IC() || !IC().hasChart) return;
+    if ((!enabled && !_wantData) || !IC() || !IC().hasChart) return;
     if (!IC().hasChart()) return;
     syncUnder();
     syncToggleUI();
+    /* Data-only mode: keep the chain fresh for the standalone PCR indicators,
+       but skip every OI Trend overlay (arrows / level lines / strip / legend). */
+    if (!enabled) { fetchChain(false); return; }
     if (_chartKind === 'opt') {
       if (!_wasOpt) {
         try { if (IC().clearDirOverlay) IC().clearDirOverlay(); if (IC().clearOcLevelLines) IC().clearOcLevelLines(); } catch (e) {}
@@ -1210,7 +1326,7 @@
   /* heartbeat ticker (fallback when quotes are idle, e.g. market closed) */
   function startTicker() {
     if (_tickTimer) return;
-    _tickTimer = setInterval(() => { if (enabled) onTick(); }, 1000);
+    _tickTimer = setInterval(() => { if (enabled || _wantData) onTick(); }, 1000);
   }
 
   function bootstrap() {
@@ -1224,6 +1340,27 @@
     bootstrap, onTick, setEnabled,
     setDirSeries: (d, o) => { const ic = IC(); if (ic && ic.setDirSeries) ic.setDirSeries(d, o); },
     refresh: () => fetchChain(true),
+    /* Keep the live chain flowing while the standalone PCR indicators (PCR EMA
+       pane / OI Rails overlay) are deployed, regardless of the OI Trend toggle.
+       Called by the chart indicator engine on every (re)render. */
+    setDataMode: (on) => {
+      const want = !!on;
+      if (want === _wantData) { if (want) fetchChain(false); return; }
+      _wantData = want;
+      if (!_wantData) return;
+      syncUnder();
+      fetchChain(true);
+    },
+    /* Snapshot + history for the standalone PCR indicators (PCR EMA pane and
+       OI-wall rails overlay). Empty until a chain has been fetched. */
+    snapshot: () => _lastLvl ? {
+      pcr: _lastLvl.pcr, pcrChg: _lastLvl.pcrChg, spot: _lastLvl.spot,
+      resWall: topWall(_lastLvl, 'res'), supWall: topWall(_lastLvl, 'sup'),
+      maxPain: _lastLvl.maxPain != null ? _lastLvl.maxPain : null,
+      expHi: _lastLvl.expHi != null ? _lastLvl.expHi : null, expLo: _lastLvl.expLo != null ? _lastLvl.expLo : null,
+      at: Date.now()
+    } : null,
+    getPcrHist: () => _pcrHist.slice(),
     getState: () => ({ enabled, under: _under ? { key: _under.key, name: _under.name } : null, chain: _chain ? { expiry: _chain.expiry, rows: (_chain.records || []).length, spot: _chain.spot, at: _chain.at } : null })
   };
   G.OITrend = OITrend;
