@@ -966,7 +966,16 @@
     const data = s.R.data;
     const n = data.length;
     if (!n) return;
-    IC().setDirSeries(data, { color: st.color, lineWidth: 2 });
+    /* Draw the trend-state line as straight intersecting segments (same regime
+       values, only the drawn geometry is simplified). The regime array / engine
+       reading is untouched, so strategy logic is unchanged. */
+    let lineData = data;
+    try {
+      if (window.IndChart && typeof window.IndChart.straightenLine === 'function') {
+        lineData = window.IndChart.straightenLine(data, 0.08);
+      }
+    } catch (e) { lineData = data; }
+    IC().setDirSeries(lineData, { color: st.color, lineWidth: 2 });
     const li = n - 1;
     const t = data[li].time;
     const mk = [];

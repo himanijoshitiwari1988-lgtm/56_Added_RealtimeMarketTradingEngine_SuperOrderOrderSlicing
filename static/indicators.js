@@ -742,6 +742,71 @@
     return v;
   }
 
+  /* Ramer-Douglas-Peucker simplification of a line series: endpoint values are
+     kept exactly but intermediate vertices within `tolFrac` (a fraction of the
+     series value range) of the straight chord are dropped. The result is the
+     SAME indicator values, just rendered as long straight segments that cut
+     through the candles instead of a wiggly path. Per-point colors (e.g. the
+     Volume Line battery fade) ride along on the surviving vertices. */
+  function straightenLine(data, tolFrac) {
+    if (!data || data.length < 3) return data;
+    const pts = [];
+    for (let i = 0; i < data.length; i++) { const p = data[i]; if (p && p.value != null && isFinite(p.value)) pts.push(p); }
+    const m = pts.length;
+    if (m < 3) return pts;
+    let vmin = Infinity, vmax = -Infinity;
+    for (let i = 0; i < m; i++) { const v = pts[i].value; if (v < vmin) vmin = v; if (v > vmax) vmax = v; }
+    const vr = (vmax - vmin) || 1;
+    const xr = (m - 1) || 1;
+    const eps = tolFrac > 0 ? tolFrac : 0.08;
+    const keep = new Array(m).fill(false);
+    keep[0] = keep[m - 1] = true;
+    const stack = [[0, m - 1]];
+    while (stack.length) {
+      const seg = stack.pop();
+      const a = seg[0], b = seg[1];
+      if (b - a < 2) continue;
+      const x1 = a / xr, y1 = (pts[a].value - vmin) / vr;
+      const x2 = b / xr, y2 = (pts[b].value - vmin) / vr;
+      const dx = x2 - x1, dy = y2 - y1;
+      const L = Math.sqrt(dx * dx + dy * dy);
+      let maxd = -1, idx = -1;
+      for (let i = a + 1; i < b; i++) {
+        const x = i / xr, y = (pts[i].value - vmin) / vr;
+        let d;
+        if (L > 1e-12) d = Math.abs(dy * x - dx * y + x2 * y1 - y2 * x1) / L;
+        else { const ddx = x - x1, ddy = y - y1; d = Math.sqrt(ddx * ddx + ddy * ddy); }
+        if (d > maxd) { maxd = d; idx = i; }
+      }
+      if (maxd > eps) { keep[idx] = true; stack.push([a, idx]); stack.push([idx, b]); }
+    }
+    const out = [];
+    for (let i = 0; i < m; i++) if (keep[i]) out.push(pts[i]);
+    return out;
+  }
+
+  /* Single straight best-fit line over the recent window, forced through the
+     LATEST reading. For VWAP this keeps "price above/below" exact at the live
+     bar (the line ends exactly on the current VWAP) while removing the curly
+     historical path. */
+  function anchoredStraightLine(data, look) {
+    if (!data || data.length < 2) return data;
+    const pts = [];
+    for (let i = 0; i < data.length; i++) { const p = data[i]; if (p && p.value != null && isFinite(p.value)) pts.push(p); }
+    const m = pts.length;
+    if (m < 2) return pts;
+    const w = look > 0 ? Math.round(look) : 60;
+    const f0 = Math.max(0, m - w);
+    let sx = 0, sy = 0, sxx = 0, sxy = 0, c = 0;
+    for (let i = f0; i < m; i++) { sx += i; sy += pts[i].value; sxx += i * i; sxy += i * pts[i].value; c++; }
+    const den = c * sxx - sx * sx;
+    const sl = den !== 0 ? (c * sxy - sx * sy) / den : 0;
+    const lastV = pts[m - 1].value;
+    const out = [];
+    for (let i = f0; i < m; i++) out.push({ time: pts[i].time, value: lastV + sl * (i - (m - 1)), color: pts[i].color });
+    return out;
+  }
+
   /* ---------------- indicator definitions ---------------- */
   const IND = {
     ema: {
@@ -2569,7 +2634,9 @@
       inputs: [
         { key: 'length', label: 'VWMA length', def: 14, min: 1, max: 200, step: 1 },
         { key: 'signalLen', label: 'Signal length', def: 9, min: 1, max: 100, step: 1 },
-        { key: 'volLen', label: 'Volume avg length', def: 20, min: 1, max: 200, step: 1 }
+        { key: 'volLen', label: 'Volume avg length', def: 20, min: 1, max: 200, step: 1 },
+        { key: 'straight', label: 'Straight intersecting (few bends)', type: 'checkbox', def: true },
+        { key: 'straightTol', label: 'Straight tolerance', def: 0.08, min: 0.005, max: 0.5, step: 0.005 }
       ],
       style: [
         { key: 'color', label: 'Volume line', def: '#26c6da' },
@@ -2613,7 +2680,7 @@
         if (hx.length === 3) hx = hx.split('').map(x => x + x).join('');
         const cn = parseInt(hx, 16);
         const rgb = ((cn >> 16) & 255) + ',' + ((cn >> 8) & 255) + ',' + (cn & 255);
-        const mainData = [], sigData = [];
+        let mainData = [], sigData = [];
         for (let i = L - 1; i < n; i++) {
           const v = vw[i];
           if (v == null || isNaN(v)) continue;
@@ -2626,6 +2693,10 @@
           mainData.push({ time: t, value: v, color: 'rgba(' + rgb + ',' + alpha + ')' });
           const sv = signal[i];
           if (sv != null && !isNaN(sv)) sigData.push({ time: t, value: sv });
+        }
+        if (o.straight !== false) {
+          mainData = straightenLine(mainData, o.straightTol);
+          sigData = straightenLine(sigData, o.straightTol);
         }
         return [
           { type: 'line', color: o.color, lineWidth: o.lineWidth, data: mainData },
@@ -2878,7 +2949,9 @@
       id: 'vwap', name: 'VWAP', fullName: 'Volume Weighted Average Price', cat: 'Overlay', type: 'overlay',
       inputs: [
         { key: 'anchor', label: 'Anchor', def: 'trend', options: [['trend', 'Trend leg'], ['session', 'Session'], ['all', 'All data']] },
-        { key: 'pivotLen', label: 'Pivot bars', def: 5, min: 1, max: 200, step: 1 }
+        { key: 'pivotLen', label: 'Pivot bars', def: 5, min: 1, max: 200, step: 1 },
+        { key: 'straight', label: 'Straight line (above/below intact)', type: 'checkbox', def: true },
+        { key: 'straightLook', label: 'Straight lookback', def: 60, min: 5, max: 500, step: 1 }
       ],
       style: [
         { key: 'color', label: 'Color', def: '#ff9800' },
@@ -2914,8 +2987,9 @@
           groups.forEach((sess, si) => {
             const isCurrent = si === groups.length - 1;
             const col = isCurrent ? o.color : fadeColor(o.color, 0.35);
-            const data = [];
+            let data = [];
             sess.rows.forEach(i => data.push({ time: c[i].time, value: feed(i, sess) }));
+            if (o.straight !== false) data = anchoredStraightLine(data, o.straightLook);
             const series = { type: 'line', color: col, lineWidth: o.lineWidth, data };
             if (!isCurrent) series.noRead = true;
             out.push(series);
@@ -2976,7 +3050,7 @@
           const broke = t === 1 ? c[j].high > c[last.i].high : c[j].low < c[last.i].low;
           if (broke) piv.push({ i: j, t });
         }
-        const data = [];
+        let data = [];
         if (n) {
           const st = { cumPV: 0, cumV: 0, sumTP: 0, nTP: 0 };
           let pi = -1;
@@ -2989,6 +3063,7 @@
             data.push({ time: c[i].time, value: feed(i, st) });
           }
         }
+        if (o.straight !== false) data = anchoredStraightLine(data, o.straightLook);
         return [{ type: 'line', color: o.color, lineWidth: o.lineWidth, data }];
       }
     },
@@ -3048,7 +3123,9 @@
         { key: 'confirm', label: 'Confirmation bars', def: 2, min: 1, max: 6, step: 1 },
         { key: 'wickLen', label: 'Pivot window', def: 3, min: 1, max: 6, step: 1 },
         { key: 'straightLine', label: 'Straight line (angled segments)', type: 'checkbox', def: true },
-        { key: 'useVolume', label: 'Volume confirmation', type: 'checkbox', def: true }
+        { key: 'useVolume', label: 'Volume confirmation', type: 'checkbox', def: true },
+        { key: 'straight', label: 'Straight intersecting (few bends)', type: 'checkbox', def: true },
+        { key: 'straightTol', label: 'Straight tolerance', def: 0.08, min: 0.005, max: 0.5, step: 0.005 }
       ],
       style: [
         { key: 'upColor', label: 'Up color', def: '#00e676' },
@@ -3058,8 +3135,13 @@
       ],
       compute(c, o) {
         if (!window.VLCore || !window.VLCore.series) return [];
-        try { return window.VLCore.series(c, o).out; }
-        catch (e) { return []; }
+        try {
+          const out = window.VLCore.series(c, o).out;
+          if (o.straight === false || !Array.isArray(out)) return out;
+          return out.map(s => (s && s.type === 'line' && Array.isArray(s.data))
+            ? Object.assign({}, s, { data: straightenLine(s.data, o.straightTol) })
+            : s);
+        } catch (e) { return []; }
       }
     },
 
@@ -5031,6 +5113,7 @@
     fmtReading,
     IND,
     IND_LIST,
+    straightenLine,
     getCandles() { return candles; },
     /* Trading-level overlay price lines (entry / SL / trailing-SL / TP /
        trailing-TP) drawn directly on the candle series. The caller (dashboard
