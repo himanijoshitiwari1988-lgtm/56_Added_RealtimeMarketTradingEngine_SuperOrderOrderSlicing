@@ -152,7 +152,7 @@
   function paStructure(c, o) {
     o = o || {};
     const n = c ? c.length : 0;
-    const out = { line: [], zig: [], markers: [], trend: 0, level: null };
+    const out = { line: [], zig: [], markers: [], trend: 0, trendState: [], level: null };
     const pl = Math.max(1, Math.round(Number(o.pivotLen)) || 3);
     if (n < pl * 2 + 2) return out;
     const atr = wilderArr(trArr(c), Math.max(2, Math.round(Number(o.atrLen)) || 14));
@@ -202,6 +202,7 @@
         putMk({ time: c[i].time, position: trend === 1 ? 'belowBar' : 'aboveBar', color: trend === 1 ? up : dn, shape: trend === 1 ? 'arrowUp' : 'arrowDown', text: prevTrend === 0 ? 'BOS' : 'CHoCH' });
       }
       out.trend = trend;
+      out.trendState.push(trend);
       out.level = lvl;
     }
     /* Zigzag variant: connect the confirmed swing pivots (H/L) with straight
@@ -246,7 +247,7 @@
       if (x && x.time > prevT && isFinite(x.time) && isFinite(x.high) && isFinite(x.low) && isFinite(x.close)) { cc.push(x); prevT = x.time; }
     }
     const n = cc.length;
-    const out = { c: cc, piv: [], trend: 0, trendLine: [], labels: [], fib: null };
+    const out = { c: cc, piv: [], trend: 0, trendLine: [], trendState: [], labels: [], fib: null };
     if (n < 3) return out;
     const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
     const atrMult = Number(o.atrMult) > 0 ? Number(o.atrMult) : 2;
@@ -291,6 +292,7 @@
       else if (trend === -1) lvl = lastH != null ? lastH : cc[i].close;
       else lvl = (lastH != null && lastL != null) ? (lastH + lastL) / 2 : cc[i].close;
       out.trendLine.push({ time: cc[i].time, value: lvl, color: trend === 1 ? up : (trend === -1 ? dn : rg) });
+      out.trendState.push(trend);
       out.trend = trend;
     }
     /* Wave labels: label the most recent alternating swing run. Prefer a clean
@@ -785,26 +787,81 @@
     return out;
   }
 
-  /* Single straight best-fit line over the recent window, forced through the
-     LATEST reading. For VWAP this keeps "price above/below" exact at the live
-     bar (the line ends exactly on the current VWAP) while removing the curly
-     historical path. */
-  function anchoredStraightLine(data, look) {
-    if (!data || data.length < 2) return data;
-    const pts = [];
-    for (let i = 0; i < data.length; i++) { const p = data[i]; if (p && p.value != null && isFinite(p.value)) pts.push(p); }
-    const m = pts.length;
-    if (m < 2) return pts;
-    const w = look > 0 ? Math.round(look) : 60;
-    const f0 = Math.max(0, m - w);
-    let sx = 0, sy = 0, sxx = 0, sxy = 0, c = 0;
-    for (let i = f0; i < m; i++) { sx += i; sy += pts[i].value; sxx += i * i; sxy += i * pts[i].value; c++; }
-    const den = c * sxx - sx * sx;
-    const sl = den !== 0 ? (c * sxy - sx * sy) / den : 0;
-    const lastV = pts[m - 1].value;
-    const out = [];
-    for (let i = f0; i < m; i++) out.push({ time: pts[i].time, value: lastV + sl * (i - (m - 1)), color: pts[i].color });
-    return out;
+  /* ---------------- Implied Volatility (IV) live history ----------------
+     The app only has LIVE option IV (server-side Black-Scholes inversion of
+     the premium + the option-chain snapshot) - there is no historical IV feed.
+     So the IV line is accumulated going forward, one point per chart candle
+     time, exactly like the PCR EMA history, and persisted per chart context so
+     a reload resumes the line. On an option premium chart the option's own live
+     IV (client quote `iv`) is used; on an index / equity / futures chart the
+     underlying ATM IV from the OI Trend chain snapshot is used. */
+  const IV_HIST = new Map();          /* ctx -> [{time, iv}] */
+  const IV_LS = 'ind.ivHist.v1';
+  const IV_MAX = 600;
+  let _ivLoaded = false, _ivSaveT = null;
+  function _ivLoad() {
+    if (_ivLoaded) return;
+    _ivLoaded = true;
+    try {
+      const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem(IV_LS) : null;
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if (d && typeof d === 'object') for (const k in d) if (Array.isArray(d[k])) IV_HIST.set(k, d[k]);
+    } catch (e) {}
+  }
+  function _ivSave() {
+    if (_ivSaveT) return;
+    _ivSaveT = setTimeout(() => {
+      _ivSaveT = null;
+      try {
+        const d = {};
+        IV_HIST.forEach((v, k) => { d[k] = v; });
+        if (typeof localStorage !== 'undefined') localStorage.setItem(IV_LS, JSON.stringify(d));
+      } catch (e) {}
+    }, 1500);
+  }
+  function ivHistFor(ctx) { _ivLoad(); return IV_HIST.get(ctx) || []; }
+  function ivRecord(ctx, time, iv, delta, vega) {
+    _ivLoad();
+    if (time == null || !(iv > 0)) return;
+    let arr = IV_HIST.get(ctx);
+    if (!arr) { arr = []; IV_HIST.set(ctx, arr); }
+    const rec = { time: time, iv: iv };
+    if (delta != null && isFinite(delta)) rec.delta = delta;
+    if (vega != null && isFinite(vega)) rec.vega = vega;
+    const last = arr[arr.length - 1];
+    if (last && last.time === time) { last.iv = iv; if (rec.delta != null) last.delta = rec.delta; if (rec.vega != null) last.vega = rec.vega; }
+    else { arr.push(rec); if (arr.length > IV_MAX) arr.splice(0, arr.length - IV_MAX); }
+    _ivSave();
+  }
+  function ivCtxKey() {
+    let sel = null;
+    try { if (typeof selectedSymbol !== 'undefined' && selectedSymbol) sel = selectedSymbol; } catch (e) {}
+    if (!sel) return 'default';
+    return String(sel.id) + '|' + String(sel.exch || '') + '|' + String(sel.inst || '');
+  }
+  /* Current live IV + greeks for the active chart: the option's own values on a
+     premium chart, else the underlying ATM values from the OI Trend snapshot. */
+  function ivCurrent() {
+    let sel = null;
+    try { if (typeof selectedSymbol !== 'undefined' && selectedSymbol) sel = selectedSymbol; } catch (e) {}
+    const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
+    const inst = sel ? String(sel.inst || '') : '';
+    if (/^OPT/.test(inst)) {
+      let qm = null;
+      try { if (typeof clientQuotes !== 'undefined') qm = clientQuotes; } catch (e) {}
+      if (qm && sel) {
+        const key = (sel.exch === 'IDX_I') ? ('IDX_I:' + sel.id) : String(sel.id);
+        const q = qm[key];
+        if (q && q.iv > 0) return { iv: q.iv, delta: num(q.delta), vega: num(q.vega) };
+      }
+      return null;
+    }
+    try {
+      const S = (typeof window !== 'undefined' && window.OITrend && window.OITrend.snapshot) ? window.OITrend.snapshot() : null;
+      if (S && S.iv > 0) return { iv: S.iv, delta: num(S.delta), vega: num(S.vega) };
+    } catch (e) {}
+    return null;
   }
 
   /* ---------------- indicator definitions ---------------- */
@@ -1094,7 +1151,9 @@
       id: 'pcr', name: 'PCR EMA', fullName: 'Put-Call Ratio + EMA overlay (pinned to a bottom band)', cat: 'Overlay', type: 'overlay', format: 'decimal',
       inputs: [
         { key: 'fast', label: 'Fast EMA', def: 9, min: 1, max: 100, step: 1 },
-        { key: 'slow', label: 'Slow EMA', def: 21, min: 1, max: 200, step: 1 }
+        { key: 'slow', label: 'Slow EMA', def: 21, min: 1, max: 200, step: 1 },
+        { key: 'straight', label: 'Straight intersecting (few bends)', type: 'checkbox', def: true },
+        { key: 'straightTol', label: 'Straight tolerance', def: 0.08, min: 0.005, max: 0.5, step: 0.005 }
       ],
       style: [
         { key: 'pcrColor', label: 'PCR color', def: '#9e9e9e' },
@@ -1105,10 +1164,12 @@
       compute(c, o) {
         const H = (window.OITrend && window.OITrend.getPcrHist) ? window.OITrend.getPcrHist() : [];
         const lw = o.lineWidth || 1;
-        const mkSlot = (arr, color, extra) => Object.assign({
-          type: 'line', color, lineWidth: lw,
-          data: (c && arr) ? c.map((x, i) => (arr[i] == null ? null : { time: x.time, value: arr[i] })).filter(Boolean) : []
-        }, extra || {});
+        const straight = o.straight !== false;
+        const mkSlot = (arr, color, extra) => {
+          let pts = (c && arr) ? c.map((x, i) => (arr[i] == null ? null : { time: x.time, value: arr[i] })).filter(Boolean) : [];
+          if (straight) pts = straightenLine(pts, o.straightTol);
+          return Object.assign({ type: 'line', color, lineWidth: lw, data: pts }, extra || {});
+        };
         const n = (c ? c.length : 0);
         const raw = new Array(n).fill(null), fast = new Array(n).fill(null), slow = new Array(n).fill(null);
         if (H && H.length && n) {
@@ -1173,6 +1234,109 @@
           mkSlot(S ? S.expHi : null, '#4fc3f7', 'EXP HI', 2),
           mkSlot(S ? S.expLo : null, '#4fc3f7', 'EXP LO', 2)
         ];
+      }
+    },
+
+    /* IV + Delta + Vega overlay: the live option IV and its Black-Scholes
+       greeks accumulated over time (see IV_HIST above). Each series is mapped
+       onto its own band of the price axis so the lines weave through the candles
+       without overlapping, and rendered as straight intersecting lines. */
+    iv: {
+      id: 'iv', name: 'IV', fullName: 'Implied Volatility (IV) + Delta + Vega - live option greeks scaled onto the price axis as straight intersecting lines', cat: 'Volatility', type: 'overlay', format: 'decimal',
+      inputs: [
+        { key: 'smooth', label: 'Smoothing EMA', def: 1, min: 1, max: 50, step: 1 },
+        { key: 'showDelta', label: 'Show Delta', type: 'checkbox', def: true },
+        { key: 'showVega', label: 'Show Vega', type: 'checkbox', def: true },
+        { key: 'topBand', label: 'IV band top', def: 0.02, min: 0, max: 1, step: 0.01 },
+        { key: 'botBand', label: 'IV band bottom', def: 0.34, min: 0, max: 1, step: 0.01 },
+        { key: 'deltaTop', label: 'Delta band top', def: 0.36, min: 0, max: 1, step: 0.01 },
+        { key: 'deltaBot', label: 'Delta band bottom', def: 0.66, min: 0, max: 1, step: 0.01 },
+        { key: 'vegaTop', label: 'Vega band top', def: 0.68, min: 0, max: 1, step: 0.01 },
+        { key: 'vegaBot', label: 'Vega band bottom', def: 0.98, min: 0, max: 1, step: 0.01 },
+        { key: 'straight', label: 'Straight intersecting (few bends)', type: 'checkbox', def: true },
+        { key: 'straightTol', label: 'Straight tolerance', def: 0.08, min: 0.005, max: 0.5, step: 0.005 }
+      ],
+      style: [
+        { key: 'color', label: 'IV color', def: '#e040fb' },
+        { key: 'deltaColor', label: 'Delta color', def: '#00bcd4' },
+        { key: 'vegaColor', label: 'Vega color', def: '#ff6d00' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        /* Always return the same three series (even when empty) so setData() can
+           fill the live-updating lines later without a full chart rebuild. */
+        const lw = o.lineWidth || 2;
+        const mkIv = data => ({ type: 'line', color: o.color, lineWidth: lw, data: data || [] });
+        const mkXX = (color, data) => ({ type: 'line', color, lineWidth: lw, data: data || [], lastValueVisible: false });
+        const out = (ivD, dD, vD) => [mkIv(ivD), mkXX(o.deltaColor || '#00bcd4', dD), mkXX(o.vegaColor || '#ff6d00', vD)];
+        const n = c ? c.length : 0;
+        if (!n) return out([], [], []);
+        const ctx = ivCtxKey();
+        const cur = ivCurrent();
+        /* Record only for the chart's OWN candle array (strategy reads call this
+           with other symbols' candles - those must never pollute the history). */
+        if (cur && cur.iv > 0 && c === candles) ivRecord(ctx, c[n - 1].time, cur.iv, cur.delta, cur.vega);
+        const H = ivHistFor(ctx);
+        if (!H.length) return out([], [], []);
+        let pmin = Infinity, pmax = -Infinity;
+        for (let i = 0; i < n; i++) {
+          const x = c[i];
+          if (!x) continue;
+          if (x.low < pmin) pmin = x.low;
+          if (x.high > pmax) pmax = x.high;
+        }
+        if (!isFinite(pmin)) return out([], [], []);
+        const pr = (pmax - pmin) || (pmax * 0.01) || 1;
+        const emaLen = Math.max(1, Math.round(Number(o.smooth) || 1));
+        const bandOf = (tk, bk, dt, db) => {
+          let a = Number(o[tk]); if (!isFinite(a)) a = dt; a = Math.min(Math.max(a, 0), 1);
+          let b = Number(o[bk]); if (!isFinite(b)) b = db; b = Math.min(Math.max(b, 0), 1);
+          if (b - a < 0.05) b = Math.min(1, a + 0.05);
+          return [a, b];
+        };
+        /* Map a history field onto the candle times (PCR-style step series),
+           smooth, normalise to [lo,hi] of the price range, then straighten. */
+        const seriesFor = (field, lo, hi) => {
+          const raw = new Array(n).fill(null);
+          let h = 0, last = null;
+          for (let i = 0; i < n; i++) {
+            while (h < H.length && H[h].time <= c[i].time) { last = H[h][field]; h++; }
+            raw[i] = (last == null ? null : last);
+          }
+          let i0 = 0;
+          while (i0 < n && raw[i0] == null) i0++;
+          if (i0 >= n) return [];
+          let vals = raw.slice(i0);
+          if (emaLen > 1) {
+            const sm = emaArr(vals.map(v => (v == null ? 0 : v)), emaLen);
+            vals = vals.map((v, k) => (v == null ? null : sm[k]));
+          }
+          let imin = Infinity, imax = -Infinity;
+          for (let k = 0; k < vals.length; k++) {
+            const v = vals[k];
+            if (v == null) continue;
+            if (v < imin) imin = v;
+            if (v > imax) imax = v;
+          }
+          if (!isFinite(imin)) return [];
+          const multi = imax > imin, ir = (imax - imin) || 1, span = hi - lo;
+          let data = [];
+          for (let k = 0; k < vals.length; k++) {
+            const v = vals[k];
+            if (v == null) continue;
+            const t = multi ? (v - imin) / ir : 0.5;
+            data.push({ time: c[i0 + k].time, value: pmin + (lo + span * t) * pr });
+          }
+          if (o.straight !== false) data = straightenLine(data, o.straightTol);
+          return data;
+        };
+        const ivB = bandOf('topBand', 'botBand', 0.02, 0.34);
+        const dltB = bandOf('deltaTop', 'deltaBot', 0.36, 0.66);
+        const vgaB = bandOf('vegaTop', 'vegaBot', 0.68, 0.98);
+        const ivData = seriesFor('iv', ivB[0], ivB[1]);
+        const dltData = (o.showDelta !== false) ? seriesFor('delta', dltB[0], dltB[1]) : [];
+        const vgaData = (o.showVega !== false) ? seriesFor('vega', vgaB[0], vgaB[1]) : [];
+        return out(ivData, dltData, vgaData);
       }
     },
 
@@ -1395,6 +1559,66 @@
           shape: 'circle',
           text: l.text
         }));
+      }
+    },
+
+    /* Hidden companion of wavefib, used ONLY by the AST indicator filter: exposes
+       a per-candle running score of the confirmed Elliott wave trend so the
+       engine's ultrafast direction gate (last value vs previous) reads a rising
+       line while the wave structure is bullish (higher-highs & higher-lows) and a
+       falling line while it is bearish (lower-highs & lower-lows); flat in a
+       range. Score = cumulative sum of the confirmed trend state (+1/-1/0), so an
+       "increasing upward/downward" filter is a direct read of the wave direction
+       and the same row can also feed the overall-direction vote. Never listed in
+       the indicator menu. */
+    ewtrend: {
+      id: 'ewtrend', name: 'Elliott Wave Trend (state)', fullName: 'Elliott wave confirmed trend state (hidden; drives the AST filter)', cat: 'Overlay', type: 'overlay', hidden: true,
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ATR mult', def: 6.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'showLabels', label: 'Show wave labels', type: 'checkbox', def: true }
+      ],
+      compute(c, o) {
+        const a = ewAnalyze(c, o);
+        if (!a || !a.c.length || !a.trendState || !a.trendState.length)
+          return [{ type: 'line', color: '#ffb300', lineWidth: 1, data: [] }];
+        let score = 0;
+        const data = a.c.map((x, k) => {
+          score += (a.trendState[k] != null ? a.trendState[k] : 0);
+          return { time: x.time, value: score };
+        });
+        return [{ type: 'line', color: '#ffb300', lineWidth: 1, data }];
+      }
+    },
+
+    /* Hidden companion of the 'Price Action Trend' overlay (pastruct), used ONLY
+       by the AST indicator filter. pastruct's visible line is a sparse zigzag /
+       step trailing line (flat between pivot confirmations), which the engine's
+       last-two-points direction gate cannot read reliably; this exposes the same
+       causal structure trend (+1 = BOS/CHoCH bullish, -1 = bearish, 0 = range) as
+       a per-candle cumulative score so an "increasing upward/downward" filter is
+       a direct read of the structure direction. Never listed in the menu. */
+    patrend: {
+      id: 'patrend', name: 'Price Action Trend (state)', fullName: 'Price Action structure trend state (hidden; drives the AST filter)', cat: 'Trend', type: 'overlay', hidden: true,
+      inputs: [
+        { key: 'pivotLen', label: 'Swing lookback', def: 10, min: 1, max: 20, step: 1 },
+        { key: 'atrLen', label: 'ATR length', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'Break buffer (xATR)', def: 0.25, min: 0, max: 3, step: 0.05 },
+        { key: 'lineMode', label: 'Line style', def: 'zigzag', options: [['zigzag', 'Zigzag (swing to swing)'], ['trail', 'Trailing stop']] }
+      ],
+      compute(c, o) {
+        const s = paStructure(c, o);
+        if (!s || !s.trendState || !s.trendState.length)
+          return [{ type: 'line', color: '#26a69a', lineWidth: 1, data: [] }];
+        let score = 0;
+        const data = [];
+        for (let k = 0; k < s.trendState.length; k++) {
+          const t = s.trendState[k];
+          score += (t != null ? t : 0);
+          if (c[k]) data.push({ time: c[k].time, value: score });
+        }
+        return [{ type: 'line', color: '#26a69a', lineWidth: 1, data }];
       }
     },
 
@@ -2949,9 +3173,7 @@
       id: 'vwap', name: 'VWAP', fullName: 'Volume Weighted Average Price', cat: 'Overlay', type: 'overlay',
       inputs: [
         { key: 'anchor', label: 'Anchor', def: 'trend', options: [['trend', 'Trend leg'], ['session', 'Session'], ['all', 'All data']] },
-        { key: 'pivotLen', label: 'Pivot bars', def: 5, min: 1, max: 200, step: 1 },
-        { key: 'straight', label: 'Straight line (above/below intact)', type: 'checkbox', def: true },
-        { key: 'straightLook', label: 'Straight lookback', def: 60, min: 5, max: 500, step: 1 }
+        { key: 'pivotLen', label: 'Pivot bars', def: 5, min: 1, max: 200, step: 1 }
       ],
       style: [
         { key: 'color', label: 'Color', def: '#ff9800' },
@@ -2989,7 +3211,6 @@
             const col = isCurrent ? o.color : fadeColor(o.color, 0.35);
             let data = [];
             sess.rows.forEach(i => data.push({ time: c[i].time, value: feed(i, sess) }));
-            if (o.straight !== false) data = anchoredStraightLine(data, o.straightLook);
             const series = { type: 'line', color: col, lineWidth: o.lineWidth, data };
             if (!isCurrent) series.noRead = true;
             out.push(series);
@@ -3063,7 +3284,6 @@
             data.push({ time: c[i].time, value: feed(i, st) });
           }
         }
-        if (o.straight !== false) data = anchoredStraightLine(data, o.straightLook);
         return [{ type: 'line', color: o.color, lineWidth: o.lineWidth, data }];
       }
     },
@@ -3623,7 +3843,7 @@
       }
     }
   };
-  const IND_LIST = Object.keys(IND).map(k => IND[k]);
+  const IND_LIST = Object.keys(IND).filter(k => !IND[k].hidden).map(k => IND[k]);
 
   /* ---------------- engine state ---------------- */
   let chart = null, candleSeries = null, volSeries = null, cw, ck;
@@ -4027,7 +4247,7 @@
        PCR consumer is deployed. */
     try {
       if (window.OITrend && window.OITrend.setDataMode) {
-        window.OITrend.setDataMode(indicators.some(i => i.def && (i.def.id === 'pcr' || i.def.id === 'pcrrail')));
+        window.OITrend.setDataMode(indicators.some(i => i.def && (i.def.id === 'pcr' || i.def.id === 'pcrrail' || i.def.id === 'iv')));
       }
     } catch (e) {}
 
@@ -4251,6 +4471,7 @@
       case 'autosr': return [['v0', 'Resistance'], ['v1', 'Support'], ['v2', 'Trend line']];
       case 'pastruct': return [['v0', 'Structure']];
       case 'pcr': return [['v0', 'PCR'], ['v1', 'EMA fast'], ['v2', 'EMA slow']];
+      case 'iv': return [['v0', 'IV'], ['v1', 'Delta'], ['v2', 'Vega']];
       case 'pcrrail': return [['v0', 'Resistance'], ['v1', 'Support'], ['v2', 'Max Pain'], ['v3', 'Exp High'], ['v4', 'Exp Low']];
       case 'projline': return [['v0', 'Trend line'], ['v1', 'Projection']];
       case 'wavefib': return [['v0', 'Wave legs']];

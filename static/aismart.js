@@ -181,11 +181,28 @@ window.createAISmartTrading = function (suffix) {
     { tok: 'SenkouA', id: 'ichimoku', valueKey: 'v2', settings: { tenkan: 9, kijun: 26, senkou: 52 }, name: 'Ichimoku Senkou A' },
     { tok: 'Keltner', id: 'keltner', valueKey: 'v1', settings: { length: 20, mult: 2 }, name: 'Keltner middle' },
     { tok: 'Donchian', id: 'donchian', valueKey: 'v1', settings: { length: 20 }, name: 'Donchian middle' },
-    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' },
-    { tok: 'SupplyDemand', id: 'supplydemand', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15, eqTol: 25 }, name: 'Supply Demand' }
+    { tok: 'TrendCore', id: 'vlcore', valueKey: 'v0', settings: { length: 31, atrLength: 38, gap: 1.85, confirm: 1, wickLen: 1, straightLine: true, useVolume: true }, name: 'Trend Core' }
   ];
   const OB_BULL_KEYS = OBR_LIST.map(d => 'bullObr' + d.tok);
   const OB_BEAR_KEYS = OBR_LIST.map(d => 'bearObr' + d.tok);
+  /* Straight Line Indicators (SL). A dedicated filter group of overlay engines
+     that each reduce to ONE directional line, so a row is a pure direction
+     mirror: Bullish list = the line is facing upward, Bearish list = facing
+     downward. Evaluated through the cached alignedSeries + dirFace path exactly
+     like the OBR rows (and released into the overall-direction vote when that
+     idea is ON). Most read their own continuous series; the zigzag-structure
+     overlays read a hidden per-candle trend-score companion (ewtrend/patrend)
+     because their visible zigzag is sparse. */
+  const SL_LIST = [
+    { tok: 'ElliottWave', id: 'ewtrend', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 6, minPct: 0.15, showLabels: true }, name: 'Elliott Wave Trend', text: 'Elliott wave line' },
+    { tok: 'SupplyDemand', id: 'ewtrend', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 4, minPct: 0.15 }, name: 'Supply Demand', text: 'Supply Demand line' },
+    { tok: 'PriceAction', id: 'patrend', valueKey: 'v0', settings: { pivotLen: 10, atrLen: 14, atrMult: 0.25 }, name: 'Price Action Trend', text: 'Price Action Trend line' },
+    { tok: 'ZigZag', id: 'zzline', valueKey: 'v1', settings: { atrPeriod: 14, atrMult: 6, minPct: 0.15, pivotLook: 8, showLine: true, fullSpan: true }, name: 'ZigZag Trendline', text: 'ZigZag Trendline' },
+    { tok: 'ComboMaster', id: 'trendmaster', valueKey: 'v1', settings: { atrPeriod: 14, atrMult: 6, minPct: 0.15, trendLook: 12, fullSpan: true }, name: 'Combo Master', text: 'Combo Master line' },
+    { tok: 'PaneConsensus', id: 'panemaster', valueKey: 'v0', settings: { rsiLength: 14, bbLength: 20, stochLength: 14, cciLength: 20, willrLength: 14, mfiLength: 14, atrPeriod: 14, smooth: 3, bullTh: 0.12, bearTh: 0.12, minSeg: 15, fitLook: 60, useRSI: true }, name: 'Pane Consensus Signal', text: 'Pane Consensus Signal line' }
+  ];
+  const SL_BULL_KEYS = SL_LIST.map(d => 'bullSl' + d.tok);
+  const SL_BEAR_KEYS = SL_LIST.map(d => 'bearSl' + d.tok);
   /* Overlay Meet Condition (level) rows: the candle close must be above the
      overlay line (Bullish list) / below it (Bearish list). Unlike the OBR
      direction toggles these are level-holds - active while the relationship
@@ -206,7 +223,8 @@ window.createAISmartTrading = function (suffix) {
     const ob = side === 'bull' ? OB_BULL_KEYS : OB_BEAR_KEYS;
     const mt = side === 'bull' ? MEET_BULL_KEYS : MEET_BEAR_KEYS;
     const pg = side === 'bull' ? PBG_BULL_KEYS : PBG_BEAR_KEYS;
-    return !!f && (pb.concat(ob, mt, pg)).some(k => !!f[k]);
+    const sl = side === 'bull' ? SL_BULL_KEYS : SL_BEAR_KEYS;
+    return !!f && (pb.concat(ob, mt, pg, sl)).some(k => !!f[k]);
   }
   /* Readable name of an Overlay Indicator Behaviour flag for filter logs. OBR
      rows are released direction-mirror rows: with the Overall idea ON each is
@@ -217,6 +235,13 @@ window.createAISmartTrading = function (suffix) {
     const d = OBR_LIST.filter(x => x.tok === tok)[0];
     const nm = d ? d.name : tok;
     return (/^bull/.test(k) ? 'Detect bullish trend (' : 'Detect bearish trend (') + nm + ' line)';
+  }
+  /* Readable name of a Straight Line Indicator (SL) flag for filter logs. */
+  function slName(k) {
+    const tok = k.replace(/^(bull|bear)Sl/, '');
+    const d = SL_LIST.filter(x => x.tok === tok)[0];
+    const nm = d ? (d.text || d.name) : tok;
+    return (/^bull/.test(k) ? nm + ' bullish trend' : nm + ' bearish trend');
   }
   /* Readable name of an Overlay Meet Condition (level) flag for filter logs. */
   function ovlMeetName(k) {
@@ -271,7 +296,7 @@ window.createAISmartTrading = function (suffix) {
     const nm = d ? d.name : raw;
     return nm + ' main-vs-signal gap ' + (/^bull/.test(k) ? 'holding/widening upward (level)' : 'holding/widening downward (level)');
   }
-  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullEma1_9', 'bearEma1_9', 'bullEma1_21', 'bearEma1_21', 'bullEma1_35', 'bearEma1_35', 'bullEma1_50', 'bearEma1_50', 'bullEma1_100', 'bearEma1_100', 'bullEma1_200', 'bearEma1_200', 'bullEma1_300', 'bearEma1_300', 'bullEmaTrend9', 'bearEmaTrend9', 'bullEmaTrend21', 'bearEmaTrend21', 'bullEmaTrend35', 'bearEmaTrend35', 'bullEmaTrend50', 'bearEmaTrend50', 'bullEmaTrend100', 'bearEmaTrend100', 'bullEmaTrend200', 'bearEmaTrend200', 'bullEmaTrend300', 'bearEmaTrend300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'].concat(PB_BULL_KEYS, PB_BEAR_KEYS, OB_BULL_KEYS, OB_BEAR_KEYS, MEET_BULL_KEYS, MEET_BEAR_KEYS, PBG_BULL_KEYS, PBG_BEAR_KEYS);
+  const FILTER_EXTRA_KEYS = ['bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bullGreenCandle', 'bearRedCandle', 'paneCrossUp', 'paneCrossDown', 'paneIncUpAll', 'paneIncDownAll', 'bullBbwInc', 'bearBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bullSmf', 'bearSmf', 'bullVl', 'bearVl', 'bullAsr', 'bearAsr', 'bullOit', 'bearOit', 'bullEma9_21', 'bearEma9_21', 'bullEma21_35', 'bearEma21_35', 'bullEma35_50', 'bearEma35_50', 'bullEma50_100', 'bearEma50_100', 'bullEma100_200', 'bearEma100_200', 'bullEma200_300', 'bearEma200_300', 'bullEma1_9', 'bearEma1_9', 'bullEma1_21', 'bearEma1_21', 'bullEma1_35', 'bearEma1_35', 'bullEma1_50', 'bearEma1_50', 'bullEma1_100', 'bearEma1_100', 'bullEma1_200', 'bearEma1_200', 'bullEma1_300', 'bearEma1_300', 'bullEmaTrend9', 'bearEmaTrend9', 'bullEmaTrend21', 'bearEmaTrend21', 'bullEmaTrend35', 'bearEmaTrend35', 'bullEmaTrend50', 'bearEmaTrend50', 'bullEmaTrend100', 'bearEmaTrend100', 'bullEmaTrend200', 'bearEmaTrend200', 'bullEmaTrend300', 'bearEmaTrend300', 'bullSt10_1_2', 'bearSt10_1_2', 'bullSt10_2_3', 'bearSt10_2_3', 'bullSt1CloseCrossAbove', 'bearSt1CloseCrossBelow', 'bullVwapCloseCrossAbove', 'bearVwapCloseCrossBelow', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bullMeetCloseSt', 'bearMeetCloseSt', 'bullMeetCloseVwap', 'bearMeetCloseVwap', 'bullMeetPaneCross', 'bearMeetPaneCross', 'bullMeetCross', 'bearMeetCross', 'bullMeetCloseBb', 'bearMeetCloseBb', 'bullMeetClosePc', 'bearMeetClosePc', 'bullMeetVl', 'bearMeetVl'].concat(PB_BULL_KEYS, PB_BEAR_KEYS, OB_BULL_KEYS, OB_BEAR_KEYS, MEET_BULL_KEYS, MEET_BEAR_KEYS, PBG_BULL_KEYS, PBG_BEAR_KEYS, SL_BULL_KEYS, SL_BEAR_KEYS);
   /* Armed-entry gate flags: NOT indicator filters. Each toggles whether that
      side (Bullish / Bearish) of the indicator-filter lists only allows an entry
      on the FIRST bar the side's whole enabled filter set simultaneously holds
@@ -282,8 +307,8 @@ window.createAISmartTrading = function (suffix) {
      sub-options. Used to strip the opposite-direction filters before they are
      appended to a running strategy (a bullish strategy never receives bearish
      filter gates and vice versa). */
-  const BULL_FILTER_KEYS = ['incUp', 'crossUp', 'gapUp', 'incUpAll', 'gtUp', 'ltUp', 'bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bullGreenCandle', 'paneCrossUp', 'paneIncUpAll', 'bullBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bullSmf', 'bullVl', 'bullAsr', 'bullOit', 'bullEma9_21', 'bullEma21_35', 'bullEma35_50', 'bullEma50_100', 'bullEma100_200', 'bullEma200_300', 'bullEma1_9', 'bullEma1_21', 'bullEma1_35', 'bullEma1_50', 'bullEma1_100', 'bullEma1_200', 'bullEma1_300', 'bullEmaTrend9', 'bullEmaTrend21', 'bullEmaTrend35', 'bullEmaTrend50', 'bullEmaTrend100', 'bullEmaTrend200', 'bullEmaTrend300', 'bullSt10_1_2', 'bullSt10_2_3', 'bullSt1CloseCrossAbove', 'bullVwapCloseCrossAbove', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bullMeetCloseSt', 'bullMeetCloseVwap', 'bullMeetPaneCross', 'bullMeetCross', 'bullMeetCloseBb', 'bullMeetClosePc', 'bullMeetVl'].concat(PB_BULL_KEYS, OB_BULL_KEYS, MEET_BULL_KEYS, PBG_BULL_KEYS);
-  const BEAR_FILTER_KEYS = ['incDown', 'crossDown', 'gapDown', 'incDownAll', 'gtDown', 'ltDown', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bearRedCandle', 'paneCrossDown', 'paneIncDownAll', 'bearBbwInc', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bearSmf', 'bearVl', 'bearAsr', 'bearOit', 'bearEma9_21', 'bearEma21_35', 'bearEma35_50', 'bearEma50_100', 'bearEma100_200', 'bearEma200_300', 'bearEma1_9', 'bearEma1_21', 'bearEma1_35', 'bearEma1_50', 'bearEma1_100', 'bearEma1_200', 'bearEma1_300', 'bearEmaTrend9', 'bearEmaTrend21', 'bearEmaTrend35', 'bearEmaTrend50', 'bearEmaTrend100', 'bearEmaTrend200', 'bearEmaTrend300', 'bearSt10_1_2', 'bearSt10_2_3', 'bearSt1CloseCrossBelow', 'bearVwapCloseCrossBelow', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bearMeetCloseSt', 'bearMeetCloseVwap', 'bearMeetPaneCross', 'bearMeetCross', 'bearMeetCloseBb', 'bearMeetClosePc', 'bearMeetVl'].concat(PB_BEAR_KEYS, OB_BEAR_KEYS, MEET_BEAR_KEYS, PBG_BEAR_KEYS);
+  const BULL_FILTER_KEYS = ['incUp', 'crossUp', 'gapUp', 'incUpAll', 'gtUp', 'ltUp', 'bullVolUp', 'bullVolDown', 'bullFakeBreakout', 'bullReversal', 'bullGreenCandle', 'paneCrossUp', 'paneIncUpAll', 'bullBbwInc', 'bullBbCrossBelow', 'bullBbCrossAbove', 'bullPcCrossBelow', 'bullPcCrossAbove', 'bullSmf', 'bullVl', 'bullAsr', 'bullOit', 'bullEma9_21', 'bullEma21_35', 'bullEma35_50', 'bullEma50_100', 'bullEma100_200', 'bullEma200_300', 'bullEma1_9', 'bullEma1_21', 'bullEma1_35', 'bullEma1_50', 'bullEma1_100', 'bullEma1_200', 'bullEma1_300', 'bullEmaTrend9', 'bullEmaTrend21', 'bullEmaTrend35', 'bullEmaTrend50', 'bullEmaTrend100', 'bullEmaTrend200', 'bullEmaTrend300', 'bullSt10_1_2', 'bullSt10_2_3', 'bullSt1CloseCrossAbove', 'bullVwapCloseCrossAbove', 'bullMeetEma9_21', 'bullMeetEma21_35', 'bullMeetEma35_50', 'bullMeetEma50_100', 'bullMeetEma100_200', 'bullMeetEma200_300', 'bullMeetSt10_1_2', 'bullMeetSt10_2_3', 'bullMeetCloseSt', 'bullMeetCloseVwap', 'bullMeetPaneCross', 'bullMeetCross', 'bullMeetCloseBb', 'bullMeetClosePc', 'bullMeetVl'].concat(PB_BULL_KEYS, OB_BULL_KEYS, MEET_BULL_KEYS, PBG_BULL_KEYS, SL_BULL_KEYS);
+  const BEAR_FILTER_KEYS = ['incDown', 'crossDown', 'gapDown', 'incDownAll', 'gtDown', 'ltDown', 'bearVolUp', 'bearVolDown', 'bearFakeBreakout', 'bearReversal', 'bearRedCandle', 'paneCrossDown', 'paneIncDownAll', 'bearBbwInc', 'bearBbCrossBelow', 'bearBbCrossAbove', 'bearPcCrossBelow', 'bearPcCrossAbove', 'bearSmf', 'bearVl', 'bearAsr', 'bearOit', 'bearEma9_21', 'bearEma21_35', 'bearEma35_50', 'bearEma50_100', 'bearEma100_200', 'bearEma200_300', 'bearEma1_9', 'bearEma1_21', 'bearEma1_35', 'bearEma1_50', 'bearEma1_100', 'bearEma1_200', 'bearEma1_300', 'bearEmaTrend9', 'bearEmaTrend21', 'bearEmaTrend35', 'bearEmaTrend50', 'bearEmaTrend100', 'bearEmaTrend200', 'bearEmaTrend300', 'bearSt10_1_2', 'bearSt10_2_3', 'bearSt1CloseCrossBelow', 'bearVwapCloseCrossBelow', 'bearMeetEma9_21', 'bearMeetEma21_35', 'bearMeetEma35_50', 'bearMeetEma50_100', 'bearMeetEma100_200', 'bearMeetEma200_300', 'bearMeetSt10_1_2', 'bearMeetSt10_2_3', 'bearMeetCloseSt', 'bearMeetCloseVwap', 'bearMeetPaneCross', 'bearMeetCross', 'bearMeetCloseBb', 'bearMeetClosePc', 'bearMeetVl'].concat(PB_BEAR_KEYS, OB_BEAR_KEYS, MEET_BEAR_KEYS, PBG_BEAR_KEYS, SL_BEAR_KEYS);
   const VALID_MODES = ['above', 'below', 'both_atm', 'above_atm', 'below_atm', 'both_atm_inc', 'atm'];
   const VALID_TYPES = ['both', 'CE', 'PE'];
   const ALL_TIMEFRAMES = ['1min', '5min'];
@@ -1038,11 +1063,16 @@ window.createAISmartTrading = function (suffix) {
        indicator's own direction is ANDed into the filter; the candle volume
        companion is not used (volume-trend confirmation is removed from AST). */
     const vlDef = { length: 14, signalLen: 9, volLen: 20 };
+    /* Direction row reads the underlying continuous VWMA (straight:false) so the
+       last-two-candles dirFace gate has real adjacent samples; the display
+       "straight intersecting" bend-culling otherwise leaves the aligned series
+       almost all nulls, which would make the row permanently SKIP. */
+    const vlTrendDef = { length: 14, signalLen: 9, volLen: 20, straight: false };
     if (f.bullish && f.bullVl) {
-      out.push(cond({ indId: 'vl', indSettings: vlDef, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
+      out.push(cond({ indId: 'vl', indSettings: vlTrendDef, valueKey: 'v0', logic: 'incUp', cmpType: 'number' }));
     }
     if (f.bearish && f.bearVl) {
-      out.push(cond({ indId: 'vl', indSettings: vlDef, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
+      out.push(cond({ indId: 'vl', indSettings: vlTrendDef, valueKey: 'v0', logic: 'incDown', cmpType: 'number' }));
     }
     /* Volume Line level gate: the Volume Line holds above/below its own Signal
        line (vl v0 vs vl v1 as a level, not a fresh cross - mirrors the SMF gate
@@ -1340,6 +1370,19 @@ window.createAISmartTrading = function (suffix) {
       const tgt = dropVotes || out;
       if (f.bullish && f['bullObr' + d.tok]) tgt.push(bullC);
       if (f.bearish && f['bearObr' + d.tok]) tgt.push(bearC);
+    });
+    /* Straight Line Indicators (SL): same single-line direction-mirror semantics
+       as the OBR rows above. Each engine is asked only for the direction its line
+       is facing (incUp / incDown is the ultrafast last-two-points dirFace read),
+       so a bullish row fires while the line points up and a bearish row while it
+       points down. With the Overall idea ON the row feeds ONE direction vote
+       instead of being its own strict gate. */
+    SL_LIST.forEach(d => {
+      const bullC = cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incUp', cmpType: 'number' });
+      const bearC = cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'incDown', cmpType: 'number' });
+      const tgt = dropVotes || out;
+      if (f.bullish && f['bullSl' + d.tok]) tgt.push(bullC);
+      if (f.bearish && f['bearSl' + d.tok]) tgt.push(bearC);
     });
     MEET_OVL_LIST.forEach(d => {
       if (f['bullMeetOvl' + d.tok]) out.push(cond({ indId: d.id, indSettings: d.settings, valueKey: d.valueKey, logic: 'lt', cmpType: 'candle', candleKey: 'close', _emaClose: true }));
@@ -8006,6 +8049,8 @@ window.createAISmartTrading = function (suffix) {
     OB_BEAR_KEYS.forEach(k => { if (f.bearish && f[k]) out.push('Bearish: ' + obrName(k)); });
     MEET_BULL_KEYS.forEach(k => { if (f.bullish && f[k]) out.push('Bullish: ' + ovlMeetName(k)); });
     MEET_BEAR_KEYS.forEach(k => { if (f.bearish && f[k]) out.push('Bearish: ' + ovlMeetName(k)); });
+    SL_BULL_KEYS.forEach(k => { if (f.bullish && f[k]) out.push('Bullish: ' + slName(k)); });
+    SL_BEAR_KEYS.forEach(k => { if (f.bearish && f[k]) out.push('Bearish: ' + slName(k)); });
     return out;
   }
 

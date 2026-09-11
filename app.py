@@ -1067,6 +1067,10 @@ def _bs_norm_cdf(x):
     return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
 
 
+def _bs_norm_pdf(x):
+    return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
+
+
 def _bs_price(S, K, T, r, sigma, is_call):
     """Black-Scholes option price."""
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
@@ -1102,6 +1106,26 @@ def _implied_vol(S, K, T, r, market_price, is_call):
     return round(0.5 * (lo + hi), 4)
 
 
+def _bs_d1(S, K, T, r, sigma):
+    root = sigma * math.sqrt(T)
+    return (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / root
+
+
+def _bs_delta(S, K, T, r, sigma, is_call):
+    """Black-Scholes delta (call in [0,1], put in [-1,0])."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    nd1 = _bs_norm_cdf(_bs_d1(S, K, T, r, sigma))
+    return nd1 if is_call else (nd1 - 1.0)
+
+
+def _bs_vega(S, K, T, r, sigma):
+    """Black-Scholes vega (per 1.00 change in volatility)."""
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return 0.0
+    return S * _bs_norm_pdf(_bs_d1(S, K, T, r, sigma)) * math.sqrt(T)
+
+
 def _ttm_ist(expiry_date):
     """Years to expiry (expiry-day 15:30 IST) from IST now."""
     try:
@@ -1113,8 +1137,9 @@ def _ttm_ist(expiry_date):
         return None
 
 
-def _opt_iv(key, ltp):
-    """Live IV for an option strike quote key, or None when not resolvable."""
+def _opt_greeks(key, ltp):
+    """Live IV + delta + vega for an option strike quote key, or None when the
+    option's spot/strike/expiry is not resolvable."""
     if ":" in key:
         return None
     try:
@@ -1131,8 +1156,16 @@ def _opt_iv(key, ltp):
     ttm = _ttm_ist(meta.get("expiry"))
     if not ttm:
         return None
-    return _implied_vol(spot, meta.get("strike"), ttm, _BS_RATE,
-                        float(ltp), meta.get("type") == "CE")
+    K = meta.get("strike")
+    is_call = meta.get("type") == "CE"
+    iv = _implied_vol(spot, K, ttm, _BS_RATE, float(ltp), is_call)
+    if iv is None:
+        return None
+    return {
+        "iv": iv,
+        "delta": round(_bs_delta(spot, K, ttm, _BS_RATE, iv, is_call), 4),
+        "vega": round(_bs_vega(spot, K, ttm, _BS_RATE, iv), 4),
+    }
 
 
 def _ws_apply_ltp(key, ltp):
@@ -1172,8 +1205,8 @@ def _ws_apply_ltp(key, ltp):
                 entry["change"] = 0
                 entry["close"] = 0
                 entry["change_pct"] = 0
-        # Preserve OI / Volume / Bid-Ask / IV so quote pushes keep the full row.
-        for field in ("oi", "volume", "bid", "ask", "iv"):
+        # Preserve OI / Volume / Bid-Ask / IV / greeks so pushes keep the row.
+        for field in ("oi", "volume", "bid", "ask", "iv", "delta", "vega"):
             if field in existing:
                 entry[field] = existing[field]
         # Keep the underlying spot fresh for index options so per-tick IV uses
@@ -1186,15 +1219,17 @@ def _ws_apply_ltp(key, ltp):
                         _OPT_SPOT[pfx] = ltp
             except (TypeError, ValueError, IndexError):
                 pass
-        # Infer IV from the fresh premium for option strikes (skip non-options).
-        # Throttled to ~4/sec per strike: IV moves slowly and the inversion is
-        # heavier than a plain cache write, so the tick path stays light.
+        # Infer IV + greeks from the fresh premium for option strikes (skip
+        # non-options). Throttled to ~4/sec per strike: the inversion is heavier
+        # than a plain cache write, so the tick path stays light.
         now_t = time.time()
         if not key.startswith("IDX_I:") and now_t - _OPT_IV_AT.get(key, 0.0) >= 0.25:
             _OPT_IV_AT[key] = now_t
-            iv = _opt_iv(key, ltp)
-            if iv is not None:
-                entry["iv"] = iv
+            g = _opt_greeks(key, ltp)
+            if g is not None:
+                entry["iv"] = g["iv"]
+                entry["delta"] = g["delta"]
+                entry["vega"] = g["vega"]
         entry["at"] = now_t
         entry["live"] = 1
         _QUOTE_CACHE[key] = entry
@@ -3532,6 +3567,16 @@ def _seed_chain_quotes(records):
             iv = r.get(f"{side} IV")
             if iv not in (None, ""):
                 entry["iv"] = float(iv or 0)
+            # Derive delta/vega (and a fresher IV) from the seeded premium so
+            # the IV indicator can plot greeks even before live ticks arrive.
+            try:
+                g = _opt_greeks(str(sid), ltp)
+                if g is not None:
+                    entry["iv"] = g["iv"]
+                    entry["delta"] = g["delta"]
+                    entry["vega"] = g["vega"]
+            except Exception:
+                pass
             try:
                 bid = float(r.get(f"{side} Bid") or 0)
                 ask = float(r.get(f"{side} Ask") or 0)

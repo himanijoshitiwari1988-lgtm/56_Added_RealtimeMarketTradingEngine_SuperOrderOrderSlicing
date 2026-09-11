@@ -75,6 +75,28 @@
     return out;
   }
 
+  /* Standard-normal cdf/pdf (Abramowitz-Stegun 7.1.26 erf approximation, same
+     spirit as the server-side Black-Scholes so the client ATM greeks track it). */
+  function normCdf(x) {
+    const t = 1 / (1 + 0.2316419 * Math.abs(x));
+    const d = 0.3989422804014327 * Math.exp(-x * x / 2);
+    const p = d * t * (0.319381530 + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429))));
+    return x >= 0 ? 1 - p : p;
+  }
+  function normPdf(x) {
+    return 0.3989422804014327 * Math.exp(-x * x / 2);
+  }
+  /* ATM greeks from spot / strike / IV(percent) / days-to-expiry. Returns
+     {delta, vega} for the ATM CALL (vega is call/put symmetric). */
+  function atmGreeks(spot, strike, ivPct, dteDays) {
+    const S = +spot, K = +strike, sig = (+ivPct) / 100;
+    const T = Math.max(+dteDays || 7, 0.5) / 365;
+    if (!(S > 0 && K > 0 && sig > 0 && T > 0)) return null;
+    const root = sig * Math.sqrt(T);
+    const d1 = (Math.log(S / K) + (0.06 + 0.5 * sig * sig) * T) / root;
+    return { delta: normCdf(d1), vega: S * normPdf(d1) * Math.sqrt(T) };
+  }
+
   /* Chain snapshot -> level geometry (pure; row keys match /api/option_chain). */
   function levelData(records, spot, opts) {
     opts = opts || {};
@@ -84,6 +106,7 @@
       rows: 0, pcr: null, pcrChg: null, totalCeOi: 0, totalPeOi: 0,
       totalCeChg: 0, totalPeChg: 0, maxPain: null, walls: [], atm: null,
       expMove: null, expHi: null, expLo: null, iv: null, spot: spot || null,
+      delta: null, vega: null,
       error: null
     };
     if (!records || !records.length) return res;
@@ -129,10 +152,12 @@
     if (spot > 0 && atmRow) {
       res.atm = atmRow;
       res.iv = ivN ? ivSum / ivN : (atmRow.ceIv + atmRow.peIv) / 2 || null;
+      const dte = opts.dteDays != null ? opts.dteDays : 7;
       let move = null;
       if (res.iv) {
-        const dte = opts.dteDays != null ? opts.dteDays : 7;
         move = spot * (res.iv / 100) * Math.sqrt(Math.max(dte, 0.5) / 365);
+        const g = atmGreeks(spot, atmRow.strike, res.iv, dte);
+        if (g) { res.delta = g.delta; res.vega = g.vega; }
       }
       if (!(move > 0)) {
         const st = (atmRow.ceLtp || 0) + (atmRow.peLtp || 0);
@@ -1364,6 +1389,9 @@
        OI-wall rails overlay). Empty until a chain has been fetched. */
     snapshot: () => _lastLvl ? {
       pcr: _lastLvl.pcr, pcrChg: _lastLvl.pcrChg, spot: _lastLvl.spot,
+      iv: _lastLvl.iv != null ? _lastLvl.iv : null,
+      delta: _lastLvl.delta != null ? _lastLvl.delta : null,
+      vega: _lastLvl.vega != null ? _lastLvl.vega : null,
       resWall: topWall(_lastLvl, 'res'), supWall: topWall(_lastLvl, 'sup'),
       maxPain: _lastLvl.maxPain != null ? _lastLvl.maxPain : null,
       expHi: _lastLvl.expHi != null ? _lastLvl.expHi : null, expLo: _lastLvl.expLo != null ? _lastLvl.expLo : null,

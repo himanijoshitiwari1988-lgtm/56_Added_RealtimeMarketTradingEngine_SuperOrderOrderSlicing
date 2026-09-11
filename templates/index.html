@@ -1414,7 +1414,6 @@ window.IST12 = (function () {
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneIncUpAll" onchange="AISmartTrading.onFiltersInput()"> Detect bullish trend (pane lines, all)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullBbwInc" onchange="AISmartTrading.onFiltersInput()"> BBW increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullSmf" onchange="AISmartTrading.onFiltersInput()"> Smart Money Flow bullish (SMF above signal)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line rising</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullAsr" onchange="AISmartTrading.onFiltersInput()"> Support gap widening (price rising away from support)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) direction = one overall-trend vote when the Overall Bullish/Bearish idea is ON (strict gate when OFF)"><input type="checkbox" id="astFilterBullOit" onchange="AISmartTrading.onFiltersInput()"> Detect bullish trend (OI Trend)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBullBbCrossAbove" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed above BB middle band (upper+lower expanding, overall trend vote: BB middle)</label>
@@ -1503,7 +1502,6 @@ window.IST12 = (function () {
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterPaneIncDownAll" onchange="AISmartTrading.onFiltersInput()"> Detect bearish trend (pane lines, all)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearBbwInc" onchange="AISmartTrading.onFiltersInput()"> BBW increasing</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearSmf" onchange="AISmartTrading.onFiltersInput()"> Smart Money Flow bearish (SMF below signal)</label>
-                <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearVl" onchange="AISmartTrading.onFiltersInput()"> Volume Line falling</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearAsr" onchange="AISmartTrading.onFiltersInput()"> Resistance gap widening (price falling away below resistance)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px" title="OI Trend (as shown on the Candlestick Chart) direction = one overall-trend vote when the Overall Bullish/Bearish idea is ON (strict gate when OFF)"><input type="checkbox" id="astFilterBearOit" onchange="AISmartTrading.onFiltersInput()"> Detect bearish trend (OI Trend)</label>
                 <label style="font-size:9px;color:#ccc;display:flex;align-items:center;gap:3px"><input type="checkbox" id="astFilterBearBbCrossBelow" onchange="AISmartTrading.onFiltersInput()"> Close (EMA1) crossed below BB middle band (upper+lower expanding, overall trend vote: BB middle)</label>
@@ -2827,7 +2825,7 @@ window.IST12 = (function () {
 
 <script src="/static/vlcore.js?v=8"></script>
 <script src="/static/rsidiv_core.js?v=1"></script>
-<script src="/static/indicators.js?v=101"></script>
+<script src="/static/indicators.js?v=108"></script>
 <script src="/static/oitrend.js?v=10"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
@@ -6414,7 +6412,7 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
  <script src="/static/autoexperiment.v13.js?v=180"></script>
 <script src="/static/indextrend.js?v=4"></script>
 <script src="/static/simulator.js?v=3"></script>
-  <script src="/static/aismart.js?v=247"></script>
+  <script src="/static/aismart.js?v=249"></script>
 <script src="/static/paperrun.js?v=26"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
@@ -6476,7 +6474,7 @@ window.__addNewIndicatorFilterRows = function () {
     var research = byText(divs, 'Research stream');
     var pane = [['Cmf', 'CMF'], ['Cci', 'CCI'], ['Sqzmom', 'Squeeze Mom.'], ['Elderforce', 'Force Index']];
     var pbg = [['Macd', 'MACD'], ['Ppo', 'PPO'], ['Smiio', 'SMI'], ['Tsi', 'TSI'], ['Stochrsi', 'Stoch RSI'], ['Smf', 'SMF'], ['Rsi', 'RSI'], ['Obv', 'OBV'], ['Fisher', 'Fisher'], ['Aroon', 'Aroon'], ['Vortex', 'Vortex'], ['Adx', 'ADX']];
-    var obr = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['SenkouA', 'Ichimoku Senkou A'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core'], ['SupplyDemand', 'Supply Demand']];
+    var obr = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['SenkouA', 'Ichimoku Senkou A'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
     var meet = [['Hma', 'HMA'], ['Tenkan', 'Ichimoku Tenkan-sen'], ['Kijun', 'Ichimoku Kijun-sen'], ['Keltner', 'Keltner middle'], ['Donchian', 'Donchian middle'], ['TrendCore', 'Trend Core']];
     if (g2) {
       var frag = document.createDocumentFragment();
@@ -6538,6 +6536,30 @@ window.__addNewIndicatorFilterRows = function () {
         frag2.appendChild(makeRow(prefix + 'Filter' + cap + 'Obr' + p[0], handler, lbl));
       });
       research.parentNode.insertBefore(frag2, research);
+      /* Straight Line Indicators: one dedicated section of overlay engines that
+         each reduce to a single directional line (bullish list = line facing up,
+         bearish list = line facing down). AST only. Includes the pre-existing
+         Volume Line volume-trend row (moved here) plus the structure/consensus
+         overlays. */
+      if (prefix === 'ast') {
+        var frag3 = document.createDocumentFragment();
+        frag3.appendChild(makeHead('Straight Line Indicators'));
+        var sl = [
+          ['ElliottWave', 'Elliott wave line'],
+          ['SupplyDemand', 'Supply Demand line'],
+          ['PriceAction', 'Price Action Trend line'],
+          ['ZigZag', 'ZigZag Trendline'],
+          ['ComboMaster', 'Combo Master line'],
+          ['PaneConsensus', 'Pane Consensus Signal line']
+        ];
+        sl.forEach(function (p) {
+          frag3.appendChild(makeRow('astFilter' + cap + 'Sl' + p[0], handler,
+            p[1] + (side === 'Bullish' ? ' bullish trend' : ' bearish trend')));
+        });
+        frag3.appendChild(makeRow('astFilter' + cap + 'Vl', handler,
+          side === 'Bullish' ? 'Volume line bullish trend' : 'Volume line bearish trend'));
+        research.parentNode.insertBefore(frag3, research);
+      }
     }
     content.setAttribute('data-aiRows', '1');
   }
