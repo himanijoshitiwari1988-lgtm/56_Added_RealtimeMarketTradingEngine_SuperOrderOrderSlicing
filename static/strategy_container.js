@@ -48,6 +48,16 @@ window.createStrategyContainer = function () {
       const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
       if (s) {
         const st = Object.assign(defaultStore(), s);
+        /* Heal ledger rows corrupted by the premium-chart fallback (an option
+           priced off the underlying's candles) using the shared verified-exit
+           repair, and persist the corrected ledger. */
+        if (Array.isArray(st.ledger)) {
+          try {
+            if (window.PaperScaleFix && window.PaperScaleFix.repairTrades && window.PaperScaleFix.repairTrades(st.ledger)) {
+              localStorage.setItem(STORE_KEY, JSON.stringify(st));
+            }
+          } catch (e) {}
+        }
         if (Array.isArray(st.strategies) && st.strategies.length > 1) {
           const deduped = dedupeStrategies(st.strategies);
           if (deduped.length !== st.strategies.length) {

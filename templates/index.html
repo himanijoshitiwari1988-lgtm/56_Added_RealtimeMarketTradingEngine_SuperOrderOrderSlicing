@@ -642,11 +642,13 @@ window.IST12 = (function () {
     <div id="content">
       <div class="tab-bar">
         <button class="tab-btn active" data-tab="chart" onclick="switchTab('chart', this)">Candlestick Chart</button>
+        <button class="tab-btn" data-tab="realtime" onclick="switchTab('realtime', this)" title="Realtime Trading Engine - AI Smart Trading engine duplicate that executes REAL Dhan orders (no paper trades)">Realtime Trading Engine</button>
         <button class="tab-btn" data-tab="optionchain" onclick="switchTab('optionchain', this)">Option Chain</button>
         <button class="tab-btn" data-tab="strategies" onclick="switchTab('strategies', this)">Strategies</button>
         <button class="tab-btn" data-tab="monitor" onclick="switchTab('monitor', this)">Strategy Monitor</button>
         <button class="tab-btn" data-tab="papertrade" onclick="switchTab('papertrade', this)">Paper Trade</button>
         <button class="tab-btn" data-tab="tradestats" onclick="switchTab('tradestats', this)" title="Executed-trades report across every paper engine — win rate, P&L, charges, max drawdown, charts & best trading hours">Trade Stats</button>
+        <button class="tab-btn" data-tab="rtstats" onclick="switchTab('rtstats', this)" title="Realtime Market Trade Stats — executed-trades report for the Realtime Trading Engine (real orders; never mixes with paper)">Realtime Market Trade Stats</button>
         <button class="tab-btn" data-tab="account" onclick="switchTab('account', this);loadAccount()">Account</button>
         <button class="tab-btn" data-tab="autoexperiment" onclick="switchTab('autoexperiment', this)">Auto Experiment</button>
         <button class="tab-btn" data-tab="indextrend" onclick="switchTab('indextrend', this)">Index Trend</button>
@@ -1755,6 +1757,7 @@ window.IST12 = (function () {
           <div id="ptCgStatus" style="font-size:9px;color:#888;padding:2px 2px 0"></div>
         </div>
       </div>
+      <div class="tab-content" id="tab-realtime"></div>
       <div class="tab-content" id="tab-tradestats">
         <style>
           .ts-wrap{display:flex;flex-direction:column;gap:8px;padding:10px;overflow-y:auto;min-height:0;flex:1}
@@ -1879,6 +1882,7 @@ window.IST12 = (function () {
           </div>
         </div>
       </div>
+      <div class="tab-content" id="tab-rtstats"></div>
       <div class="tab-content" id="tab-autoexperiment">
         <div class="monitor-toolbar">
           <div class="monitor-toolbar-title">Auto Strategy Experiment Engine</div>
@@ -2825,8 +2829,8 @@ window.IST12 = (function () {
 
 <script src="/static/vlcore.js?v=8"></script>
 <script src="/static/rsidiv_core.js?v=1"></script>
-<script src="/static/indicators.js?v=108"></script>
-<script src="/static/oitrend.js?v=10"></script>
+  <script src="/static/indicators.js?v=111"></script>
+<script src="/static/oitrend.js?v=12"></script>
 <script>
 let selectedSymbol = {id:13,exch:"IDX_I",inst:"INDEX",name:"NIFTY 50",ocId:13,ocExch:"IDX_I"};
 
@@ -3407,6 +3411,12 @@ function switchTab(t, el){
     if(typeof PaperTrade !== "undefined" && typeof PaperTrade.onTabHide === "function") PaperTrade.onTabHide();
     if(typeof AISmartTrading !== "undefined" && typeof AISmartTrading.onTabHide === "function") AISmartTrading.onTabHide();
   }
+  /* Realtime Trading Engine: pause its AI Smart instance when leaving. */
+  if(prevTab === "realtime" && prevTab !== t){
+    window._paperActiveEngine = prevTab;
+    if(typeof AISmartTrading !== "undefined" && typeof AISmartTrading.onTabHide === "function") AISmartTrading.onTabHide();
+    if(window.RealtimeRun && typeof RealtimeRun.onHide === "function") RealtimeRun.onHide();
+  }
   /* Switching AWAY from an AE tab: same for the AE facade. */
   if(isAeTab(prevTab) && prevTab !== t){
     window._aeActiveEngine = prevTab;
@@ -3419,6 +3429,11 @@ function switchTab(t, el){
   if(prevTab==="simulator" && prevTab !== t){ if(typeof Simulator !== "undefined" && Simulator.onHide) Simulator.onHide(); }
   if(t==="backup"){ if(window.BackupSys && typeof BackupSys.render === "function"){ try{ BackupSys.render(); }catch(e){} } }
   if(t==="tradestats"){ if(window.TradeStats && typeof TradeStats.onShow === "function"){ try{ TradeStats.onShow(); }catch(e){} } }
+  if(t==="rtstats"){
+    if(window.RealtimeStatsTab && RealtimeStatsTab.build) RealtimeStatsTab.build();
+    if(window.RealtimeStats && typeof RealtimeStats.onShow === "function"){ try{ RealtimeStats.onShow(); }catch(e){} }
+  }
+  if(prevTab==="rtstats" && prevTab !== t){ if(window.RealtimeStats && typeof RealtimeStats.onHide === "function"){ try{ RealtimeStats.onHide(); }catch(e){} } }
   if(t==="chart"){
     if(IndChart.hasChart()){ IndChart.resize(); }
     else { loadChart(); }
@@ -3454,6 +3469,14 @@ function switchTab(t, el){
   if(isAeTab(t)){
     window._aeActiveEngine = t;
     if(typeof AutoExperiment !== "undefined" && typeof AutoExperiment.onTabShow === "function") AutoExperiment.onTabShow();
+  }
+  /* Switching TO the Realtime Trading Engine: build its duplicated AST UI once,
+     route the AI Smart facade to its real (non-paper) instance and resume it. */
+  if(t === "realtime"){
+    if(window.RealtimeTab && RealtimeTab.build) RealtimeTab.build();
+    window._paperActiveEngine = "realtime";
+    if(typeof AISmartTrading !== "undefined" && typeof AISmartTrading.onTabShow === "function") AISmartTrading.onTabShow();
+    if(window.RealtimeRun && typeof RealtimeRun.onShow === "function") RealtimeRun.onShow();
   }
   if(t==="indextrend" && window.IndexTrend && IndexTrend.onTabShow){
     IndexTrend.onTabShow();
@@ -3886,6 +3909,71 @@ function tradeChartPrice(pos){
   return best;
 }
 
+/* Highest high (BUY) / lowest low (SELL) of every candle for a position's
+   symbol from its entry candle onward. Option premiums tick sparsely and their
+   quote can be evicted/missed entirely, so the engine's live-tick peak scan can
+   step over the exact spike a trade shows on the chart. Folding these candle
+   extremes into the peak lets the trailing SL arm off the SAME candles the
+   chart draws, so a trade that reached profit can never fall back and get cut
+   by its loss-making initial stop. Returns { high, low } or null. */
+function positionExtremeSince(p){
+  if(!p) return null;
+  let sid = (p.symbolId != null) ? Number(p.symbolId) : null;
+  if(sid == null && typeof selectedSymbol !== 'undefined' && selectedSymbol) sid = Number(selectedSymbol.id);
+  if(sid == null) return null;
+  let arr = null, arrAt = 0;
+  if(typeof selectedSymbol !== 'undefined' && selectedSymbol &&
+     Number(selectedSymbol.id) === sid && window.IndChart && IndChart.getCandles){
+    const c = IndChart.getCandles();
+    if(c && c.length) arr = c;
+  }
+  if(!arr){
+    const SE = window.StratEngine;
+    const cache = (SE && SE.candleCache) || {};
+    for(const k in cache){
+      if(k.indexOf(sid + ':') !== 0) continue;
+      const e = cache[k];
+      if(e && e.candles && e.candles.length && e.at >= arrAt){ arr = e.candles; arrAt = e.at; }
+    }
+  }
+  if(!arr || !arr.length) return null;
+  const openedMs = (p.openedAt != null && Number(p.openedAt) > 0) ? Number(p.openedAt) : 0;
+  let start = 0;
+  if(openedMs > 0){
+    /* Skip the entry candle itself: its high/low may have printed BEFORE the
+       entry price, so folding it could arm the trail off a wick the trade never
+       actually saw. Only bars that started after the entry candle are counted. */
+    for(let i = arr.length - 1; i >= 0; i--){
+      const t = Number(arr[i].time);
+      if(isFinite(t) && t * 1000 <= openedMs){ start = i + 1; break; }
+    }
+  }
+  let hi = -Infinity, lo = Infinity;
+  for(let i = start; i < arr.length; i++){
+    const b = arr[i];
+    const h = Number(b.high), l = Number(b.low);
+    if(isFinite(h) && h > hi) hi = h;
+    if(isFinite(l) && l < lo) lo = l;
+  }
+  if(hi === -Infinity || lo === Infinity) return null;
+  /* Cross-scale guard: when an option's premium candles are unavailable the
+     candle fallback can serve the UNDERLYING's candles for the option's key.
+     Folding that high/low into the peak would ratchet the trailing stop to the
+     underlying's level (e.g. a ₹0.51 premium with a ₹27 underlying) and then
+     close the trade at that nonsense level, booking a fake multi-lakh P&L. A
+     real option premium can multiply on a spike, but never by the 20x-1000x an
+     underlying-vs-premium mix shows, so reject any extreme that is wildly out of
+     proportion to the entry price (clamp to entry -> no peak change). */
+  const entry = Number(p.entryPrice);
+  if(isFinite(entry) && entry > 0){
+    const MAXMUL = 12;
+    if(isFinite(hi) && hi > entry * MAXMUL) hi = entry;
+    if(isFinite(lo) && lo < entry / MAXMUL) lo = entry;
+  }
+  return { high: hi, low: lo };
+}
+window.positionExtremeSince = positionExtremeSince;
+
 /* THE single canonical current-price for an open paper position's running P&L,
    shared by EVERY consumer (the chart's live-P&L line label AND the AST
    Running Trades rows / P&L summaries). Prefers the live feed quote; falls back
@@ -3898,7 +3986,13 @@ function positionMarkPrice(p){
     try { lq = liveQuoteForSymbol(Number(p.symbolId), p.symbolExch); } catch(e){ lq = null; }
   }
   if(lq != null && lq > 0) return lq;
-  return tradeChartPrice(p);
+  const cp = tradeChartPrice(p);
+  /* Same cross-scale guard as positionExtremeSince: a chart/candle price that is
+     wildly out of proportion to the position's entry price is the candle
+     fallback serving a different instrument's data (underlying for an option).
+     Returning it would mark the option at the underlying's price -> fake P&L. */
+  if(cp != null && p && p.entryPrice > 0 && cp > p.entryPrice * 12) return null;
+  return cp;
 }
 /* Money P&L of a position at a given mark price. Single formula used by both
    the chart running-P&L label and the Running Trades list so a trade is always
@@ -4045,6 +4139,86 @@ function syncTradeChartLines(){
     if(p.targetPrice != null) add(base, "manual:tp", p.targetPrice, "#00d4aa", "TP", 2);
     return true;
   };
+  /* Real-time (live Dhan) overlay. Draws the SAME line set (entry / running
+     P&L / SL / overall-SL / target) for every open position of the Realtime
+     Trading Engine, using the BROKER'S own values wherever Dhan exposes them:
+     the real average fill (buy_avg), the real LTP/live P&L (/api/account) and,
+     for a native Super order, Dhan's LIVE stop-loss leg price (the true
+     broker-side trailing stop). A separate "rt:" key prefix plus RT-prefixed
+     titles and large-dash styles keep these lines visually distinct from - and
+     never merged with - the paper-trade lines. */
+  const drawRealtime = () => {
+    const reg = window.TabEngines && window.TabEngines.realtime;
+    const ex = reg && reg.realtime;
+    if(!ex || typeof ex.getState !== "function") return false;
+    const st = ex.getState();
+    const ap = (st && st.autoPositions) || {};
+    const rb = window.RealtimeBroker || null;
+    let any = false;
+    for(const key in ap){
+      const p = ap[key];
+      if(!p || !onChart(p)) continue;
+      let snap = null;
+      try { snap = (rb && rb.positionSnapshot) ? rb.positionSnapshot(p.symbolId) : null; } catch(e){ snap = null; }
+      const isBuy = String(p.side || "").toUpperCase() !== "SELL";
+      /* Dhan's actual average fill wins over the app's proxy entry price. */
+      const entry = (snap && Number(snap.buy_avg) > 0) ? Number(snap.buy_avg) : Number(p.entryPrice);
+      if(!(entry > 0)) continue;
+      const mark = (snap && Number(snap.ltp) > 0) ? Number(snap.ltp)
+                 : (liveQuoteForSymbol(p.symbolId, p.symbolExch) || positionMarkPrice(p) || null);
+      add("rt", key+":entry", entry, "#b388ff", "RT ENTRY " + (p.side||"") + " @ " + entry.toFixed(2), 3);
+      if(mark != null && mark > 0){
+        const qty = Number(p.qty) || 0;
+        const money = (snap && isFinite(Number(snap.pnl))) ? Number(snap.pnl)
+                    : positionMoneyPnl({ side: p.side, entryPrice: entry, qty: qty }, mark);
+        const pct = (snap && isFinite(Number(snap.pnl_pct))) ? Number(snap.pnl_pct)
+                  : ((entry > 0 && qty > 0 && money != null) ? (money / (entry * qty)) * 100 : 0);
+        let title = "RT " + mark.toFixed(2) + " \u00B7 " + (money >= 0 ? '+' : '-') + "\u20B9" + Math.abs(Math.round(money || 0)).toLocaleString('en-IN') + " (" + (pct >= 0 ? '+' : '') + pct.toFixed(2) + "%)" + (p.brokerTrail === true ? " \u00B7 DHAN" : "");
+        add("rt", key+":live", mark, "#00b0ff", title, 1);
+      }
+      /* Stop-loss level: a native Super order carries Dhan's LIVE stop-loss leg
+         (absolute price, trailed by Dhan - the only real broker-side trail);
+         non-super methods use the app-side ratcheted stopLoss. */
+      let sl = 0, slPct = 0, trailPct = 0, brokerSl = false;
+      if(p.brokerTrail === true){
+        let t = null;
+        try { t = (rb && rb.superTrailSync) ? rb.superTrailSync(p.superOrderId, entry) : null; } catch(e){ t = null; }
+        if(t && Number(t.slPrice) > 0){ sl = Number(t.slPrice); brokerSl = true; }
+        else if(Number(p.brokerSlPrice) > 0){ sl = Number(p.brokerSlPrice); brokerSl = true; }
+        slPct = Number((t && t.slPct) || p.brokerSlPct || p.slPct) || 0;
+        trailPct = Number((t && t.trailPct) || p.brokerTrailPct || p.slTrailPct) || 0;
+      } else {
+        slPct = Number(p.slPct) || 0;
+        trailPct = Number(p.slTrailPct) || 0;
+        sl = Number(p.stopLoss) > 0 ? Number(p.stopLoss)
+           : (slPct > 0 ? (isBuy ? entry * (1 - slPct / 100) : entry * (1 + slPct / 100)) : 0);
+      }
+      if(sl > 0){
+        /* Keep the drawn line on the correct side of the market (a broker stop
+           can momentarily cross the price during a fast pullback). */
+        let draw = sl;
+        if(mark != null && mark > 0){
+          if(isBuy && draw > mark) draw = mark;
+          if(!isBuy && draw < mark) draw = mark;
+        }
+        const armed = trailPct > 0 && mark != null && (isBuy ? mark > entry : mark < entry);
+        const lbl = brokerSl ? (armed ? "RT DHAN TRAIL SL" : "RT DHAN SL")
+                             : ((trailPct > 0 && p.slTrailed) ? "RT TRAIL SL" : "RT SL");
+        add("rt", key+":sl", draw, brokerSl ? "#ff1744" : "#ff5252",
+            lbl + (slPct > 0 ? " " + slPct.toFixed(2) + "%" : "") + " \u00B7 " + sl.toFixed(2), 3);
+        /* Entry-based overall-SL floor (capital protection) when the live stop
+           has ratcheted away from it. */
+        const floor = slPct > 0 ? (isBuy ? entry * (1 - slPct / 100) : entry * (1 + slPct / 100)) : 0;
+        if(floor > 0 && Math.abs(floor - sl) > 0.005){
+          add("rt", key+":osl", floor, "#ff9100", "RT OVERALL SL " + slPct.toFixed(2) + "% \u00B7 " + floor.toFixed(2), 4);
+        }
+      }
+      const tgt = Number(p.tpPrice) > 0 ? Number(p.tpPrice) : (Number(p.targetPrice) > 0 ? Number(p.targetPrice) : 0);
+      if(tgt > 0) add("rt", key+":tp", tgt, "#00e676", "RT TARGET \u00B7 " + tgt.toFixed(2), 2);
+      any = true;
+    }
+    return any;
+  };
   let any = false;
   try {
     const auto = PaperTrade.getAutoPositions();
@@ -4072,6 +4246,7 @@ function syncTradeChartLines(){
         if(drawManual(baseMp, "pe:papertrade")) any = true;
       }
     }
+    if(drawRealtime()) any = true;
   } catch(e){}
   if(!any){ IndChart.clearTradeLines(); return; }
   IndChart.setTradeLines(lines);
@@ -6407,13 +6582,18 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/aitrades.js?v=2"></script>
 <script src="/static/strategies.js?v=72"></script>
 <script src="/static/trendconfirm.js?v=1"></script>
-<script src="/static/papertrade.js?v=74"></script>
-<script src="/static/strategy_container.js?v=16"></script>
+<script src="/static/papertrade.js?v=76"></script>
+<script src="/static/strategy_container.js?v=17"></script>
  <script src="/static/autoexperiment.v13.js?v=180"></script>
 <script src="/static/indextrend.js?v=4"></script>
 <script src="/static/simulator.js?v=3"></script>
-  <script src="/static/aismart.js?v=249"></script>
-<script src="/static/paperrun.js?v=26"></script>
+  <script src="/static/aismart.js?v=262"></script>
+  <script src="/static/realtimebroker.js?v=6"></script>
+  <script src="/static/realtimeorders.js?v=5"></script>
+  <script src="/static/realtime.js?v=11"></script>
+  <script src="/static/realtimerun.js?v=7"></script>
+  <script src="/static/realtimetrail.js?v=4"></script>
+<script src="/static/paperrun.js?v=27"></script>
 <script src="/static/paperstrategies.js?v=6"></script>
 <script src="/static/hft_pool.js?v=6"></script>
 <script src="/static/fast_live.js?v=3"></script>
@@ -6422,7 +6602,8 @@ document.querySelector("#oc-all-container").addEventListener("click", handleOCCh
 <script src="/static/smart_ntrader.js?v=66"></script>
 <script src="/static/niftybbp_alert.js?v=21"></script>
 <script src="/static/chart_grid.js?v=11"></script>
-<script src="/static/tradestats.js?v=2"></script>
+<script src="/static/tradestats.js?v=3"></script>
+<script src="/static/realtimestats.js?v=2"></script>
 <script src="/static/backup.js?v=3"></script>
 <script>
 /* Indicator filter rows injected by runtime for the 14 new indicators added in
@@ -6550,7 +6731,13 @@ window.__addNewIndicatorFilterRows = function () {
           ['PriceAction', 'Price Action Trend line'],
           ['ZigZag', 'ZigZag Trendline'],
           ['ComboMaster', 'Combo Master line'],
-          ['PaneConsensus', 'Pane Consensus Signal line']
+          ['PaneConsensus', 'Pane Consensus Signal line'],
+          ['AutoTrendline', 'Auto Trendline'],
+          ['Pitchfork', 'Pitchfork median line'],
+          ['TrendProjection', 'Trend Projection line'],
+          ['GannFan', 'Gann Fan line'],
+          ['FibFan', 'Fibonacci Fan line'],
+          ['Srema', 'S/R EMA Reversal line']
         ];
         sl.forEach(function (p) {
           frag3.appendChild(makeRow('astFilter' + cap + 'Sl' + p[0], handler,
@@ -6625,6 +6812,10 @@ function TabEnginesInit(){
     if(/^paper\d+$/.test(tab)) ensureCloneEngines(tab, "paper");
     else if(/^ae\d+$/.test(tab)) ensureCloneEngines(tab, "ae");
   });
+  /* Realtime Trading Engine: build its duplicated AST UI + real instance once. */
+  if(window.RealtimeTab && RealtimeTab.build){ try { RealtimeTab.build(); } catch(e){ console.warn("[RealtimeTab] init failed:", e); } }
+  /* Realtime Market Trade Stats: build its duplicated Trade Stats UI + instance. */
+  if(window.RealtimeStatsTab && RealtimeStatsTab.build){ try { RealtimeStatsTab.build(); } catch(e){ console.warn("[RealtimeStatsTab] init failed:", e); } }
   if(window.HftPool && !window.HftPool._started){
     try { window.HftPool.start && window.HftPool.start(); } catch(e){ console.warn("[HftPool] start failed:", e); }
   }

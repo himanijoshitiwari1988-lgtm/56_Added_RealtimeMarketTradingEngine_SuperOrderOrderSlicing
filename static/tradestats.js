@@ -6,10 +6,25 @@
    timeframe dropdown (1H/Today/Week/Month/6M/Year/All) driving the executed
    table + stats + equity/P&L charts, and a "most profitable time of day /
    weekday" analysis of the executed history. */
-(function () {
-  if (typeof window === 'undefined') return;
-
-  var $id = function (id) { return document.getElementById(id); };
+window.createTradeStats = function (opts) {
+  opts = opts || {};
+  var SUFFIX = opts.suffix || '';
+  var TAB_ID = opts.tabId || 'tab-tradestats';
+  var GLOBAL_NAME = opts.globalName || 'TradeStats';
+  var EXPORT_NAME = opts.exportName || 'executed-trades';
+  if (!opts.registries) {
+    /* Default (paper) sources: every AI Smart mirror plus every paper ledger.
+       The realtime engine is deliberately excluded so real orders never mix
+       into the paper report; the Realtime Market Trade Stats instance supplies
+       its own registries() that reads ONLY the realtime engines. */
+    opts.registries = function () {
+      return [
+        { reg: window.TabEngines && window.TabEngines.aismart, src: 'ast', exclude: { realtime: 1 } },
+        { reg: window.TabEngines && window.TabEngines.papertrade, src: 'paper' }
+      ];
+    };
+  }
+  var $id = function (id) { return document.getElementById(id + SUFFIX); };
   var MAX_ROWS = 300;
 
   /* ---------------- formatting ---------------- */
@@ -85,6 +100,7 @@
     if (key === 'papertrade') return 'AI Smart (base)';
     if (key === 'pool') return 'Pooled Runner';
     if (key === 'ntrader') return 'Smart NTrader';
+    if (key === 'realtime') return 'Realtime';
     var pm = /^paper(\d+)$/.exec(key || '');
     if (pm) return 'Paper tab ' + pm[1];
     var am = /^ae(\d+)$/.exec(key || '');
@@ -93,17 +109,24 @@
   }
 
   /* ---------------- data gathering ---------------- */
+  function eachSource(fn) {
+    opts.registries().forEach(function (rc) {
+      var reg = rc.reg;
+      if (!reg) return;
+      Object.keys(reg).forEach(function (k) {
+        if (rc.only && !rc.only[k]) return;
+        if (rc.exclude && rc.exclude[k]) return;
+        fn(reg, k, rc.src);
+      });
+    });
+  }
   function engineInstances() {
     var out = [];
     var seen = {};
-    var add = function (set) {
-      if (!set) return;
-      Object.keys(set).forEach(function (k) {
-        if (!seen[k]) { seen[k] = 1; out.push(k); }
-      });
-    };
-    add(window.TabEngines && window.TabEngines.papertrade);
-    add(window.TabEngines && window.TabEngines.aismart);
+    eachSource(function (reg, k) {
+      if (seen[k]) return;
+      seen[k] = 1; out.push(k);
+    });
     return out;
   }
 
@@ -150,18 +173,10 @@
       seen[k] = 1;
       out.push(n);
     };
-    var aism = (window.TabEngines && window.TabEngines.aismart) || {};
-    Object.keys(aism).forEach(function (k) {
+    eachSource(function (reg, k, src) {
       try {
-        var st = aism[k].getState ? aism[k].getState() : null;
-        (st && Array.isArray(st.closed) ? st.closed : []).forEach(function (t) { add(t, k, 'ast'); });
-      } catch (e) {}
-    });
-    var paps = (window.TabEngines && window.TabEngines.papertrade) || {};
-    Object.keys(paps).forEach(function (k) {
-      try {
-        var st = paps[k].getState ? paps[k].getState() : null;
-        (st && Array.isArray(st.closed) ? st.closed : []).forEach(function (t) { add(t, k, 'paper'); });
+        var st = reg[k] && reg[k].getState ? reg[k].getState() : null;
+        (st && Array.isArray(st.closed) ? st.closed : []).forEach(function (t) { add(t, k, src); });
       } catch (e) {}
     });
     out.sort(function (a, b) { return a.at - b.at; });
@@ -301,7 +316,7 @@
       var list = trades.filter(function (t) { return inRange(t, meta); });
       var st = statsOf(list);
       var col = st.net >= 0 ? '#00d4aa' : '#ef5350';
-      html += '<button class="ts-chip" onclick="TradeStats.gotoPeriod(\'' + c[0] + '\')" title="Click to view this period in detail below">' +
+      html += '<button class="ts-chip" onclick="' + GLOBAL_NAME + '.gotoPeriod(\'' + c[0] + '\')" title="Click to view this period in detail below">' +
         '<span style="color:#888">' + c[1] + '</span> &nbsp;<b>' + st.n + '</b>' +
         '<span style="color:' + col + '"> &nbsp;' + (st.net >= 0 ? '+' : '-') + fmtMoney(Math.abs(st.net)) + '</span></button>';
     });
@@ -688,7 +703,7 @@
     var blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'executed-trades-' + _rangeSel + '.csv';
+    a.download = EXPORT_NAME + '-' + _rangeSel + '.csv';
     document.body.appendChild(a);
     a.click();
     setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(a.href); }, 200);
@@ -699,20 +714,15 @@
   var _lastSig = null;
   function dataSig() {
     var parts = [];
-    var add = function (reg) {
-      if (!reg) return;
-      Object.keys(reg).forEach(function (k) {
-        try {
-          var st = reg[k].getState ? reg[k].getState() : null;
-          var cl = (st && Array.isArray(st.closed)) ? st.closed : [];
-          var last = 0;
-          if (cl.length) { var f = cl[0]; if (f && f.at != null) last = f.at; }
-          parts.push(k + ':' + cl.length + ':' + last);
-        } catch (e) {}
-      });
-    };
-    add(window.TabEngines && window.TabEngines.aismart);
-    add(window.TabEngines && window.TabEngines.papertrade);
+    eachSource(function (reg, k) {
+      try {
+        var st = reg[k] && reg[k].getState ? reg[k].getState() : null;
+        var cl = (st && Array.isArray(st.closed)) ? st.closed : [];
+        var last = 0;
+        if (cl.length) { var f = cl[0]; if (f && f.at != null) last = f.at; }
+        parts.push(k + ':' + cl.length + ':' + last);
+      } catch (e) {}
+    });
     return parts.join('|');
   }
 
@@ -802,10 +812,10 @@
     gotoPeriod: gotoPeriod,
     refresh: render
   };
-  window.TradeStats = api;
+  window[GLOBAL_NAME] = api;
 
   function tick() {
-    var p = $id('tab-tradestats');
+    var p = document.getElementById(TAB_ID);
     var active = p && p.classList.contains('active');
     if (active !== _visible) {
       _visible = active;
@@ -825,4 +835,8 @@
       tick();
     }, 5000);
   }, 1200);
-})();
+  return api;
+};
+
+/* Paper Trade Stats: the original default instance (unchanged behaviour). */
+window.createTradeStats({});

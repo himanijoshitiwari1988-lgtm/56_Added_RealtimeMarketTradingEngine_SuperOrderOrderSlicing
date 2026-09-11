@@ -21,9 +21,33 @@
  *   - only the LAST bar of each series is evaluated per strategy
  *   - the hot path contains no network calls (candles are cached for 1.5s)
  */
-window.createAISmartTrading = function (suffix) {
+window.createAISmartTrading = function (suffix, opts) {
   'use strict';
   suffix = suffix || '';
+  /* Optional execution-engine override. The Realtime Trading Engine passes its
+     real broker adapter here; when present every "paper" execution / reconcile
+     call of THIS instance routes to that adapter instead of the shared paper
+     ledger, so a realtime instance never writes a paper trade. Every existing
+     caller omits opts, so paper behaviour is byte-for-byte unchanged. */
+  let _execEngine = (opts && opts.executor) || null;
+  /* Realtime Trading Engine instances pass realtime:true. Their ON/OFF button is
+     the single MASTER switch: OFF fully stops this instance (poll + fast HFT
+     scanner) and, together with the broker gate, makes an accidental order
+     impossible; ON restarts every function. Paper instances never set this, so
+     their behaviour is byte-for-byte unchanged. */
+  let _realtimeMode = !!(opts && opts.realtime);
+
+  /* Start/stop the instance's live loops. Only meaningful for _realtimeMode;
+     paper instances (base + clones) keep their existing lifecycle. */
+  function applyHardPower(on) {
+    if (!_realtimeMode) return;
+    if (on) {
+      if (!_pollTimer) startPoll();
+    } else {
+      stopPoll();
+      if (_hftTimer) { clearInterval(_hftTimer); _hftTimer = null; _hftMs = 0; }
+    }
+  }
 
   const AST_KEY = 'algodhan_aismart_v1' + suffix;
   const SAVED_KEY = 'algodhan_strategies_v1';
@@ -45,6 +69,7 @@ window.createAISmartTrading = function (suffix) {
      deletes the mirror) and new entries would land in the wrong ledger. Every
      AST execution / reconcile / close / reset therefore pins to the base engine. */
   function basePaper() {
+    if (_execEngine) return _execEngine;
     if (window.TabEngines && window.TabEngines.papertrade && window.TabEngines.papertrade.papertrade) {
       return window.TabEngines.papertrade.papertrade;
     }
@@ -199,7 +224,13 @@ window.createAISmartTrading = function (suffix) {
     { tok: 'PriceAction', id: 'patrend', valueKey: 'v0', settings: { pivotLen: 10, atrLen: 14, atrMult: 0.25 }, name: 'Price Action Trend', text: 'Price Action Trend line' },
     { tok: 'ZigZag', id: 'zzline', valueKey: 'v1', settings: { atrPeriod: 14, atrMult: 6, minPct: 0.15, pivotLook: 8, showLine: true, fullSpan: true }, name: 'ZigZag Trendline', text: 'ZigZag Trendline' },
     { tok: 'ComboMaster', id: 'trendmaster', valueKey: 'v1', settings: { atrPeriod: 14, atrMult: 6, minPct: 0.15, trendLook: 12, fullSpan: true }, name: 'Combo Master', text: 'Combo Master line' },
-    { tok: 'PaneConsensus', id: 'panemaster', valueKey: 'v0', settings: { rsiLength: 14, bbLength: 20, stochLength: 14, cciLength: 20, willrLength: 14, mfiLength: 14, atrPeriod: 14, smooth: 3, bullTh: 0.12, bearTh: 0.12, minSeg: 15, fitLook: 60, useRSI: true }, name: 'Pane Consensus Signal', text: 'Pane Consensus Signal line' }
+    { tok: 'PaneConsensus', id: 'panemaster', valueKey: 'v0', settings: { rsiLength: 14, bbLength: 20, stochLength: 14, cciLength: 20, willrLength: 14, mfiLength: 14, atrPeriod: 14, smooth: 3, bullTh: 0.12, bearTh: 0.12, minSeg: 15, fitLook: 60, useRSI: true }, name: 'Pane Consensus Signal', text: 'Pane Consensus Signal line' },
+    { tok: 'AutoTrendline', id: 'autotrend', valueKey: 'v0', settings: { strength: 5, look: 60, atrPeriod: 14, tolMult: 0.5, minPct: 0.05, fullSpan: true }, name: 'Auto Trendline', text: 'Auto Trendline' },
+    { tok: 'Pitchfork', id: 'pitchfork', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15, minSpan: 12, fullSpan: false }, name: 'Pitchfork', text: 'Pitchfork median line' },
+    { tok: 'TrendProjection', id: 'projline', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15, mode: 'trendline', pivots: 3, fwd: 30 }, name: 'Trend Projection', text: 'Trend Projection line' },
+    { tok: 'GannFan', id: 'gant', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15 }, name: 'Gann Fan', text: 'Gann Fan line' },
+    { tok: 'FibFan', id: 'fibt', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15 }, name: 'Fibonacci Fan', text: 'Fibonacci Fan line' },
+    { tok: 'Srema', id: 'sremat', valueKey: 'v0', settings: { atrPeriod: 14, atrMult: 2, minPct: 0.15, emaPeriod: 1, touchMult: 0.5, touchWindow: 3, fwd: 20 }, name: 'S/R EMA Reversal', text: 'S/R EMA Reversal line' }
   ];
   const SL_BULL_KEYS = SL_LIST.map(d => 'bullSl' + d.tok);
   const SL_BEAR_KEYS = SL_LIST.map(d => 'bearSl' + d.tok);
@@ -2677,6 +2708,9 @@ window.createAISmartTrading = function (suffix) {
   }
 
   let state = load();
+  /* Persist immediately so an on-load repaired P&L history is not re-derived
+     from the stale stored copy on the next boot. */
+  try { save(); } catch (e) {}
   /* Restore the last-known resolved chains / picked strikes so a page reload
      does not wipe them: strategies keep trading their resolved instruments and
      the Picked Strikes panel stays populated without a cold-start burst against
@@ -2877,6 +2911,11 @@ window.createAISmartTrading = function (suffix) {
        truncated), so the accumulator can never be stale or miss pre-upgrade
        trades. */
     if (s && Array.isArray(s.closed)) {
+      /* Heal any rows corrupted before the cross-scale guard (the premium-chart
+         fallback priced an option off the underlying's candles). Uses the shared
+         verified-exit repair from PaperTrade; the totals below then recompute
+         from the corrected entries. */
+      try { if (window.PaperScaleFix && window.PaperScaleFix.repairTrades) window.PaperScaleFix.repairTrades(s.closed); } catch (e) {}
       let realized = 0, charges = 0, count = 0, wins = 0;
       for (const t of s.closed) {
         const net = (t.netPnl != null ? t.netPnl : (t.pnl || 0));
@@ -3314,6 +3353,21 @@ window.createAISmartTrading = function (suffix) {
       }
     } else if (mv.enabled) {
       out.push.apply(out, topMoverSymbols());
+      /* A mover can momentarily lose its change_pct quote while the client quote
+         cache refreshes; topMoverSymbols drops it for that tick, which blinks its
+         Running Strategy row (and its picked premium charts) out and back.
+         Rescue ONLY symbols that still carry a FRESH picked-strike record AND
+         whose quote vanished only in the last minute - a symbol that still has a
+         live quote but simply fell out of the top-N is left to drop normally and
+         age out via reconcile, so this never keeps a delisted symbol alive. */
+      const now = Date.now();
+      _pickedStrikes.forEach((rec) => {
+        if (!rec || !rec.symbol || !Array.isArray(rec.contracts) || !rec.contracts.length) return;
+        if ((now - (rec.at || 0)) > _PICK_RETAIN_MS) return;
+        const mc = _moverDirCache.get(_pickedKey(rec.symbol));
+        if (!mc || (now - (mc.at || 0)) > 60000) return;
+        out.push(rec.symbol);
+      });
     } else {
       const base = (state.symbols && state.symbols.length) ? state.symbols.slice() : [];
       if (base.length) {
@@ -3402,20 +3456,39 @@ window.createAISmartTrading = function (suffix) {
     return out;
   }
 
+  /* Last known Top-Movers direction per symbol (_pickedKey -> {dir, at}). The
+     live change_pct quote is refreshed in bursts, so for a tick or two a mover
+     can have NO quote at all. Returning null there used to be harmless, but the
+     leg resolver (contractsFor) and the picked-strike reconciler BOTH treat
+     null as "fall back to the global strategy/filter direction", which pinned
+     the symbol to the opposite leg - resolving a fresh wrong-side pick AND
+     deleting the correct one ("removed N stale pick(s) ... [XXX[PE+PE]]"), then
+     re-adding it next tick. Remembering the last real direction keeps the leg
+     stable across those quote gaps; a genuine flip (a live opposite-sign quote)
+     overwrites it immediately, so only the transient gaps are bridged. */
+  const _moverDirCache = new Map();
   /* Direction tag for the Top Gainers / Losers + Indices universe. Each mover is
      traded on the side matching its own daily move: a top GAINER (daily change%
      >= 0) only picks CE call strikes and a top LOSER (daily change% < 0) only
      picks PE put strikes, so the option leg always bets with the stock's move.
-     Returns null outside movers mode or without a live % change so callers can
-     fall back to their normal leg selection. */
+     Returns null outside movers mode; on a transient missing quote it returns
+     the last known direction (within the picked-strike retain window) so the
+     leg never flips on a data gap. */
   function moverDirectionFor(symbol) {
     const mv = state.movers || {};
     if (!mv.enabled || !symbol) return null;
     const q = quoteFor(symbol);
-    if (!q || q.change_pct === undefined) return null;
-    const pct = Number(q.change_pct);
-    if (isNaN(pct)) return null;
-    return pct >= 0 ? 'bullish' : 'bearish';
+    if (q && q.change_pct !== undefined) {
+      const pct = Number(q.change_pct);
+      if (!isNaN(pct)) {
+        const dir = pct >= 0 ? 'bullish' : 'bearish';
+        _moverDirCache.set(_pickedKey(symbol), { dir: dir, at: Date.now() });
+        return dir;
+      }
+    }
+    const c = _moverDirCache.get(_pickedKey(symbol));
+    if (c && (Date.now() - (c.at || 0)) < _PICK_RETAIN_MS) return c.dir;
+    return null;
   }
 
   /* ---- NIFTY trend-following F&O picker ----
@@ -5054,16 +5127,16 @@ window.createAISmartTrading = function (suffix) {
       const build = (posOnly) => {
         const all = [], out = [];
         j.data.forEach(d => {
-          const mk = (otype, ltp, chg, chgPct, delta, sid) => {
+          const mk = (otype, ltp, chg, chgPct, delta, sid, oi, chgOi, volume) => {
             if (ltp == null || chg == null || sid == null) return null;
-            return { strike: d.strike, optionType: otype, premium: ltp, chg: chg, chgPct: chgPct, delta: delta, sid: sid, expiry: j.expiry };
+            return { strike: d.strike, optionType: otype, premium: ltp, chg: chg, chgPct: chgPct, delta: delta, sid: sid, expiry: j.expiry, oi: (oi == null ? null : Number(oi)), chgOi: (chgOi == null ? null : Number(chgOi)), volume: (volume == null ? null : Number(volume)), lotSize: (j.lot_size != null ? Number(j.lot_size) : (d.lot_size != null ? Number(d.lot_size) : null)) };
           };
           if (ot === 'both' || ot === 'CE') {
-            const c = mk('CE', d.ce_ltp, d.ce_chg, d.ce_chg_pct, d.ce_delta, d.ce_sid);
+            const c = mk('CE', d.ce_ltp, d.ce_chg, d.ce_chg_pct, d.ce_delta, d.ce_sid, d.ce_oi, d.ce_chg_oi, d.ce_volume);
             if (c) { all.push(c); if (!posOnly || (c.premium > 0 && c.chg > 0)) out.push(c); }
           }
           if (ot === 'both' || ot === 'PE') {
-            const p = mk('PE', d.pe_ltp, d.pe_chg, d.pe_chg_pct, d.pe_delta, d.pe_sid);
+            const p = mk('PE', d.pe_ltp, d.pe_chg, d.pe_chg_pct, d.pe_delta, d.pe_sid, d.pe_oi, d.pe_chg_oi, d.pe_volume);
             if (p) { all.push(p); if (!posOnly || (p.premium > 0 && p.chg > 0)) out.push(p); }
           }
         });
@@ -5124,8 +5197,9 @@ window.createAISmartTrading = function (suffix) {
       if (!j || j.status !== 'success' || !Array.isArray(j.data) || !j.data.length) return null;
       const out = [];
       j.data.forEach(d => {
-        if (d.ce_ltp != null && d.ce_ltp > 0) out.push({ strike: d.strike, optionType: 'CE', premium: d.ce_ltp, chg: d.ce_chg, chgPct: d.ce_chg_pct, delta: d.ce_delta, sid: d.ce_sid, expiry: j.expiry });
-        if (d.pe_ltp != null && d.pe_ltp > 0) out.push({ strike: d.strike, optionType: 'PE', premium: d.pe_ltp, chg: d.pe_chg, chgPct: d.pe_chg_pct, delta: d.pe_delta, sid: d.pe_sid, expiry: j.expiry });
+        const lotSize = (j.lot_size != null ? Number(j.lot_size) : (d.lot_size != null ? Number(d.lot_size) : null));
+        if (d.ce_ltp != null && d.ce_ltp > 0) out.push({ strike: d.strike, optionType: 'CE', premium: d.ce_ltp, chg: d.ce_chg, chgPct: d.ce_chg_pct, delta: d.ce_delta, sid: d.ce_sid, expiry: j.expiry, oi: (d.ce_oi == null ? null : Number(d.ce_oi)), chgOi: (d.ce_chg_oi == null ? null : Number(d.ce_chg_oi)), volume: (d.ce_volume == null ? null : Number(d.ce_volume)), lotSize: lotSize });
+        if (d.pe_ltp != null && d.pe_ltp > 0) out.push({ strike: d.strike, optionType: 'PE', premium: d.pe_ltp, chg: d.pe_chg, chgPct: d.pe_chg_pct, delta: d.pe_delta, sid: d.pe_sid, expiry: j.expiry, oi: (d.pe_oi == null ? null : Number(d.pe_oi)), chgOi: (d.pe_chg_oi == null ? null : Number(d.pe_chg_oi)), volume: (d.pe_volume == null ? null : Number(d.pe_volume)), lotSize: lotSize });
       });
       if (out.length) { resetChainRateLimit(symbol); noteSymbolChainOk(symbol); return out; }
       return null;
@@ -5197,6 +5271,18 @@ window.createAISmartTrading = function (suffix) {
     return cat === 'bearish' ? 'bearish' : (cat === 'bullish' ? 'bullish' : null);
   }
 
+  /* Is one of the engine's auto option-picking universes live? Top Movers
+     (daily gainers/losers) and NIFTY trend-following both resolve CE/PE strikes
+     for their symbols, so the "Picked Strikes" panel and the Running Strategies
+     premium rows are expected to show their contracts even when the STRATEGY is
+     run on the spot chart (F&O execution always goes to the option premium -
+     see tradeInMode). */
+  function autoOptionPickUniverse() {
+    const mv = state.movers || {};
+    const nt = state.niftyTrend || {};
+    return !!(mv.enabled || nt.enabled);
+  }
+
   async function resolveInstruments(side) {
     const syms = experimentSymbols();
     if (!syms.length) return [];
@@ -5238,6 +5324,18 @@ window.createAISmartTrading = function (suffix) {
       // chart directly (no option chains / strikes are resolved), for both
       // indices and F&O stocks.
       if (runInMode(sym) === 'spot') {
+        /* F&O execution ALWAYS goes to the option premium chart (tradeInMode),
+           so even on a spot run the engine owns CE/PE execution strikes. For
+           the auto-pick universes (Top Movers / NIFTY trend) resolve those
+           strikes now to populate the "Picked Strikes" panel and the Running
+           Strategies premium rows, instead of only resolving them lazily when a
+           signal first fires (which left the panels empty while no trade was
+           open). The spot underlying remains the RUN instrument - signal
+           evaluation is unchanged. contractsFor() is chain-cached and
+           rate-limit guarded, so this adds no extra API surface. */
+        if (autoOptionPickUniverse() && !isIndex(sym) && !isCommodity(sym) && !isSimSymbol(sym) && tradeInMode(sym) === 'premium') {
+          try { await contractsFor(sym, spot); } catch (e) {}
+        }
         out.push({ kind: 'underlying', symbol: sym });
         continue;
       }
@@ -5414,7 +5512,7 @@ window.createAISmartTrading = function (suffix) {
         const contracts = await contractsFor(sym, spot, { optionType: side === 'bearish' ? 'PE' : 'CE' });
         const c = (contracts && contracts.length) ? contracts[0] : null;
         if (!c) return [];
-        return [{ id: Number(c.sid), exch: optionExch(sym), inst: optionInst(sym), name: (sym.name || sym.id) + ' ' + c.strike + ' ' + c.optionType, strike: c.strike, optionType: c.optionType, premium: c.premium }];
+        return [{ id: Number(c.sid), exch: optionExch(sym), inst: optionInst(sym), name: (sym.name || sym.id) + ' ' + c.strike + ' ' + c.optionType, strike: c.strike, optionType: c.optionType, premium: c.premium, oi: c.oi, volume: c.volume, chgOi: c.chgOi, lotSize: c.lotSize }];
       } catch (e) { return []; }
     };
     // Premium-chart candle fallback active: the run-in premium chart has no
@@ -5431,7 +5529,7 @@ window.createAISmartTrading = function (suffix) {
       return o.length ? o : [sym];
     }
     if (instr.kind === 'option') {
-      const optSym = { id: Number(instr.sid), exch: optionExch(sym), inst: optionInst(sym), name: (instr.symbol.name || instr.symbol.id) + ' ' + instr.strike + ' ' + instr.optionType, strike: instr.strike, optionType: instr.optionType, premium: instr.premium };
+      const optSym = { id: Number(instr.sid), exch: optionExch(sym), inst: optionInst(sym), name: (instr.symbol.name || instr.symbol.id) + ' ' + instr.strike + ' ' + instr.optionType, strike: instr.strike, optionType: instr.optionType, premium: instr.premium, oi: instr.oi, volume: instr.volume, chgOi: instr.chgOi, lotSize: instr.lotSize };
       return tiMode === 'both' ? [sym, optSym] : [optSym];
     }
     let contracts = instr.contracts || null;
@@ -5444,7 +5542,7 @@ window.createAISmartTrading = function (suffix) {
       log('No option contract for ' + displayName(sym) + ' - skipping (premium execution)', 'warn');
       return [];
     }
-    const optSym = { id: Number(c.sid), exch: optionExch(sym), inst: optionInst(sym), name: (sym.name || sym.id) + ' ' + c.strike + ' ' + c.optionType, strike: c.strike, optionType: c.optionType, premium: c.premium };
+    const optSym = { id: Number(c.sid), exch: optionExch(sym), inst: optionInst(sym), name: (sym.name || sym.id) + ' ' + c.strike + ' ' + c.optionType, strike: c.strike, optionType: c.optionType, premium: c.premium, oi: c.oi, volume: c.volume, chgOi: c.chgOi, lotSize: c.lotSize };
     if (tiMode === 'both') return [sym, optSym];
     return [optSym];
   }
@@ -5927,7 +6025,7 @@ window.createAISmartTrading = function (suffix) {
        chain. Mirror it here so records created by this tick's resolve are never
        judged stale by a side the resolve itself never produces (the filterMode
        ticked-filter bias vs auto NIFTY side mismatch). */
-    const forcedSide = _moversBothActive() ? null : runInForcedSide();
+    const forcedSide = (state.movers && state.movers.enabled) ? null : (_moversBothActive() ? null : runInForcedSide());
     /* Only prune by session age once the session is actually open (09:15-15:30):
        while the market is closed the engine legitimately keeps resolving picks
        off the frozen cache for the panel, and pruning them there would just make
@@ -5949,11 +6047,44 @@ window.createAISmartTrading = function (suffix) {
         return;
       }
       if (!curKeys.has(k)) {
-        stale.push(k);
-        legs += rec.contracts.length;
+        /* Top Movers / NIFTY-trend universes are quote-driven and recompute every
+           few seconds (a symbol can momentarily drop out while its change_pct is
+           refreshing). Do NOT purge a still-fresh pick for that transient miss:
+           keep it until it rejoins the universe or ages out, so the Picked
+           Strikes panel and the running strategies never lose their strikes on a
+           re-scan and then have to re-resolve (the empty-panel churn). */
+        const autoPickOn = !!(state.movers && state.movers.enabled) || !!(state.niftyTrend && state.niftyTrend.enabled);
+        const fresh = (Date.now() - (rec.at || 0)) < _PICK_RETAIN_MS;
+        if (!(autoPickOn && fresh)) {
+          stale.push(k);
+          legs += rec.contracts.length;
+        }
         return;
       }
-      const side = forcedSide || optionSideFor(rec.symbol, stratDir);
+      /* Side used to judge whether the record holds the WRONG leg. Only trust a
+         side that the active mode can actually justify for this symbol:
+           - a run-in override (forcedSide) always wins;
+           - NIFTY-trend mode: only when the trend is CONFIRMED (flat/unknown
+             means the universe rescue above is intentionally keeping last
+             picks - a global strategy side must NOT override that and purge
+             them);
+           - movers mode: only the symbol's OWN move (cached across quote gaps)
+             is authoritative, never the global strategy/filter direction.
+         Anywhere else (manual / filter runs) keep the previous behaviour. */
+      let side = forcedSide;
+      if (!side) {
+        const ntOn = !!(state.niftyTrend && state.niftyTrend.enabled);
+        const ntConfirmed = ntOn && (_lastNiftyDir === 'bullish' || _lastNiftyDir === 'bearish');
+        const mvOn = !!(state.movers && state.movers.enabled);
+        if (ntOn && !ntConfirmed) {
+          side = null;
+        } else if (mvOn && !ntOn) {
+          const md = moverDirectionFor(rec.symbol);
+          side = md === 'bullish' ? 'CE' : (md === 'bearish' ? 'PE' : null);
+        } else {
+          side = optionSideFor(rec.symbol, stratDir);
+        }
+      }
       /* Only a pick that holds NO matching-side contract is stale. A both-leg
          (CE+PE) record with the current side present must stay: deleting it here
          only makes the next resolveInstruments->contractsFor() re-add the same
@@ -5994,7 +6125,7 @@ window.createAISmartTrading = function (suffix) {
     /* Same run-in override side the poll resolves (see reconcilePickedStrikes):
        never filter the scanner's contracts against a side the resolve itself
        does not produce. */
-    const forcedSide = _moversBothActive() ? null : runInForcedSide();
+    const forcedSide = (state.movers && state.movers.enabled) ? null : (_moversBothActive() ? null : runInForcedSide());
     const out = [];
     for (const sym of syms) {
       if (runInMode(sym) === 'spot') {
@@ -6310,6 +6441,9 @@ window.createAISmartTrading = function (suffix) {
       _hftMs = 0;
       updateHftStatus('');
     }
+    /* Realtime master power: mirror the enabled state onto the poll so an OFF
+       engine has no live loop running at all (not merely an inert tick). */
+    if (_realtimeMode) applyHardPower(state.enabled === true);
   }
 
   /* ---------------- live condition evaluation ---------------- */
@@ -7020,6 +7154,13 @@ window.createAISmartTrading = function (suffix) {
           diag('noStrategies', 15000, 'Indicator-filters mode: no tradable symbol for the selected filter side(s) - tick at least one Bullish/Bearish indicator filter and enable a universe (Top Movers / NIFTY trend / chart symbol)', 'warn');
         } else {
           diag('noStrategies', 15000, 'No strategies ticked - tick at least one saved/imported/AI strategy to run it in paper mode', 'warn');
+        }
+        /* Even with no strategy for the ticked filter side(s), keep the option
+           strikes resolved for the live auto-pick universe so the "Picked
+           Strikes" panel still shows the CE/PE contracts the engine would trade
+           the moment a matching side/filter becomes active. */
+        if (filterMode && autoOptionPickUniverse()) {
+          try { await resolveInstruments(); } catch (e) {}
         }
         return;
       }
@@ -9593,7 +9734,11 @@ window.createAISmartTrading = function (suffix) {
       locked += p.qty * p.entryPrice; count++;
     });
     const avail = budget > 0 ? Math.max(0, budget - locked) : 0;
-    if (!budget && count === 0 && aeCount === 0) {
+    /* Hide only when NO margin source is configured at all (empty input) and
+       nothing is running. A real broker balance of 0 must still render, so the
+       operator sees the true funds instead of a blank bar. */
+    const hasMarginInput = (Number(u.margin) > 0) || (elB && String(elB.value).trim() !== '');
+    if (!hasMarginInput && count === 0 && aeCount === 0) {
       barEl.style.display = 'none';
       barEl.innerHTML = '';
       return;
@@ -10310,8 +10455,9 @@ window.createAISmartTrading = function (suffix) {
     applyUniversalToUI();
     renderMoversList();
     render();
-    /* Duplicated paper tabs only poll while visible (see onTabHide). */
-    if (!_pollTimer) startPoll();
+    /* Duplicated paper tabs only poll while visible (see onTabHide). The
+       realtime instance only re-arms its poll when its master switch is ON. */
+    if (!_pollTimer && (!_realtimeMode || state.enabled === true)) startPoll();
   }
   function onTabHide() {
     /* The BASE AI Smart engine is an always-on live paper algo: leaving the
@@ -10682,9 +10828,22 @@ window.createAISmartTrading = function (suffix) {
   function _moversActiveSides() {
     const mv = state.movers || {};
     if (!mv.enabled) return [];
-    const picked = Array.isArray(mv.picked) ? mv.picked : [];
     let gainer = false, loser = false;
-    if (picked.length) {
+    /* Prefer the ACTUAL resolved universe - exactly the symbols topMoverSymbols()
+       will trade - so both legs are detected from live daily % signs even while
+       the auto gainers/losers counts are 0 or a manual picked[] list is set. The
+       old count-only fallback could report a SINGLE active side, which forced a
+       global run side / purged the other leg's picks every tick. */
+    try {
+      topMoverSymbols().forEach(s => {
+        const q = quoteFor(s);
+        const pct = (q && q.change_pct !== undefined) ? Number(q.change_pct) : NaN;
+        if (!isFinite(pct)) return;
+        if (pct < 0) loser = true; else gainer = true;
+      });
+    } catch (e) {}
+    if (!gainer && !loser) {
+      const picked = Array.isArray(mv.picked) ? mv.picked : [];
       picked.forEach(s => {
         const q = quoteFor(s);
         const pct = (q && q.change_pct !== undefined) ? Number(q.change_pct) : NaN;
@@ -12206,6 +12365,17 @@ window.createAISmartTrading = function (suffix) {
     applyRunModeUI();
     render();
     startPoll();
+    /* Realtime master power ALWAYS boots OFF: a page reload must never silently
+       resume live real-money trading. The operator re-enables it explicitly with
+       the AI Smart Trading ON button. Resetting the persisted state here also
+       makes the auto-resume block below a no-op for this instance. */
+    if (_realtimeMode) {
+      state.enabled = false;
+      state.runIntent = { active: false, mode: state.filterMode ? 'filter' : 'normal', at: Date.now() };
+      try { save(); } catch (e) {}
+      applyUniversalToUI();
+      log('Realtime engine booted OFF - press the AI Smart Trading ON button to arm live trading', 'warn');
+    }
     /* Full resume after a page reload. The engine remembers the exact run the
        user had active and re-arms it automatically, so settings / ticked
        strategies / indicator filters / picked strikes / running trades all come

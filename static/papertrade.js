@@ -468,11 +468,101 @@ window.createPaperTrade = function (suffix) {
     }
   }
 
+  /* ---- repair of P&L rows corrupted by the premium-chart fallback ----------
+     When an option's premium candles were unavailable the candle fallback served
+     the UNDERLYING's candles for the option's symbol key, so `foldPeakFromCandles`
+     ratcheted the trailing stop off the underlying's high (e.g. a 27.25 high for
+     a 0.51 premium, or a 23448 high for a 20.25 premium). The position then
+     closed at that nonsense stop and the closed row recorded it as the exit,
+     booking a fake multi-lakh profit and confusing the P&L stats.
+     `SCALE_FIX` holds the verified real exit prices (the option premium at the
+     close, from the close diagnostics). Any other off-scale option row (exit
+     more than SCALE_MUL x the entry) is corrected to its entry so no fake profit
+     survives. Idempotent: rows already on the option scale are left untouched. */
+  const SCALE_MUL = 12;
+  const SCALE_FIX = [
+    { symbol: 'YESBANK 24 CE',   entry: 0.51,  exit: 0.49 },
+    { symbol: 'DRREDDY 1170 CE', entry: 20.25, exit: 20.00 }
+  ];
+
+  function exitIsOffScale(p) {
+    if (!p || !(p.entryPrice > 0) || !(p.peakPrice > 0)) return false;
+    return p.side === 'BUY'
+      ? (p.peakPrice > p.entryPrice * SCALE_MUL)
+      : (p.peakPrice < p.entryPrice / SCALE_MUL);
+  }
+
+  /* Clear a polluted peak on an OPEN position and restore its entry-based stop
+     so the bogus stop cannot fire before the next real tick. */
+  function repairScaledOpenPositions() {
+    const all = [];
+    if (state.position) all.push(state.position);
+    for (const k in (state.autoPositions || {})) {
+      if (state.autoPositions[k]) all.push(state.autoPositions[k]);
+    }
+    let changed = false;
+    for (const p of all) {
+      if (!exitIsOffScale(p)) continue;
+      p.peakPrice = p.entryPrice;
+      p.slTrailed = false;
+      const slEff = effectiveSlPct(p.slPct, p.slTrailPct);
+      if (p.side === 'BUY') p.stopLoss = p.entryPrice * (1 - slEff / 100);
+      else p.stopLoss = p.entryPrice * (1 + slEff / 100);
+      changed = true;
+    }
+    return changed;
+  }
+
+  /* Correct any closed rows in `list` that carry an off-scale exit. Shared by
+     every ledger that mirrors PaperTrade closes (PaperTrade's own history, AI
+     Smart Trading, Strategy Container) so each heals its own persisted copy
+     with the same verified exits. */
+  function repairScaledTrades(list) {
+    if (!Array.isArray(list)) return false;
+    let changed = false;
+    for (const t of list) {
+      if (!t || !t.symbol || !(Number(t.entry) > 0)) continue;
+      if (!/\b(CE|PE)\b/i.test(String(t.symbol))) continue;
+      const exit = Number(t.exit);
+      if (!(exit > Number(t.entry) * SCALE_MUL)) continue;
+      let realExit = null;
+      for (const f of SCALE_FIX) {
+        if (f.symbol === t.symbol && Math.abs(f.entry - Number(t.entry)) < 1e-6) { realExit = f.exit; break; }
+      }
+      if (realExit == null) realExit = Number(t.entry);
+      const pseudo = { side: t.side, qty: t.qty, entryPrice: Number(t.entry), symbol: t.symbol };
+      const gross = (t.side === 'BUY' ? (realExit - Number(t.entry)) : (Number(t.entry) - realExit)) * t.qty;
+      const charges = computeChargesForTrade(pseudo, realExit);
+      t.rawExit = exit;
+      t.exit = realExit;
+      t.pnl = gross;
+      t.pnlPct = (Number(t.entry) * t.qty) > 0 ? (gross / (Number(t.entry) * t.qty)) * 100 : 0;
+      t.charges = charges ? charges.total : 0;
+      t.netPnl = charges ? charges.net : gross;
+      changed = true;
+    }
+    return changed;
+  }
+
+  /* Correct already-recorded closed rows that carry an off-scale exit. */
+  function repairScaledClosedTrades() {
+    return repairScaledTrades(state.closed);
+  }
+
+  window.PaperScaleFix = { repairTrades: repairScaledTrades, SCALE_MUL: SCALE_MUL, SCALE_FIX: SCALE_FIX };
+
+  function repairScaledState() {
+    const a = repairScaledOpenPositions();
+    const b = repairScaledClosedTrades();
+    return a || b;
+  }
+
   function load() {
     try {
       const s = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null');
       if (s) state = Object.assign(state, s);
     } catch (e) {}
+    try { if (repairScaledState()) save(); } catch (e) {}
   }
 
   function save() {
@@ -720,6 +810,37 @@ window.createPaperTrade = function (suffix) {
     if (!p || !(p.slTrailPct > 0) || p.entryPrice == null) return false;
     if (live == null) return !!p.slTrailed;
     return p.side === 'BUY' ? live > p.entryPrice : live < p.entryPrice;
+  }
+
+  /* Fold the chart candle extremes since entry into the running peak (see
+     window.positionExtremeSince). The live feed can miss an option premium's
+     spike, so without this the trail never arms and a trade that showed profit
+     later gets cut by its loss-making initial stop. Only ever moves the peak in
+     the favourable direction. No-op when the helper is unavailable. */
+  function foldPeakFromCandles(p) {
+    if (!p || p.entryPrice == null || typeof window.positionExtremeSince !== 'function') return;
+    try {
+      const ex = window.positionExtremeSince(p);
+      if (!ex) return;
+      if (p.peakPrice == null) p.peakPrice = p.entryPrice;
+      if (p.side === 'BUY') { if (ex.high > p.peakPrice) p.peakPrice = ex.high; }
+      else { if (ex.low < p.peakPrice) p.peakPrice = ex.low; }
+    } catch (e) {}
+  }
+
+  /* The trail's core promise: once a trade has been in profit its stop is locked
+     at AT LEAST breakeven (the normal ratchet then walks it further up behind
+     the peak), so a trade that has printed profit can never be cut at a loss.
+     Returns true when it moved the stop. */
+  function lockTrailBreakeven(p) {
+    if (!p || p.entryPrice == null || p.stopLoss == null) return false;
+    if (!(p.slTrailPct > 0 || p.autoTrail)) return false;
+    if (p.side === 'BUY') {
+      if (p.peakPrice > p.entryPrice && p.stopLoss < p.entryPrice) { p.stopLoss = p.entryPrice; p.slTrailed = true; return true; }
+    } else {
+      if (p.peakPrice < p.entryPrice && p.stopLoss > p.entryPrice) { p.stopLoss = p.entryPrice; p.slTrailed = true; return true; }
+    }
+    return false;
   }
 
   /* Margin LOCKED by the AI Smart / manual wallet: the manual position, the
@@ -1042,6 +1163,7 @@ window.createPaperTrade = function (suffix) {
     if (cur === null) return;
     if (p.side === 'BUY') {
       if (p.peakPrice == null || cur > p.peakPrice) p.peakPrice = cur;
+      foldPeakFromCandles(p);
       /* Trail SL only activates once the trade is IN PROFIT (price has traded
          above the entry). While the trade sits at/below entry the SL stays at
          the fixed entry-based level; the ratchet must NOT pull the stop up
@@ -1055,15 +1177,18 @@ window.createPaperTrade = function (suffix) {
         const ratchet = p.entryPrice + peakProfit * (1 - p.slTrailPct / 100);
         if (ratchet > p.stopLoss) { p.stopLoss = ratchet; p.slTrailed = true; }
       }
+      lockTrailBreakeven(p);
       if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur <= p.stopLoss) { p.exitReason = p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit'; closePosition(false); return; }
       if (cur >= p.targetPrice) { p.exitReason = 'Target hit'; closePosition(false); return; }
     } else {
       if (p.peakPrice == null || cur < p.peakPrice) p.peakPrice = cur;
+      foldPeakFromCandles(p);
       if ((p.slPct > 0 || p.slTrailPct > 0) && p.slTrailPct > 0 && p.stopLoss != null && p.peakPrice < p.entryPrice) {
         const peakProfit = p.entryPrice - p.peakPrice;
         const ratchet = p.entryPrice - peakProfit * (1 - p.slTrailPct / 100);
         if (ratchet < p.stopLoss) { p.stopLoss = ratchet; p.slTrailed = true; }
       }
+      lockTrailBreakeven(p);
       if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur >= p.stopLoss) { p.exitReason = p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit'; closePosition(false); return; }
       if (cur <= p.targetPrice) { p.exitReason = 'Target hit'; closePosition(false); return; }
     }
@@ -1637,6 +1762,7 @@ window.createPaperTrade = function (suffix) {
            ratcheted level replaces the fixed entry-based SL, so the running SL
            line and the actual cut level always agree. */
         if (p.peakPrice == null || cur > p.peakPrice) p.peakPrice = cur;
+        foldPeakFromCandles(p);
         /* AST auto-trailing stop-loss: paper engines that open with opts.autoTrail
            (AI Smart Trading default) get a stop that locks in profit as the price
            climbs. It activates at the FIRST profit (the trade no longer needs to
@@ -1657,6 +1783,7 @@ window.createPaperTrade = function (suffix) {
           const ratchet = p.entryPrice + peakProfit * (1 - p.slTrailPct / 100);
           if (ratchet > p.stopLoss) { p.stopLoss = ratchet; p.slTrailed = true; }
         }
+        lockTrailBreakeven(p);
         // Stop-loss protection: closes the trade at the set SL % (below entry)
         // when the price falls to that level, capping the loss on a losing
         // trade. Only active when a positive SL % was set at entry. When a
@@ -1689,6 +1816,7 @@ window.createPaperTrade = function (suffix) {
            exceeds one cushion the stop rides the trough (peak + cushion). The
            stop only ever moves down (never up for a SELL). */
         if (p.peakPrice == null || cur < p.peakPrice) p.peakPrice = cur;
+        foldPeakFromCandles(p);
         if (p.autoTrail && p.slPct > 0 && p.stopLoss != null && p.entryPrice > 0) {
           const cushion = p.entryPrice * p.slPct / 100;
           if (cushion > 0 && p.peakPrice < p.entryPrice) {
@@ -1700,6 +1828,7 @@ window.createPaperTrade = function (suffix) {
           const ratchet = p.entryPrice - peakProfit * (1 - p.slTrailPct / 100);
           if (ratchet < p.stopLoss) { p.stopLoss = ratchet; p.slTrailed = true; }
         }
+        lockTrailBreakeven(p);
         // Stop-loss protection for SELL positions: closes when the price rises
         // to the SL % (above entry) level, capping the loss.
         if ((p.slPct > 0 || p.slTrailPct > 0) && p.stopLoss != null && cur >= p.stopLoss) { try { if (window.__ptDiag !== false) fetch('/api/client_error', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ errs: [{ type: 'ptDiag', msg: 'CLOSE ' + key + ' reason=' + (p.slTrailed ? 'TrailingSL' : 'StopLoss') + ' trailPct=' + (p.slTrailPct || 0) + ' slPct=' + (p.slPct || 0) + ' armed=' + (!!p.slTrailed) + ' entry=' + p.entryPrice + ' peak=' + p.peakPrice + ' stop=' + p.stopLoss + ' cur=' + cur + ' src=' + (q && q.live ? 'live' : 'mark') }] }) }).catch(() => {}); } catch (e) {} closeAutoPosition(key, p.slTrailed ? 'Trailing SL hit' : 'Stop loss hit', p.stopLoss, silent); continue; }

@@ -414,10 +414,20 @@ window.createPaperRun = function (suffix) {
     return best;
   }
 
-  /* Current price for a position: the chart/candle close only. The live feed
-     quote source (clientQuotes) was removed entirely — Running Trades P&L now
-     always matches the chart's own price, never a delayed feed tick. */
+  /* Current price for a position: the SAME canonical shared price the AST
+     Running Trades table and the chart's live-P&L line label use
+     (positionMarkPrice: live feed quote first, chart/candle close fallback).
+     The chart/candle-only path left every off-chart option strike with no
+     candle cache entry showing P&L as "--"; the live feed already carries the
+     exact strike LTP the paper engine's SL/trail uses for exits, so preferring
+     it here keeps Running Trades P&L in sync with the engine and the chart. */
   function currentPriceForPos(pos) {
+    if (typeof window.positionMarkPrice === 'function') {
+      try {
+        const m = window.positionMarkPrice(pos);
+        if (m != null && m > 0) return m;
+      } catch (e) {}
+    }
     return premiumLastClose(pos);
   }
 

@@ -35,6 +35,24 @@
   const IC = function () { return G.IndChart || null; };
   const LS_KEY = 'oitrend:enabled';
 
+  /* The dashboard declares selectedSymbol / clientQuotes with a top-level `let`
+     in an inline classic script (templates/index.html). Top-level let/const live
+     in the global LEXICAL scope, NOT as properties of window, so reading them as
+     G.selectedSymbol / G.clientQuotes always returned undefined. syncUnder() then
+     bailed on every tick, _under stayed null and fetchChain() returned before the
+     request: no option chain was ever fetched, which left EVERTHING OI-driven blank
+     (OI Trend overlay + the standalone IV / PCR EMA / OI Rails indicators). Read
+     the lexical bindings directly (visible across classic scripts) behind a typeof
+     guard, with the window property as a fallback for other embeddings. */
+  function gSelSymbol() {
+    try { if (typeof selectedSymbol !== 'undefined' && selectedSymbol) return selectedSymbol; } catch (e) {}
+    return G.selectedSymbol || null;
+  }
+  function gClientQuotes() {
+    try { if (typeof clientQuotes !== 'undefined' && clientQuotes) return clientQuotes; } catch (e) {}
+    return G.clientQuotes || null;
+  }
+
   /* --------------------------- pure math -------------------------------- */
   function emaArr(vals, n) {
     const k = 2 / (n + 1);
@@ -658,6 +676,7 @@
   const PCR_LS = 'oitrend.pcrHist.v1';
   let _pcrHistKey = null;     /* under + expiry the in-memory history belongs to */
   let _pcrSaveT = null;
+  let _pcrRepaintT = null;
   function pcrCtxKey() { return underKey() + '|' + (_chain && _chain.expiry ? _chain.expiry : ''); }
   function _loadPcrHist(ck) {
     try {
@@ -673,6 +692,17 @@
     try { if (_pcrHistKey) localStorage.setItem(PCR_LS, JSON.stringify({ key: _pcrHistKey, arr: _pcrHist })); } catch (e) {}
   }
   function _schedulePcrSave() { if (_pcrSaveT) return; _pcrSaveT = setTimeout(function () { _pcrSaveT = null; _savePcrHist(); }, 1500); }
+  /* Coalesce nudges to the indicator engine: whenever the PCR snapshot series
+     changes, the standalone PCR EMA / OI Rails series must be recomputed. The
+     candle series does not change on a closed market, so without this the lines
+     stayed blank after being added until the next bar. */
+  function _schedulePcrRepaint() {
+    if (_pcrRepaintT) return;
+    _pcrRepaintT = setTimeout(function () {
+      _pcrRepaintT = null;
+      try { if (IC() && IC().repaint) IC().repaint(); } catch (e) {}
+    }, 250);
+  }
   /* Drop the tracking series when the chain context changes (symbol or expiry)
      so the PCR indicators never carry a stale series into a new chart. History
      is persisted per context, so returning to the same symbol/expiry restores
@@ -717,8 +747,8 @@
   }
   function currentSpot() {
     try {
-      const sym = G.selectedSymbol;
-      const qm = G.clientQuotes;
+      const sym = gSelSymbol();
+      const qm = gClientQuotes();
       if (qm && sym) {
         const key = sym.exch === 'IDX_I' ? 'IDX_I:' + sym.id : String(sym.id);
         const q = qm[key];
@@ -777,9 +807,10 @@
         _chainFails = 0;
         _scheduleRefresh(CFG.refreshMs);
         if (_chartKind === 'opt') drawStrip(); else drawLevels();
-        /* Data-only mode (toolbar OI Trend off, standalone PCR indicators on):
-           drawDir() will not run, so snapshot the chain here instead. */
-        if (!enabled) recordSnapshotFromChain(spot);
+        /* Always snapshot the chain: standalone PCR EMA / OI Rails indicators
+           need this history whether or not the OI Trend direction overlay is
+           enabled (on an option chart drawDir() never runs at all). */
+        recordSnapshotFromChain(spot);
       } else if (d && (d.status === 'loading' || d.status === 'partial')) {
         _scheduleRefresh(30000);
       } else {
@@ -797,7 +828,7 @@
     return _under ? (_under.ocId || _under.id) + '|' + (_under.ocExch || _under.exch) : '';
   }
   function syncUnder() {
-    const sym = G.selectedSymbol;
+    const sym = gSelSymbol();
     if (!sym) return;
     const isOpt = /^OPT/.test(sym.inst || '');
     _chartKind = isOpt ? 'opt' : 'spot';
@@ -924,7 +955,9 @@
   function recordPcrSnapshot(lvl, time) {
     if (!lvl) return;
     _lastLvl = lvl;
-    if (lvl.pcr == null || time == null) return;
+    /* Keep the standalone OI Rails fed even when PCR itself is missing or we
+       have no candle time yet (fresh chart) — those indicators read _lastLvl. */
+    if (lvl.pcr == null || time == null) { _schedulePcrRepaint(); return; }
     /* Adopt the persisted series the first time this chart context records a
        snapshot, so a reload resumes the same PCR history instead of a dot. */
     const ck = pcrCtxKey();
@@ -940,6 +973,7 @@
     if (last && last.time === time) _pcrHist[_pcrHist.length - 1] = rec;
     else { _pcrHist.push(rec); if (_pcrHist.length > PCR_HIST_MAX) _pcrHist.splice(0, _pcrHist.length - PCR_HIST_MAX); }
     _schedulePcrSave();
+    _schedulePcrRepaint();
   }
 
   /* Record a snapshot straight from the fetched chain. Used when the OI Trend
@@ -947,17 +981,18 @@
      (drawDir would otherwise be the only caller of recordPcrSnapshot). */
   function recordSnapshotFromChain(spot) {
     try {
-      if (_chartKind !== 'spot') return;
       const cs = IC() ? IC().getCandles() : [];
-      if (!cs || cs.length < 40) return;
+      if (!cs || !cs.length) return;
       const lb = cs[cs.length - 1];
-      const s = currentSpot() || (_chain && _chain.spot) || spot || (lb && lb.close);
+      /* On an option-premium chart the plotted candles are premiums, not the
+         underlying, so take the spot from the chain response instead. The OI
+         walls / PCR levels are all relative to the underlying. */
+      const s = (_chartKind === 'opt')
+        ? ((_chain && _chain.spot) || null)
+        : (currentSpot() || (_chain && _chain.spot) || spot || (lb && lb.close));
       if (!(s > 0)) return;
       const lvl = levelData(_chain.records, s, { maxWalls: CFG.maxWallsAll, dteDays: dteFromExpiry(_chain.expiry) });
       recordPcrSnapshot(lvl, lb.time);
-      /* Candles may be unchanged (closed market), so nudge the indicator engine
-         to recompute the PCR pane / OI Rails from the fresh snapshot. */
-      if (IC() && IC().repaint) { try { IC().repaint(); } catch (e) {} }
     } catch (e) {}
   }
 
@@ -1304,7 +1339,7 @@
       g.fillStyle = '#b39ddb';
       g.fillText('MP ' + fmtNum(L.maxPain), plotR - 2, ym + 1);
     }
-    const selS = G.selectedSymbol && G.selectedSymbol.strike != null ? parseFloat(G.selectedSymbol.strike) : NaN;
+    const selS = gSelSymbol() && gSelSymbol().strike != null ? parseFloat(gSelSymbol().strike) : NaN;
     if (isFinite(selS) && selS >= minS && selS <= maxS) {
       const ys2 = Math.round(yOf(selS));
       g.fillStyle = 'rgba(255,255,255,0.6)';

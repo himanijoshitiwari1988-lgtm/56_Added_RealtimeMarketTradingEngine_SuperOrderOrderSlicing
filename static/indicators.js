@@ -448,6 +448,143 @@
     return null;
   }
 
+  /* Shared by the hidden Fibonacci/Gann Fan state companions (fibt/gant). Their
+     visible overlays are sparse fan rays, which the engine's last-two-points
+     direction gate cannot read, so this exposes the direction of the LAST
+     CONFIRMED alternating swing - the exact leg the fan rays are anchored to -
+     as a per-candle cumulative score: +1 while that leg is up, -1 while down.
+     An "increasing upward/downward" AST filter is therefore a direct read of the
+     fan's swing direction. Causal: a pivot only affects bars at/after its
+     confirmation bar ('at'). */
+  function fanSwingTrend(c, o, col) {
+    const a = ewAnalyze(c, o);
+    const cc = (a && a.c) || [], piv = (a && a.piv) || [];
+    const empty = [{ type: 'line', color: col, lineWidth: 1, data: [] }];
+    if (cc.length < 3 || piv.length < 2) return empty;
+    let dir = 0, pi = 1, score = 0;
+    const data = [];
+    for (let i = 0; i < cc.length; i++) {
+      while (pi < piv.length && piv[pi].at <= i) {
+        dir = piv[pi].price >= piv[pi - 1].price ? 1 : -1;
+        pi++;
+      }
+      score += dir;
+      data.push({ time: cc[i].time, value: score });
+    }
+    return [{ type: 'line', color: col, lineWidth: 1, data }];
+  }
+
+  /* Support / Resistance + EMA(1) reversal engine (used by the 'srema' overlay
+     and its hidden AST companion 'sremat').
+     Levels: the most recent CONFIRMED ATR-ZigZag swing low (support) and swing
+     high (resistance), made causal by the pivot's confirmation bar ('at').
+     Bullish setup: price TOUCHES the support band on a bar (its low reaches the
+     level while the close holds above it) AND EMA(1) (= the close) makes a fresh
+     turn back UP within `touchWindow` bars of that touch.
+     Bearish setup: exact mirror at the resistance (high reaches the level, close
+     holds below it, EMA(1) turns DOWN).
+     Once triggered the active line is anchored at the touch bar's low (bull) /
+     high (bear) and drawn STRAIGHT toward the opposite level; the slope is LOCKED
+     at the trigger bar (never re-fitted), so the whole leg is one fixed-slope
+     line. Causal: every value at bar i only uses bars <= i. */
+  function sremaAnalyze(c, o) {
+    o = o || {};
+    const a = ewAnalyze(c, o);
+    const cc = a.c || [], piv = a.piv || [];
+    const n = cc.length;
+    const res = {
+      c: cc,
+      state: new Array(n).fill(0),
+      anchorIdx: new Array(n).fill(-1),
+      anchorPrice: new Array(n).fill(null),
+      line: new Array(n).fill(null)
+    };
+    if (n < 3) return res;
+    const atrPer = Math.max(2, Math.round(o.atrPeriod) || 14);
+    const atr = wilderArr(trArr(cc), atrPer);
+    const emaPer = Math.max(1, Math.round(o.emaPeriod) || 1);
+    const closes = cc.map(x => x.close);
+    const ema = emaPer <= 1 ? closes.slice() : emaArr(closes, emaPer);
+    const touchMult = Number(o.touchMult) > 0 ? Number(o.touchMult) : 0.5;
+    const minPct = Number(o.minPct) >= 0 ? Number(o.minPct) : 0.15;
+    const touchWindow = Math.max(1, Math.round(o.touchWindow) || 3);
+    const fwd = Math.max(1, Math.round(o.fwd) || 20);
+    const tolAt = (i, lvl) => {
+      const at = (atr[i] != null && isFinite(atr[i])) ? atr[i] * touchMult : 0;
+      return Math.max(at, Math.abs(lvl) * (minPct / 100));
+    };
+    let pi = 0, lastLow = null, lastHigh = null;
+    let lastTouchLow = null, lastTouchHigh = null;
+    let state = 0, anchorIdx = -1, anchorPrice = null, slope = 0;
+    for (let i = 0; i < n; i++) {
+      while (pi < piv.length && piv[pi].at <= i) {
+        const p = piv[pi++];
+        if (p.type === 'high') lastHigh = p; else lastLow = p;
+      }
+      const upTurn = i >= 1 && ema[i] > ema[i - 1] && (i < 2 || ema[i - 1] <= ema[i - 2]);
+      const dnTurn = i >= 1 && ema[i] < ema[i - 1] && (i < 2 || ema[i - 1] >= ema[i - 2]);
+      if (lastLow && isFinite(lastLow.price)) {
+        const tol = tolAt(i, lastLow.price);
+        if (cc[i].low <= lastLow.price + tol && cc[i].close >= lastLow.price - tol) {
+          lastTouchLow = { idx: i, price: cc[i].low, level: lastLow.price };
+        }
+      }
+      if (lastHigh && isFinite(lastHigh.price)) {
+        const tol = tolAt(i, lastHigh.price);
+        if (cc[i].high >= lastHigh.price - tol && cc[i].close <= lastHigh.price + tol) {
+          lastTouchHigh = { idx: i, price: cc[i].high, level: lastHigh.price };
+        }
+      }
+      const bull = !!lastTouchLow && upTurn && (i - lastTouchLow.idx) <= touchWindow &&
+        cc[i].close > lastTouchLow.level;
+      const bear = !!lastTouchHigh && dnTurn && (i - lastTouchHigh.idx) <= touchWindow &&
+        cc[i].close < lastTouchHigh.level;
+      if (bull && !bear) {
+        state = 1; anchorIdx = lastTouchLow.idx; anchorPrice = lastTouchLow.price;
+        const tgt = (lastHigh && lastHigh.price > anchorPrice) ? lastHigh.price : null;
+        if (tgt != null) slope = (tgt - anchorPrice) / fwd;
+        else {
+          const at = (atr[anchorIdx] != null && isFinite(atr[anchorIdx])) ? atr[anchorIdx] : 0;
+          slope = (at > 0 ? at : (Math.abs(anchorPrice) * (minPct / 100) || 1)) * 0.25;
+        }
+        if (!(slope > 0)) slope = Math.abs(slope) || Math.abs(anchorPrice) * 1e-4;
+      } else if (bear && !bull) {
+        state = -1; anchorIdx = lastTouchHigh.idx; anchorPrice = lastTouchHigh.price;
+        const tgt = (lastLow && lastLow.price < anchorPrice) ? lastLow.price : null;
+        if (tgt != null) slope = (tgt - anchorPrice) / fwd;
+        else {
+          const at = (atr[anchorIdx] != null && isFinite(atr[anchorIdx])) ? atr[anchorIdx] : 0;
+          slope = -(at > 0 ? at : (Math.abs(anchorPrice) * (minPct / 100) || 1)) * 0.25;
+        }
+        if (!(slope < 0)) slope = -Math.abs(slope) || -Math.abs(anchorPrice) * 1e-4;
+      } else if (state === 1 && lastLow && cc[i].close < lastLow.price) {
+        state = 0; anchorIdx = -1; anchorPrice = null; slope = 0;
+      } else if (state === -1 && lastHigh && cc[i].close > lastHigh.price) {
+        state = 0; anchorIdx = -1; anchorPrice = null; slope = 0;
+      }
+      res.state[i] = state;
+      if (state !== 0 && anchorIdx >= 0 && anchorPrice != null) {
+        res.anchorIdx[i] = anchorIdx;
+        res.anchorPrice[i] = anchorPrice;
+        res.line[i] = anchorPrice + slope * (i - anchorIdx);
+      }
+    }
+    return res;
+  }
+
+  /* Last contiguous run of a state value, as {time,value} line points, so the
+     visible 'srema' overlay draws each leg as ONE straight segment. */
+  function sremaRun(a, cc, s) {
+    let end = -1;
+    for (let i = cc.length - 1; i >= 0; i--) if (a.state[i] === s) { end = i; break; }
+    if (end < 0) return [];
+    let start = end;
+    while (start - 1 >= 0 && a.state[start - 1] === s) start--;
+    const d = [];
+    for (let i = start; i <= end; i++) if (a.line[i] != null) d.push({ time: cc[i].time, value: a.line[i] });
+    return d;
+  }
+
   /* ---------------- Bollinger %B ---------------- */
   /* Population standard deviation via rolling sum/sum-of-squares: O(n) over the
      whole series (the naive per-bar deviation loop is O(n*L)), so BB%b stays
@@ -1218,12 +1355,20 @@
       compute(c, o) {
         const S = (window.OITrend && window.OITrend.snapshot) ? window.OITrend.snapshot() : null;
         const lw = o.lineWidth || 1;
+        /* The rails are underlying strike levels. On an option-premium chart the
+           price axis is the option's premium (e.g. 180), so letting these lines
+           drive autoscale would squash the candles into a sliver — exclude them
+           from autoscale there. On a spot/underlying chart keep the original
+           behaviour so a far wall still pulls the axis into view. */
+        let premChart = false;
+        try { if (typeof selectedSymbol !== 'undefined' && selectedSymbol) premChart = /^OPT/.test(String(selectedSymbol.inst || '')); } catch (e) {}
         const mkSlot = (price, color, title, style) => {
           const has = price != null && c && c.length;
           const s = {
             type: 'line', color, lineWidth: lw, lineStyle: style,
             data: has ? c.map(x => ({ time: x.time, value: price })) : []
           };
+          if (premChart) s.excludeAutoscale = true;
           if (has) s.priceLine = { price, color, lineWidth: lw, lineStyle: style, axisLabelVisible: true, title };
           return s;
         };
@@ -2485,6 +2630,98 @@
           }
           return { type: 'line', color: col, lineWidth: lw, data: d, excludeAutoscale: true };
         });
+      }
+    },
+
+    /* Hidden companion of the 'Fibonacci Fan' overlay (fibfan), used ONLY by the
+       AST indicator filter. fibfan's visible output is a set of sparse fan rays;
+       this exposes the direction of the SAME confirmed swing the fan is anchored
+       to (see fanSwingTrend) as a per-candle cumulative score. Never listed in
+       the indicator menu. */
+    fibt: {
+      id: 'fibt', name: 'Fibonacci Fan (state)', fullName: 'Fibonacci Fan swing direction state (hidden; drives the AST filter)', cat: 'Overlay', type: 'overlay', hidden: true,
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 }
+      ],
+      compute(c, o) { return fanSwingTrend(c, o, '#ab47bc'); }
+    },
+
+    /* Hidden companion of the 'Gann Fan' overlay (gannfan): same causal
+       swing-direction score as fibt, with the Gann fan's own colour/identity so
+       the AST row reads and colours like the Gann fan. Never listed. */
+    gant: {
+      id: 'gant', name: 'Gann Fan (state)', fullName: 'Gann Fan swing direction state (hidden; drives the AST filter)', cat: 'Overlay', type: 'overlay', hidden: true,
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 }
+      ],
+      compute(c, o) { return fanSwingTrend(c, o, '#607d8b'); }
+    },
+
+    /* S/R EMA(1) Reversal: a support touch + EMA(1) turning back up draws a
+       straight green line from the touch low; a resistance hit + EMA(1) turning
+       down draws a straight red line from the touch high. Each side is drawn as
+       its most recent leg (one fixed-slope straight segment). */
+    srema: {
+      id: 'srema', name: 'S/R EMA Reversal', fullName: 'Support Resistance EMA(1) Reversal (straight line)', cat: 'Overlay', type: 'overlay',
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'emaPeriod', label: 'EMA period (1 = close)', def: 1, min: 1, max: 50, step: 1 },
+        { key: 'touchMult', label: 'Touch tolerance (x ATR)', def: 0.5, min: 0.05, max: 3, step: 0.05 },
+        { key: 'touchWindow', label: 'Touch to EMA turn window (bars)', def: 3, min: 1, max: 20, step: 1 },
+        { key: 'fwd', label: 'Projection bars', def: 20, min: 2, max: 200, step: 1 }
+      ],
+      style: [
+        { key: 'bullColor', label: 'Support bounce line', def: '#26a69a' },
+        { key: 'bearColor', label: 'Resistance reject line', def: '#ef5350' },
+        { key: 'lineWidth', label: 'Line width', def: 2, min: 1, max: 5, step: 1 }
+      ],
+      compute(c, o) {
+        const a = sremaAnalyze(c, o);
+        const cc = a.c || [];
+        const lw = Math.max(1, Math.round(o.lineWidth) || 2);
+        if (cc.length < 3) return [
+          { type: 'line', color: o.bullColor || '#26a69a', lineWidth: lw, data: [] },
+          { type: 'line', color: o.bearColor || '#ef5350', lineWidth: lw, data: [] }
+        ];
+        return [
+          { type: 'line', color: o.bullColor || '#26a69a', lineWidth: lw, data: sremaRun(a, cc, 1), lastValueVisible: false, priceLineVisible: false },
+          { type: 'line', color: o.bearColor || '#ef5350', lineWidth: lw, data: sremaRun(a, cc, -1), lastValueVisible: false, priceLineVisible: false }
+        ];
+      }
+    },
+
+    /* Hidden companion of the 'S/R EMA Reversal' overlay (srema), used ONLY by
+       the AST Straight Line filter. The visible overlay draws two colour-coded
+       straight legs, so the engine's last-two-points direction gate cannot read a
+       single direction from it; this exposes a per-candle cumulative score that
+       RISES while a support-bounce (bullish) setup is active and FALLS while a
+       resistance-rejection (bearish) setup is active. Never listed in the menu. */
+    sremat: {
+      id: 'sremat', name: 'S/R EMA Reversal (state)', fullName: 'Support Resistance EMA(1) reversal direction state (hidden; drives the AST filter)', cat: 'Overlay', type: 'overlay', hidden: true,
+      inputs: [
+        { key: 'atrPeriod', label: 'ATR period', def: 14, min: 2, max: 100, step: 1 },
+        { key: 'atrMult', label: 'ZigZag sensitivity (x ATR)', def: 2.0, min: 0.1, max: 10, step: 0.1 },
+        { key: 'minPct', label: 'Min move %', def: 0.15, min: 0.01, max: 5, step: 0.05 },
+        { key: 'emaPeriod', label: 'EMA period (1 = close)', def: 1, min: 1, max: 50, step: 1 },
+        { key: 'touchMult', label: 'Touch tolerance (x ATR)', def: 0.5, min: 0.05, max: 3, step: 0.05 },
+        { key: 'touchWindow', label: 'Touch to EMA turn window (bars)', def: 3, min: 1, max: 20, step: 1 },
+        { key: 'fwd', label: 'Projection bars', def: 20, min: 2, max: 200, step: 1 }
+      ],
+      compute(c, o) {
+        const a = sremaAnalyze(c, o);
+        const cc = a.c || [];
+        const empty = [{ type: 'line', color: '#ffb300', lineWidth: 1, data: [] }];
+        if (cc.length < 3) return empty;
+        let score = 0;
+        const data = [];
+        for (let i = 0; i < cc.length; i++) { score += a.state[i]; data.push({ time: cc[i].time, value: score }); }
+        return [{ type: 'line', color: '#ffb300', lineWidth: 1, data }];
       }
     },
 

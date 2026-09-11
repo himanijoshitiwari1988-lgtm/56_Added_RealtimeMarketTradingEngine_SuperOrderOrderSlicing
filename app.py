@@ -1970,6 +1970,75 @@ def _get_scrip_master():
         return _SCRIP_CACHE["df"]
 
 
+# ---- Exchange freeze quantity (max quantity per single order) ----
+# The basic scrip master has no freeze quantity, but Dhan's DETAILED master
+# carries SM_FREEZE_QTY per security id. Cache it once (same on-disk pattern as
+# the scrip master) and expose an O(1) lookup so the realtime app can slice a
+# large Super Order into exchange-legal chunks WITHOUT a network call on the
+# order hot path. Freeze qty is per-contract and only changes on exchange
+# revision, so a 24h cache is safe.
+_FREEZE_URL = "https://images.dhan.co/api-data/api-scrip-master-detailed.csv"
+_FREEZE_CACHE = {"by_id": None, "by_under": None, "at": 0.0}
+_FREEZE_LOCK = threading.Lock()
+
+
+def _get_freeze_maps():
+    """Return (by_security_id, by_underlying) freeze-quantity maps.
+
+    Lazily downloads + parses Dhan's detailed scrip master on first use, then
+    serves from memory. Both maps are plain dicts for O(1) lookup.
+    """
+    with _FREEZE_LOCK:
+        now = time.time()
+        if _FREEZE_CACHE["by_id"] is not None and now - _FREEZE_CACHE["at"] < 86400:
+            return _FREEZE_CACHE["by_id"], _FREEZE_CACHE["by_under"]
+        import pandas as pd
+        import requests
+        path = os.path.join(tempfile.gettempdir(), "algodhan_scrip_master_detailed.csv")
+        cols = ["SECURITY_ID", "UNDERLYING_SYMBOL", "SM_FREEZE_QTY"]
+        df = None
+        try:
+            if os.path.exists(path) and now - os.path.getmtime(path) < 86400:
+                df = pd.read_csv(path, usecols=cols, low_memory=False)
+        except Exception:
+            df = None
+        if df is None:
+            try:
+                r = requests.get(_FREEZE_URL, timeout=120)
+                r.raise_for_status()
+                with open(path, "wb") as f:
+                    f.write(r.content)
+                df = pd.read_csv(path, usecols=cols, low_memory=False)
+            except Exception as e:
+                logger.warning("Freeze-qty master download failed: %s", e)
+                if os.path.exists(path):
+                    try:
+                        df = pd.read_csv(path, usecols=cols, low_memory=False)
+                    except Exception:
+                        df = None
+        by_id, by_under = {}, {}
+        if df is not None:
+            for sid, under, fq in zip(df["SECURITY_ID"], df["UNDERLYING_SYMBOL"], df["SM_FREEZE_QTY"]):
+                try:
+                    fqv = int(float(fq))
+                except Exception:
+                    fqv = 0
+                if fqv <= 0:
+                    continue
+                try:
+                    by_id[str(int(sid))] = fqv
+                except Exception:
+                    pass
+                u = str(under or "").strip().upper()
+                if u and u not in by_under:
+                    by_under[u] = fqv
+        _FREEZE_CACHE["by_id"] = by_id
+        _FREEZE_CACHE["by_under"] = by_under
+        _FREEZE_CACHE["at"] = now
+        logger.info("Freeze-qty map ready: %d ids / %d underlyings", len(by_id), len(by_under))
+        return by_id, by_under
+
+
 def _fno_underlying(symbol_name):
     """Map a UI symbol name to its F&O trading-symbol prefix."""
     name = (symbol_name or "").strip().upper()
@@ -3517,6 +3586,7 @@ def _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot=N
             "CE Chg": _pick(ce_q, "CE", "change", ce_fb, "Chg"),
             "CE Chg%": _pick(ce_q, "CE", "change_pct", ce_fb, "Chg%"),
             "CE OI": _pick(ce_q, "CE", "oi", ce_fb, "OI"),
+            "CE Chg OI": _pick(ce_q, "CE", "chg_oi", ce_fb, "Chg OI"),
             "CE Volume": _pick(ce_q, "CE", "volume", ce_fb, "Volume"),
             "CE IV": _pick(ce_q, "CE", "iv", ce_fb, "IV"),
             "CE Bid": _pick(ce_q, "CE", "bid", ce_fb, "Bid"),
@@ -3526,6 +3596,7 @@ def _build_oc_instant(symbol_name, security_id, exchange_segment, expiry, spot=N
             "PE Chg": _pick(pe_q, "PE", "change", pe_fb, "Chg"),
             "PE Chg%": _pick(pe_q, "PE", "change_pct", pe_fb, "Chg%"),
             "PE OI": _pick(pe_q, "PE", "oi", pe_fb, "OI"),
+            "PE Chg OI": _pick(pe_q, "PE", "chg_oi", pe_fb, "Chg OI"),
             "PE Volume": _pick(pe_q, "PE", "volume", pe_fb, "Volume"),
             "PE IV": _pick(pe_q, "PE", "iv", pe_fb, "IV"),
             "PE Bid": _pick(pe_q, "PE", "bid", pe_fb, "Bid"),
@@ -4162,6 +4233,11 @@ def api_auto_strikes():
         return None if v is None else v
 
     contracts = []
+    try:
+        _lot_meta = _oc_instrument_meta(symbol_name, security_id, exchange_segment)
+        _chain_lot = _lot_meta.get("lot_size")
+    except Exception:
+        _chain_lot = None
     for r in chosen:
         contracts.append({
             "strike": _f(r.get("Strike")),
@@ -4173,11 +4249,19 @@ def api_auto_strikes():
             "pe_chg_pct": _f(r.get("PE Chg%")),
             "ce_delta": _f(r.get("CE Delta")),
             "pe_delta": _f(r.get("PE Delta")),
+            "ce_oi": _f(r.get("CE OI")),
+            "pe_oi": _f(r.get("PE OI")),
+            "ce_chg_oi": _f(r.get("CE Chg OI")),
+            "pe_chg_oi": _f(r.get("PE Chg OI")),
+            "ce_volume": _f(r.get("CE Volume")),
+            "pe_volume": _f(r.get("PE Volume")),
             "ce_sid": _f(r.get("CE SID")),
             "pe_sid": _f(r.get("PE SID")),
+            "lot_size": _f(_chain_lot),
         })
     return jsonify({"status": "success", "spot": spot, "expiry": expiry,
                     "mode": mode, "count": count, "option_type": option_type,
+                    "lot_size": _f(_chain_lot),
                     "data": contracts})
 
 
@@ -5160,6 +5244,7 @@ def api_trade():
     order_type = data.get("order_type", "MARKET")
     product_type = data.get("product_type", "INTRA")
     price = data.get("price", 0)
+    trigger_price = data.get("trigger_price", 0)
     if not security_id or side not in ("BUY", "SELL") or not quantity:
         return jsonify({"status": "error", "message": "security_id, side (BUY/SELL) and quantity required"}), 400
     try:
@@ -5171,12 +5256,234 @@ def api_trade():
             order_type=order_type,
             product_type=product_type,
             price=price,
+            trigger_price=trigger_price,
         )
         payload = _unwrap_sdk_response(result)
         if payload is None:
             remarks = result.get("remarks", "Order rejected") if isinstance(result, dict) else str(result)
             return jsonify({"status": "error", "message": f"Dhan rejected order: {remarks}"}), 502
         return jsonify({"status": "success", "data": payload})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def _order_common(data):
+    return {
+        "security_id": data.get("security_id"),
+        "exchange_segment": data.get("exchange_segment", "NSE_FNO"),
+        "side": data.get("side", ""),
+        "quantity": data.get("quantity"),
+        "order_type": data.get("order_type", "MARKET"),
+        "product_type": data.get("product_type", "INTRA"),
+        "price": data.get("price", 0),
+    }
+
+
+def _json_result(result, label):
+    payload = _unwrap_sdk_response(result)
+    if payload is None:
+        remarks = result.get("remarks", label + " rejected") if isinstance(result, dict) else str(result)
+        return jsonify({"status": "error", "message": f"Dhan rejected {label}: {remarks}"}), 502
+    return jsonify({"status": "success", "data": payload})
+
+
+@app.route("/api/trade/super", methods=["POST"])
+def api_trade_super():
+    """Dhan Super Order: entry leg + target + stop-loss (optional trailing)."""
+    if not broker.is_connected:
+        return jsonify({"status": "error", "message": "Not connected to Dhan"}), 401
+    data = request.get_json() or {}
+    c = _order_common(data)
+    if not c["security_id"] or c["side"] not in ("BUY", "SELL") or not c["quantity"]:
+        return jsonify({"status": "error", "message": "security_id, side (BUY/SELL) and quantity required"}), 400
+    try:
+        result = broker.place_super_order(
+            security_id=c["security_id"],
+            exchange_segment=c["exchange_segment"],
+            transaction_type=c["side"],
+            quantity=int(c["quantity"]),
+            order_type=c["order_type"],
+            product_type=c["product_type"],
+            price=c["price"],
+            target_price=data.get("target_price", 0),
+            stop_loss_price=data.get("stop_loss_price", 0),
+            trailing_jump=data.get("trailing_jump", 0),
+        )
+        return _json_result(result, "super order")
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def _parse_super_orders(raw):
+    """Flatten Dhan's super order book into a tiny, UI-friendly shape.
+
+    Each super order ships the target / stop-loss legs nested in `legDetails`;
+    the app only needs the CURRENT stop-loss trigger price and trailing jump to
+    mirror the broker-side trail back as a percent. Keeping the payload small
+    keeps the realtime mirror poll cheap.
+    """
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for o in raw:
+        if not isinstance(o, dict):
+            continue
+        legs = {}
+        for ld in (o.get("legDetails") or []):
+            if isinstance(ld, dict) and ld.get("legName"):
+                legs[str(ld.get("legName"))] = {
+                    "price": ld.get("price"),
+                    "trailingJump": ld.get("trailingJump", 0),
+                    "orderStatus": ld.get("orderStatus"),
+                    "triggeredQuantity": ld.get("triggeredQuantity", 0),
+                }
+        out.append({
+            "orderId": str(o.get("orderId", "")),
+            "correlationId": o.get("correlationId", ""),
+            "orderStatus": o.get("orderStatus"),
+            "transactionType": o.get("transactionType"),
+            "securityId": o.get("securityId"),
+            "tradingSymbol": o.get("tradingSymbol"),
+            "quantity": o.get("quantity"),
+            "remainingQuantity": o.get("remainingQuantity"),
+            "filledQty": o.get("filledQty"),
+            "ltp": o.get("ltp"),
+            "price": o.get("price"),
+            "legs": legs,
+        })
+    return out
+
+
+@app.route("/api/super/orders", methods=["GET"])
+def api_super_orders():
+    """Live Dhan Super Order book (entry + target + stop-loss legs).
+
+    Used by the Realtime tab to mirror the broker-side trailing SL: Dhan returns
+    the leg's current trigger price + trailing jump, which the client converts
+    back into an Overall-SL% and Trail-SL% for display/monitoring.
+    """
+    if not broker.is_connected:
+        return jsonify({"status": "error", "message": "Not connected to Dhan"}), 401
+    try:
+        raw = broker.get_super_orders()
+        payload = _unwrap_sdk_response(raw)
+        if payload is None:
+            remarks = raw.get("remarks", "super order list failed") if isinstance(raw, dict) else str(raw)
+            return jsonify({"status": "error", "message": f"Dhan super order list: {remarks}"}), 502
+        return jsonify({"status": "success", "data": {"orders": _parse_super_orders(payload)}})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/freeze_qty", methods=["GET", "POST"])
+def api_freeze_qty():
+    """Exchange freeze quantity (max qty per single order) for a contract.
+
+    Backed by Dhan's detailed scrip master (SM_FREEZE_QTY). Lookup is by
+    security_id first, then by underlying symbol. The realtime app uses this to
+    slice a large Super Order into exchange-legal chunks. Returns null when the
+    contract/underlying is unknown.
+    """
+    data = request.get_json(silent=True) or request.args or {}
+    sid = data.get("security_id")
+    under = data.get("underlying")
+    try:
+        by_id, by_under = _get_freeze_maps()
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    fq = None
+    if sid not in (None, ""):
+        try:
+            fq = by_id.get(str(int(float(sid))))
+        except Exception:
+            fq = None
+    if fq is None and under:
+        fq = by_under.get(str(under).strip().upper())
+    return jsonify({"status": "success", "freeze_qty": fq})
+
+
+@app.route("/api/trade/slice", methods=["POST"])
+def api_trade_slice():
+    """Dhan Slice Order (iceberg): large qty split into slices with disclosed qty."""
+    if not broker.is_connected:
+        return jsonify({"status": "error", "message": "Not connected to Dhan"}), 401
+    data = request.get_json() or {}
+    c = _order_common(data)
+    if not c["security_id"] or c["side"] not in ("BUY", "SELL") or not c["quantity"]:
+        return jsonify({"status": "error", "message": "security_id, side (BUY/SELL) and quantity required"}), 400
+    try:
+        result = broker.place_slice_order(
+            security_id=c["security_id"],
+            exchange_segment=c["exchange_segment"],
+            transaction_type=c["side"],
+            quantity=int(c["quantity"]),
+            order_type=c["order_type"],
+            product_type=c["product_type"],
+            price=c["price"],
+            trigger_price=data.get("trigger_price", 0),
+            disclosed_quantity=data.get("disclosed_quantity", 0),
+        )
+        return _json_result(result, "slice order")
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/trade/forever", methods=["POST"])
+def api_trade_forever():
+    """Dhan Forever Order (GTT): single or OCO legs, valid across days."""
+    if not broker.is_connected:
+        return jsonify({"status": "error", "message": "Not connected to Dhan"}), 401
+    data = request.get_json() or {}
+    security_id = data.get("security_id")
+    side = data.get("side", "")
+    quantity = data.get("quantity")
+    if not security_id or side not in ("BUY", "SELL") or not quantity:
+        return jsonify({"status": "error", "message": "security_id, side (BUY/SELL) and quantity required"}), 400
+    try:
+        result = broker.place_forever(
+            security_id=security_id,
+            exchange_segment=data.get("exchange_segment", "NSE_FNO"),
+            transaction_type=side,
+            quantity=int(quantity),
+            order_type=data.get("order_type", "LIMIT"),
+            product_type=data.get("product_type", "CNC"),
+            price=data.get("price", 0),
+            trigger_price=data.get("trigger_price", 0),
+            order_flag=data.get("order_flag", "SINGLE"),
+            disclosed_quantity=data.get("disclosed_quantity", 0),
+            validity=data.get("validity", "DAY"),
+            price1=data.get("price1", 0),
+            trigger_price1=data.get("trigger_price1", 0),
+            quantity1=data.get("quantity1", 0),
+            symbol=data.get("symbol", ""),
+        )
+        return _json_result(result, "forever order")
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route("/api/margin/calculate", methods=["POST"])
+def api_margin_calculate():
+    """Server-side Dhan margin requirement for a prospective order."""
+    if not broker.is_connected:
+        return jsonify({"status": "error", "message": "Not connected to Dhan"}), 401
+    data = request.get_json() or {}
+    security_id = data.get("security_id")
+    side = data.get("side", "BUY")
+    quantity = data.get("quantity")
+    if not security_id or not quantity:
+        return jsonify({"status": "error", "message": "security_id and quantity required"}), 400
+    try:
+        result = broker.margin_calculator(
+            security_id=security_id,
+            exchange_segment=data.get("exchange_segment", "NSE_FNO"),
+            transaction_type=side,
+            quantity=int(quantity),
+            product_type=data.get("product_type", "INTRA"),
+            price=data.get("price", 0),
+            trigger_price=data.get("trigger_price", 0),
+        )
+        return _json_result(result, "margin calculation")
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
